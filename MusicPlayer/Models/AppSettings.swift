@@ -1,0 +1,359 @@
+//
+//  AppSettings.swift
+//  MusicPlayer
+//
+//  Created by Principal Apple Software Engineer on 8/24/26.
+//
+
+import SwiftUI
+
+/// Available overall application themes customizing backgrounds, surfaces, text, and accents.
+public enum AppTheme: String, CaseIterable, Identifiable, Codable, Sendable {
+    case dark
+    case gray
+    case blue
+    case green
+    case orange
+    case red
+    case purple
+    case teal
+
+    public var id: String { rawValue }
+
+    public var displayName: String {
+        switch self {
+        case .dark: return "DARK"
+        case .gray: return "GRAY"
+        case .blue: return "BLUE"
+        case .green: return "GREEN"
+        case .orange: return "ORANGE"
+        case .red: return "RED"
+        case .purple: return "PURPLE"
+        case .teal: return "TEAL"
+        }
+    }
+
+    public var accentColor: Color {
+        switch self {
+        case .dark: return Color(red: 0.95, green: 0.95, blue: 0.96)
+        case .gray: return Color(red: 0.50, green: 0.65, blue: 0.85)
+        case .blue: return Color(red: 0.25, green: 0.60, blue: 1.00)
+        case .green: return Color(red: 0.25, green: 0.85, blue: 0.55)
+        case .orange: return Color(red: 0.98, green: 0.60, blue: 0.20)
+        case .red: return Color(red: 0.95, green: 0.30, blue: 0.45)
+        case .purple: return Color(red: 0.75, green: 0.45, blue: 0.98)
+        case .teal: return Color(red: 0.20, green: 0.82, blue: 0.80)
+        }
+    }
+
+    public var backgroundColor: Color {
+        switch self {
+        case .dark: return Color(red: 0.04, green: 0.04, blue: 0.05)
+        case .gray: return Color(red: 0.08, green: 0.09, blue: 0.11)
+        case .blue: return Color(red: 0.05, green: 0.07, blue: 0.14)
+        case .green: return Color(red: 0.04, green: 0.09, blue: 0.06)
+        case .orange: return Color(red: 0.09, green: 0.06, blue: 0.04)
+        case .red: return Color(red: 0.10, green: 0.04, blue: 0.06)
+        case .purple: return Color(red: 0.08, green: 0.04, blue: 0.12)
+        case .teal: return Color(red: 0.04, green: 0.08, blue: 0.09)
+        }
+    }
+
+    public var secondaryBackgroundColor: Color {
+        switch self {
+        case .dark: return Color(red: 0.12, green: 0.12, blue: 0.14)
+        case .gray: return Color(red: 0.14, green: 0.16, blue: 0.19)
+        case .blue: return Color(red: 0.09, green: 0.13, blue: 0.24)
+        case .green: return Color(red: 0.08, green: 0.16, blue: 0.11)
+        case .orange: return Color(red: 0.16, green: 0.11, blue: 0.07)
+        case .red: return Color(red: 0.18, green: 0.08, blue: 0.11)
+        case .purple: return Color(red: 0.15, green: 0.08, blue: 0.22)
+        case .teal: return Color(red: 0.08, green: 0.15, blue: 0.17)
+        }
+    }
+
+    public var tertiaryBackgroundColor: Color {
+        switch self {
+        case .dark: return Color(red: 0.18, green: 0.18, blue: 0.20)
+        case .gray: return Color(red: 0.20, green: 0.22, blue: 0.26)
+        case .blue: return Color(red: 0.14, green: 0.20, blue: 0.34)
+        case .green: return Color(red: 0.12, green: 0.24, blue: 0.17)
+        case .orange: return Color(red: 0.24, green: 0.17, blue: 0.11)
+        case .red: return Color(red: 0.26, green: 0.12, blue: 0.16)
+        case .purple: return Color(red: 0.22, green: 0.12, blue: 0.32)
+        case .teal: return Color(red: 0.12, green: 0.22, blue: 0.25)
+        }
+    }
+
+    public var primaryTextColor: Color {
+        switch self {
+        case .dark: return Color(red: 0.98, green: 0.98, blue: 0.99)
+        case .gray: return Color(red: 0.96, green: 0.97, blue: 0.99)
+        case .blue: return Color(red: 0.94, green: 0.97, blue: 1.00)
+        case .green: return Color(red: 0.94, green: 0.99, blue: 0.96)
+        case .orange: return Color(red: 1.00, green: 0.97, blue: 0.94)
+        case .red: return Color(red: 1.00, green: 0.95, blue: 0.96)
+        case .purple: return Color(red: 0.98, green: 0.95, blue: 1.00)
+        case .teal: return Color(red: 0.94, green: 0.99, blue: 1.00)
+        }
+    }
+
+    public var secondaryTextColor: Color {
+        switch self {
+        case .dark: return Color(red: 0.65, green: 0.65, blue: 0.68)
+        case .gray: return Color(red: 0.62, green: 0.68, blue: 0.76)
+        case .blue: return Color(red: 0.58, green: 0.68, blue: 0.82)
+        case .green: return Color(red: 0.58, green: 0.78, blue: 0.68)
+        case .orange: return Color(red: 0.80, green: 0.68, blue: 0.58)
+        case .red: return Color(red: 0.82, green: 0.62, blue: 0.68)
+        case .purple: return Color(red: 0.75, green: 0.64, blue: 0.85)
+        case .teal: return Color(red: 0.58, green: 0.76, blue: 0.80)
+        }
+    }
+
+    public var separatorColor: Color {
+        switch self {
+        case .dark: return Color(red: 0.22, green: 0.22, blue: 0.25)
+        case .gray: return Color(red: 0.24, green: 0.28, blue: 0.34)
+        case .blue: return Color(red: 0.18, green: 0.25, blue: 0.40)
+        case .green: return Color(red: 0.16, green: 0.30, blue: 0.22)
+        case .orange: return Color(red: 0.32, green: 0.22, blue: 0.15)
+        case .red: return Color(red: 0.35, green: 0.16, blue: 0.22)
+        case .purple: return Color(red: 0.30, green: 0.18, blue: 0.42)
+        case .teal: return Color(red: 0.16, green: 0.28, blue: 0.32)
+        }
+    }
+
+    public var solidPlayerBackground: Color {
+        switch self {
+        case .dark: return Color(red: 0.08, green: 0.08, blue: 0.10)
+        case .gray: return Color(red: 0.10, green: 0.12, blue: 0.15)
+        case .blue: return Color(red: 0.07, green: 0.10, blue: 0.18)
+        case .green: return Color(red: 0.06, green: 0.12, blue: 0.09)
+        case .orange: return Color(red: 0.12, green: 0.08, blue: 0.05)
+        case .red: return Color(red: 0.13, green: 0.06, blue: 0.08)
+        case .purple: return Color(red: 0.11, green: 0.06, blue: 0.16)
+        case .teal: return Color(red: 0.06, green: 0.11, blue: 0.13)
+        }
+    }
+
+    /// Backwards compatibility accessor for color
+    public var color: Color {
+        accentColor
+    }
+}
+
+/// Backwards compatibility alias for AccentTheme
+public typealias AccentTheme = AppTheme
+
+/// Available background styling modes for the audio player cards.
+public enum PlayerBackgroundStyle: String, CaseIterable, Identifiable, Codable, Sendable {
+    case albumColor
+    case albumBlur
+    case solid
+
+    public var id: String { rawValue }
+
+    public var displayName: String {
+        switch self {
+        case .albumColor: return "ALBUM COLOR"
+        case .albumBlur: return "ALBUM BLUR"
+        case .solid: return "SOLID"
+        }
+    }
+
+    public var descriptionText: String {
+        switch self {
+        case .albumColor: return "Extracts dynamic dominant color tone from artwork."
+        case .albumBlur: return "Renders a blurred version of the album cover artwork."
+        case .solid: return "Uses the active theme's solid background color."
+        }
+    }
+}
+
+/// User preferences and persistent application configuration.
+public struct AppSettings: Codable, Sendable {
+    public var appTheme: AppTheme
+    public var defaultLibraryCategory: LibraryCategory
+    public var playerBackgroundStyle: PlayerBackgroundStyle
+    public var autoPlayNext: Bool
+    public var rememberPlaybackPosition: Bool
+    public var showAudioSpecsInPlayer: Bool
+    public var isCrossfadeEnabled: Bool
+    public var crossfadeDuration: Double
+    public var lastScanDate: Date?
+    public var linkedFolderName: String?
+    public var totalScannedFiles: Int
+
+    public var autoHideDuplicates: Bool
+    public var autoEnrichMissingArtwork: Bool
+    public var writeMetadataToAudioFiles: Bool
+    public var playTrackInCurrentQueue: Bool
+    public var tapToPlayNext: Bool
+    public var customShuffleTarget: ShuffleTarget
+    public var joinedArtists: [String]
+    public var smoothSkippingEnabled: Bool
+
+    /// Backwards compatibility property
+    public var accentTheme: AppTheme {
+        get { appTheme }
+        set { appTheme = newValue }
+    }
+
+    public init(
+        appTheme: AppTheme = .dark,
+        defaultLibraryCategory: LibraryCategory = .artists,
+        playerBackgroundStyle: PlayerBackgroundStyle = .albumColor,
+        autoPlayNext: Bool = true,
+        rememberPlaybackPosition: Bool = true,
+        showAudioSpecsInPlayer: Bool = true,
+        isCrossfadeEnabled: Bool = false,
+        crossfadeDuration: Double = 4.0,
+        lastScanDate: Date? = nil,
+        linkedFolderName: String? = nil,
+        totalScannedFiles: Int = 0,
+        autoHideDuplicates: Bool = true,
+        autoEnrichMissingArtwork: Bool = true,
+        writeMetadataToAudioFiles: Bool = false,
+        playTrackInCurrentQueue: Bool = false,
+        tapToPlayNext: Bool = false,
+        customShuffleTarget: ShuffleTarget = .all,
+        joinedArtists: [String] = [],
+        smoothSkippingEnabled: Bool = false
+    ) {
+        self.appTheme = appTheme
+        self.defaultLibraryCategory = defaultLibraryCategory
+        self.playerBackgroundStyle = playerBackgroundStyle
+        self.autoPlayNext = autoPlayNext
+        self.rememberPlaybackPosition = rememberPlaybackPosition
+        self.showAudioSpecsInPlayer = showAudioSpecsInPlayer
+        self.isCrossfadeEnabled = isCrossfadeEnabled
+        self.crossfadeDuration = crossfadeDuration
+        self.lastScanDate = lastScanDate
+        self.linkedFolderName = linkedFolderName
+        self.totalScannedFiles = totalScannedFiles
+        self.autoHideDuplicates = autoHideDuplicates
+        self.autoEnrichMissingArtwork = autoEnrichMissingArtwork
+        self.writeMetadataToAudioFiles = writeMetadataToAudioFiles
+        self.playTrackInCurrentQueue = playTrackInCurrentQueue
+        self.tapToPlayNext = tapToPlayNext
+        self.customShuffleTarget = customShuffleTarget
+        self.joinedArtists = joinedArtists
+        self.smoothSkippingEnabled = smoothSkippingEnabled
+    }
+
+    // MARK: - Custom Codable to seamlessly decode older settings JSON
+    enum CodingKeys: String, CodingKey {
+        case appTheme
+        case accentTheme
+        case defaultLibraryCategory
+        case playerBackgroundStyle
+        case autoPlayNext
+        case rememberPlaybackPosition
+        case showAudioSpecsInPlayer
+        case isCrossfadeEnabled
+        case crossfadeDuration
+        case lastScanDate
+        case linkedFolderName
+        case totalScannedFiles
+        case autoHideDuplicates
+        case autoEnrichMissingArtwork
+        case writeMetadataToAudioFiles
+        case playTrackInCurrentQueue
+        case tapToPlayNext
+        case customShuffleTarget
+        case joinedArtists
+        case smoothSkippingEnabled
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+
+        if let theme = try container.decodeIfPresent(AppTheme.self, forKey: .appTheme) {
+            self.appTheme = theme
+        } else if let oldAccent = try container.decodeIfPresent(String.self, forKey: .accentTheme) {
+            switch oldAccent.lowercased() {
+            case "slate": self.appTheme = .gray
+            case "cobalt": self.appTheme = .blue
+            case "emerald": self.appTheme = .green
+            case "amber": self.appTheme = .orange
+            default: self.appTheme = .dark
+            }
+        } else {
+            self.appTheme = .dark
+        }
+
+        self.defaultLibraryCategory = try container.decodeIfPresent(LibraryCategory.self, forKey: .defaultLibraryCategory) ?? .artists
+        self.playerBackgroundStyle = try container.decodeIfPresent(PlayerBackgroundStyle.self, forKey: .playerBackgroundStyle) ?? .albumColor
+        self.autoPlayNext = try container.decodeIfPresent(Bool.self, forKey: .autoPlayNext) ?? true
+        self.rememberPlaybackPosition = try container.decodeIfPresent(Bool.self, forKey: .rememberPlaybackPosition) ?? true
+        self.showAudioSpecsInPlayer = try container.decodeIfPresent(Bool.self, forKey: .showAudioSpecsInPlayer) ?? true
+        self.isCrossfadeEnabled = try container.decodeIfPresent(Bool.self, forKey: .isCrossfadeEnabled) ?? false
+        self.crossfadeDuration = try container.decodeIfPresent(Double.self, forKey: .crossfadeDuration) ?? 4.0
+        self.lastScanDate = try container.decodeIfPresent(Date.self, forKey: .lastScanDate)
+        self.linkedFolderName = try container.decodeIfPresent(String.self, forKey: .linkedFolderName)
+        self.totalScannedFiles = try container.decodeIfPresent(Int.self, forKey: .totalScannedFiles) ?? 0
+        self.autoHideDuplicates = try container.decodeIfPresent(Bool.self, forKey: .autoHideDuplicates) ?? true
+        self.autoEnrichMissingArtwork = try container.decodeIfPresent(Bool.self, forKey: .autoEnrichMissingArtwork) ?? true
+        self.writeMetadataToAudioFiles = try container.decodeIfPresent(Bool.self, forKey: .writeMetadataToAudioFiles) ?? false
+        self.playTrackInCurrentQueue = try container.decodeIfPresent(Bool.self, forKey: .playTrackInCurrentQueue) ?? false
+        self.tapToPlayNext = try container.decodeIfPresent(Bool.self, forKey: .tapToPlayNext) ?? false
+        self.customShuffleTarget = try container.decodeIfPresent(ShuffleTarget.self, forKey: .customShuffleTarget) ?? .all
+        self.joinedArtists = try container.decodeIfPresent([String].self, forKey: .joinedArtists) ?? []
+        self.smoothSkippingEnabled = try container.decodeIfPresent(Bool.self, forKey: .smoothSkippingEnabled) ?? false
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(appTheme, forKey: .appTheme)
+        try container.encode(defaultLibraryCategory, forKey: .defaultLibraryCategory)
+        try container.encode(playerBackgroundStyle, forKey: .playerBackgroundStyle)
+        try container.encode(autoPlayNext, forKey: .autoPlayNext)
+        try container.encode(rememberPlaybackPosition, forKey: .rememberPlaybackPosition)
+        try container.encode(showAudioSpecsInPlayer, forKey: .showAudioSpecsInPlayer)
+        try container.encode(isCrossfadeEnabled, forKey: .isCrossfadeEnabled)
+        try container.encode(crossfadeDuration, forKey: .crossfadeDuration)
+        try container.encodeIfPresent(lastScanDate, forKey: .lastScanDate)
+        try container.encodeIfPresent(linkedFolderName, forKey: .linkedFolderName)
+        try container.encode(totalScannedFiles, forKey: .totalScannedFiles)
+        try container.encode(autoHideDuplicates, forKey: .autoHideDuplicates)
+        try container.encode(autoEnrichMissingArtwork, forKey: .autoEnrichMissingArtwork)
+        try container.encode(writeMetadataToAudioFiles, forKey: .writeMetadataToAudioFiles)
+        try container.encode(playTrackInCurrentQueue, forKey: .playTrackInCurrentQueue)
+        try container.encode(tapToPlayNext, forKey: .tapToPlayNext)
+        try container.encode(customShuffleTarget, forKey: .customShuffleTarget)
+        try container.encode(joinedArtists, forKey: .joinedArtists)
+        try container.encode(smoothSkippingEnabled, forKey: .smoothSkippingEnabled)
+    }
+}
+
+/// Target entity for the custom Home shuffle trigger.
+public enum ShuffleTarget: Codable, Equatable, Sendable {
+    case all
+    case artist(name: String)
+    case album(title: String, artist: String)
+    case playlist(id: UUID, name: String)
+
+    public var isAll: Bool {
+        if case .all = self { return true }
+        return false
+    }
+
+    public var displayName: String {
+        switch self {
+        case .all: return "ALL"
+        case .artist(let name): return name.uppercased()
+        case .album(let title, _): return title.uppercased()
+        case .playlist(_, let name): return name.uppercased()
+        }
+    }
+
+    public var typeLabel: String {
+        switch self {
+        case .all: return "LIBRARY"
+        case .artist: return "ARTIST"
+        case .album: return "ALBUM"
+        case .playlist: return "PLAYLIST"
+        }
+    }
+}
