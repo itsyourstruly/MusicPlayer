@@ -7,15 +7,18 @@ public struct PlaylistsListView: View {
 
     @State private var showingCreateSheet: Bool = false
 
+    // Columns
     private let columns = [
         GridItem(.adaptive(minimum: 155), spacing: 14)
     ]
 
+    // Initialize with configured properties
     public init(libraryStore: LibraryStore, playerService: AudioPlayerService) {
         self.libraryStore = libraryStore
         self.playerService = playerService
     }
 
+    // Main view layout structure
     public var body: some View {
         VStack(spacing: 10) {
             // New Playlist Action Trigger Bar
@@ -108,6 +111,7 @@ public struct PlaylistsListView: View {
                 .padding(.horizontal, 16)
             }
         }
+        // Modal presentation sheet
         .sheet(isPresented: $showingCreateSheet) {
             CreatePlaylistSheet(libraryStore: libraryStore)
         }

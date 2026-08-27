@@ -3,24 +3,43 @@ import SwiftUI
 /// Reusable track row displaying album cover artwork thumbnail, metadata, duration, status indicators,
 /// and an optimized, fluid swipe-left gesture to trigger "PLAY NEXT" without interfering with scrolling.
 public struct TrackRowView: View {
+    // Track
     public let track: Track
+    // Index number
     public let indexNumber: Int?
+    // Flag indicating if current track
     public let isCurrentTrack: Bool
+    // Flag indicating if playing
     public let isPlaying: Bool
+    // Flag indicating if next track
     public let isNextTrack: Bool
+    // Flag indicating if in play next
     public let isInPlayNext: Bool
+    // Flag indicating if tap to play next enabled
     public let isTapToPlayNextEnabled: Bool
+    // Show album subtitle
     public let showAlbumSubtitle: Bool
+    // On play
     public let onPlay: () -> Void
+    // On play next
     public let onPlayNext: () -> Void
+    // On queue next
     public let onQueueNext: () -> Void
+    // Serial queue for on add to queue
     public let onAddToQueue: () -> Void
+    // On add to playlist
     public let onAddToPlaylist: () -> Void
+    // On show info
     public let onShowInfo: () -> Void
+    // On select artist
     public let onSelectArtist: ((String) -> Void)?
+    // On select album
     public let onSelectAlbum: (() -> Void)?
+    // On remove from playlist
     public let onRemoveFromPlaylist: (() -> Void)?
+    // Flag indicating if swipe disabled
     public let isSwipeDisabled: Bool
+    // Trailing text
     public let trailingText: String?
 
     @Environment(\.appTheme) private var appTheme
@@ -33,8 +52,10 @@ public struct TrackRowView: View {
     @State private var isHorizontalDragActive: Bool = false
     @State private var againDismissTask: Task<Void, Never>? = nil
 
+    // Activation threshold
     private let activationThreshold: CGFloat = 75
 
+    // Initialize with configured properties
     public init(
         track: Track,
         indexNumber: Int? = nil,
@@ -85,6 +106,7 @@ public struct TrackRowView: View {
         min(1.0, max(0.0, Double(dragOffset) / Double(activationThreshold)))
     }
 
+    // Main view layout structure
     public var body: some View {
         ZStack {
             // Leading "PLAY NEXT" Action Surface Revealed on Swipe Right
@@ -220,10 +242,13 @@ public struct TrackRowView: View {
                 }
             }
             .offset(x: dragOffset)
+            // Interactive drag and touch gesture handling
             .simultaneousGesture(
                 isSwipeDisabled ? nil : DragGesture(minimumDistance: 20, coordinateSpace: .local)
                     .onChanged { value in
+                        // Translation x
                         let translationX = value.translation.width
+                        // Translation y
                         let translationY = value.translation.height
 
                         // Only capture horizontal swipe if movement is predominantly horizontal
@@ -236,6 +261,7 @@ public struct TrackRowView: View {
                         if isHorizontalDragActive {
                             dragOffset = translationX
 
+                            // Passed
                             let passed = (translationX <= -activationThreshold) || (translationX >= activationThreshold)
                             if passed != hasPassedThreshold {
                                 hasPassedThreshold = passed
@@ -269,6 +295,7 @@ public struct TrackRowView: View {
                 Text("QUEUE NEXT")
             }
 
+            // Artists
             let artists = ArtistParser.parse(rawArtist: track.artist).map { $0.name }
             if !artists.isEmpty, let onSelectArtist = onSelectArtist {
                 if artists.count == 1, let firstArtist = artists.first {
@@ -314,6 +341,7 @@ public struct TrackRowView: View {
         }
     }
 
+    // Trigger play next
     private func triggerPlayNext() {
         if isInPlayNext {
             HapticFeedback.notificationWarning()
@@ -357,6 +385,7 @@ public struct TrackRowView: View {
         }
     }
 
+    // Trigger queue next
     private func triggerQueueNext() {
         if isInPlayNext {
             HapticFeedback.notificationWarning()
@@ -400,6 +429,7 @@ public struct TrackRowView: View {
         }
     }
 
+    // Confirm again
     private func confirmAgain(isPlayNext: Bool) {
         againDismissTask?.cancel()
         againDismissTask = nil
@@ -447,6 +477,7 @@ public struct TrackRowView: View {
                     .clipShape(RoundedRectangle(cornerRadius: 2.5, style: .continuous))
                     .offset(x: 2, y: 2)
                     .contentTransition(.opacity)
+                    // Smooth UI transition animation
                     .animation(.easeInOut(duration: 0.22), value: isPlaying)
             } else if isNextTrack {
                 Text("NEXT")
@@ -464,6 +495,7 @@ public struct TrackRowView: View {
         .contentShape(Rectangle())
     }
 
+    // Reset offset
     private func resetOffset() {
         againDismissTask?.cancel()
         againDismissTask = nil

@@ -1,10 +1,3 @@
-//
-//  ViewModifiers.swift
-//  MusicPlayer
-//
-//  Created by Principal Apple Software Engineer on 8/24/26.
-//
-
 import SwiftUI
 #if canImport(UIKit)
 import UIKit
@@ -58,11 +51,13 @@ public enum HapticFeedback {
     }
 }
 
+// AppThemeEnvironmentKey representation
 private struct AppThemeEnvironmentKey: EnvironmentKey {
     static let defaultValue: AppTheme = .dark
 }
 
 public extension EnvironmentValues {
+    // App theme
     var appTheme: AppTheme {
         get { self[AppThemeEnvironmentKey.self] }
         set { self[AppThemeEnvironmentKey.self] = newValue }
@@ -75,6 +70,7 @@ public struct SemanticCardModifier: ViewModifier {
     public var cornerRadius: CGFloat = 12
     public var padding: CGFloat = 16
 
+    // Body
     public func body(content: Content) -> some View {
         content
             .padding(padding)
@@ -92,6 +88,7 @@ public struct TypographicBadgeModifier: ViewModifier {
     @Environment(\.appTheme) private var appTheme
     public var isHighlighted: Bool = false
 
+    // Body
     public func body(content: Content) -> some View {
         content
             .font(.system(size: 11, weight: .bold, design: .monospaced))
@@ -119,6 +116,7 @@ public struct MacRowHoverModifier: ViewModifier {
     public var isSelected: Bool = false
     public var cornerRadius: CGFloat = 6
 
+    // Body
     public func body(content: Content) -> some View {
         content
             .background(
@@ -139,18 +137,22 @@ public struct MacRowHoverModifier: ViewModifier {
 
 /// Extension for convenient view modifier application.
 public extension View {
+    // Semantic card
     func semanticCard(cornerRadius: CGFloat = 12, padding: CGFloat = 16) -> some View {
         modifier(SemanticCardModifier(cornerRadius: cornerRadius, padding: padding))
     }
 
+    // Typographic badge
     func typographicBadge(isHighlighted: Bool = false) -> some View {
         modifier(TypographicBadgeModifier(isHighlighted: isHighlighted))
     }
 
+    // Mac row hover
     func macRowHover(isSelected: Bool = false, cornerRadius: CGFloat = 6) -> some View {
         modifier(MacRowHoverModifier(isSelected: isSelected, cornerRadius: cornerRadius))
     }
 
+    // Album context menu
     func albumContextMenu(album: Album, libraryStore: LibraryStore, playerService: AudioPlayerService) -> some View {
         modifier(AlbumContextMenuModifier(album: album, libraryStore: libraryStore, playerService: playerService))
     }
@@ -158,10 +160,14 @@ public extension View {
 
 /// Universal context menu for albums across the application (PIN, PLAY, SHUFFLE, PLAY NEXT, QUEUE NEXT without icons).
 public struct AlbumContextMenuModifier: ViewModifier {
+    // Album title
     public let album: Album
+    // Library store
     public let libraryStore: LibraryStore
+    // Player service
     public let playerService: AudioPlayerService
 
+    // Body
     public func body(content: Content) -> some View {
         content
             .contextMenu {
@@ -184,7 +190,9 @@ public struct AlbumContextMenuModifier: ViewModifier {
 
                 Button(action: {
                     if !album.tracks.isEmpty {
+                        // Shuffled
                         var shuffled = album.tracks.shuffled()
+                        // First
                         let first = shuffled.removeFirst()
                         shuffled.insert(first, at: 0)
                         playerService.play(track: first, inQueue: shuffled)
@@ -216,6 +224,7 @@ public extension View {
         self
             .scrollDismissesKeyboard(.interactively)
             #if canImport(UIKit)
+            // Interactive drag and touch gesture handling
             .simultaneousGesture(
                 DragGesture(minimumDistance: 10, coordinateSpace: .local)
                     .onChanged { value in
@@ -231,6 +240,7 @@ public extension View {
 // MARK: - Cross-Platform Compatibility Shims for macOS
 
 #if !os(iOS)
+// NavigationBarTitleDisplayModePlaceholder representation
 public struct NavigationBarTitleDisplayModePlaceholder: Sendable, Equatable {
     public static let automatic = NavigationBarTitleDisplayModePlaceholder()
     public static let inline = NavigationBarTitleDisplayModePlaceholder()
@@ -255,11 +265,13 @@ public extension ToolbarItemPlacement {
 }
 
 public extension SearchFieldPlacement {
+    // NavigationBarDrawerModePlaceholder representation
     struct NavigationBarDrawerModePlaceholder: Sendable, Equatable {
         public static let always = NavigationBarDrawerModePlaceholder()
         public static let automatic = NavigationBarDrawerModePlaceholder()
     }
 
+    // Navigation bar drawer
     static func navigationBarDrawer(displayMode: NavigationBarDrawerModePlaceholder = .automatic) -> SearchFieldPlacement {
         .automatic
     }

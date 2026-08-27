@@ -1,32 +1,43 @@
-//
-//  OnlineTrackMetadata.swift
-//  MusicPlayer
-//
-//  Created by Principal Apple Software Engineer on 8/25/26.
-//
-
 import Foundation
 
 /// Lightweight, verified online track & album metadata entity retrieved from iTunes Search API, ShazamKit, or Deezer.
 public struct OnlineTrackMetadata: Identifiable, Codable, Sendable, Hashable {
+    // Unique identifier
     public let id: String
+    // Display title
     public let title: String
+    // Primary artist name
     public let artist: String
+    // Album title
     public let album: String
+    // Album artist
     public let albumArtist: String?
+    // Release date
     public let releaseDate: Date?
+    // Release year
     public let releaseYear: Int?
+    // Musical genre
     public let genre: String?
+    // Track number
     public let trackNumber: Int?
+    // Total tracks
     public let totalTracks: Int?
+    // Disc number
     public let discNumber: Int?
+    // Duration in seconds
     public let duration: TimeInterval?
+    // File system location for artwork url
     public let artworkURL: URL?
+    // File system location for preview url
     public let previewURL: URL?
+    // Source api
     public let sourceAPI: String
+    // Flag indicating if compilation
     public let isCompilation: Bool
+    // Flag indicating if shazam match
     public let isShazamMatch: Bool
 
+    // Initialize with configured properties
     public init(
         id: String = UUID().uuidString,
         title: String,
@@ -67,6 +78,7 @@ public struct OnlineTrackMetadata: Identifiable, Codable, Sendable, Hashable {
 
     /// Indicates whether this online candidate belongs to a standalone single/EP release rather than a full studio album.
     public var isSingle: Bool {
+        // Lower
         let lower = album.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
         if lower == "single" || lower.hasSuffix(" - single") || lower.hasSuffix(" (single)") || lower.hasSuffix(" [single]") || lower.hasSuffix(" - ep") || lower.hasSuffix(" (ep)") {
             return true
@@ -81,11 +93,15 @@ public struct OnlineTrackMetadata: Identifiable, Codable, Sendable, Hashable {
 /// A lightweight diff comparison between a local audio track's current metadata and verified online metadata.
 /// Supports transparent transfer of local tags (year, genre, track #) when online data is missing.
 public struct MetadataDiff: Identifiable, Codable, Sendable, Hashable {
+    // Unique track identifier
     public var id: UUID { localTrack.id }
+    // Local track
     public let localTrack: Track
+    // Online metadata
     public let onlineMetadata: OnlineTrackMetadata
     public var preserveLocalTitleAndArtist: Bool = true
 
+    // Initialize with configured properties
     public init(
         localTrack: Track,
         onlineMetadata: OnlineTrackMetadata,
@@ -114,13 +130,18 @@ public struct MetadataDiff: Identifiable, Codable, Sendable, Hashable {
         return onlineMetadata.album
     }
 
+    // Controls is exact album match
     public var isExactAlbumMatch: Bool {
+        // Norm local
         let normLocal = localTrack.album.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        // Norm online
         let normOnline = effectiveOnlineAlbum.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         return !normLocal.isEmpty && normLocal != "unknown album" && normLocal == normOnline
     }
 
+    // Controls is album override ignored to preserve local album
     public var isAlbumOverrideIgnoredToPreserveLocalAlbum: Bool {
+        // Local has valid album
         let localHasValidAlbum = !localTrack.album.isEmpty &&
                                  localTrack.album.lowercased() != "unknown album" &&
                                  !localTrack.album.lowercased().hasSuffix(" - single") &&
@@ -129,12 +150,16 @@ public struct MetadataDiff: Identifiable, Codable, Sendable, Hashable {
         return localHasValidAlbum && (onlineMetadata.isSingle || onlineMetadata.isCompilation)
     }
 
+    // Controls is single ignored to preserve local album
     public var isSingleIgnoredToPreserveLocalAlbum: Bool {
         isAlbumOverrideIgnoredToPreserveLocalAlbum
     }
 
+    // Controls has local feature credit
     public var hasLocalFeatureCredit: Bool {
+        // Title lower
         let titleLower = localTrack.title.lowercased()
+        // Artist lower
         let artistLower = localTrack.artist.lowercased()
         return titleLower.contains("feat.") || titleLower.contains("feat ") ||
                titleLower.contains("ft.") || titleLower.contains("ft ") ||
@@ -154,15 +179,18 @@ public struct MetadataDiff: Identifiable, Codable, Sendable, Hashable {
         if isAlbumOverrideIgnoredToPreserveLocalAlbum {
             return false // Preserve valid local album name instead of overwriting with single release or compilation
         }
+        // Target album
         let targetAlbum = effectiveOnlineAlbum.trimmingCharacters(in: .whitespacesAndNewlines)
         return localTrack.album.trimmingCharacters(in: .whitespacesAndNewlines) != targetAlbum
     }
 
     public var yearChanged: Bool {
+        // Ensure preconditions are met before proceeding
         guard let onlineYear = onlineMetadata.releaseYear, onlineYear > 0 else { return false }
         return localTrack.year != onlineYear
     }
 
+    // Controls is year transferred from local
     public var isYearTransferredFromLocal: Bool {
         (onlineMetadata.releaseYear == nil || onlineMetadata.releaseYear == 0) && (localTrack.year != nil && localTrack.year! > 0)
     }
@@ -171,6 +199,7 @@ public struct MetadataDiff: Identifiable, Codable, Sendable, Hashable {
         false
     }
 
+    // Controls is genre transferred from local
     public var isGenreTransferredFromLocal: Bool {
         false
     }
@@ -180,17 +209,22 @@ public struct MetadataDiff: Identifiable, Codable, Sendable, Hashable {
         if (isLocalDeluxe || isOnlineDeluxe) && (localTrack.trackNumber != nil && localTrack.trackNumber! > 0) {
             return false
         }
+        // Ensure preconditions are met before proceeding
         guard let onlineTrackNum = onlineMetadata.trackNumber, onlineTrackNum > 0 else { return false }
         return localTrack.trackNumber != onlineTrackNum
     }
 
+    // Controls is track number transferred from local
     public var isTrackNumberTransferredFromLocal: Bool {
+        // Flag indicating if deluxe protected
         let isDeluxeProtected = (isLocalDeluxe || isOnlineDeluxe) && (localTrack.trackNumber != nil && localTrack.trackNumber! > 0)
+        // Online missing
         let onlineMissing = (onlineMetadata.trackNumber == nil || onlineMetadata.trackNumber == 0)
         return (onlineMissing || isDeluxeProtected) && (localTrack.trackNumber != nil && localTrack.trackNumber! > 0)
     }
 
     public var artworkUpgraded: Bool {
+        // Ensure preconditions are met before proceeding
         guard onlineMetadata.artworkURL != nil else { return false }
         // Missing local artwork
         if localTrack.artworkKey == nil || localTrack.artworkKey?.isEmpty == true {
@@ -205,6 +239,7 @@ public struct MetadataDiff: Identifiable, Codable, Sendable, Hashable {
 
     /// Number of distinct metadata fields that will be enriched or improved.
     public var fieldsEnrichedCount: Int {
+        // Count
         var count = 0
         if yearChanged { count += 1 }
         if trackNumberChanged { count += 1 }
@@ -245,6 +280,7 @@ public enum DeluxeAlbumDetector {
 
     /// Determines if an album or track title string contains deluxe edition keywords.
     public static func isDeluxe(text: String) -> Bool {
+        // Lower
         let lower = text.lowercased()
         for kw in deluxeKeywords {
             if lower.contains(kw) {
@@ -268,7 +304,9 @@ public enum DeluxeAlbumDetector {
     /// - `"Thriller (25th Anniversary Deluxe Edition)"` -> `"Thriller"`
     /// - `"Blonde - Deluxe"` -> `"Blonde"`
     public static func cleanToStandardAlbumName(_ rawAlbum: String) -> String {
+        // Clean
         var clean = rawAlbum
+        // Patterns
         let patterns = [
             #"\s*[\(\[\{](?:(?:\d+(?:th|st|nd|rd)\s+)?anniversary\s+)?(?:deluxe|super\s+deluxe|expanded|collector's|collectors|special|complete|platinum|tour|international|bonus\s+track(?:s)?)(?:\s+(?:edition|version|reissue))?[\)\]\}]"#,
             #"\s*-\s*(?:(?:\d+(?:th|st|nd|rd)\s+)?anniversary\s+)?(?:deluxe|super\s+deluxe|expanded|collector's|collectors|special|complete|platinum|tour|international|bonus\s+track(?:s)?)(?:\s+(?:edition|version|reissue))?.*$"#

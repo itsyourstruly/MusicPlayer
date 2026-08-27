@@ -1,10 +1,3 @@
-//
-//  AudioPlayerService.swift
-//  MusicPlayer
-//
-//  Created by Principal Apple Software Engineer on 8/24/26.
-//
-
 import Foundation
 import AVFoundation
 import MediaPlayer
@@ -19,21 +12,33 @@ import os
 public final class AudioPlayerService {
     // MARK: - Observable State
 
+    // Currently playing or paused track
     public private(set) var currentTrack: Track?
+    // Current playback state (playing, paused, stopped)
     public private(set) var playbackStatus: PlaybackStatus = .stopped
+    // Elapsed playback time in seconds
     public private(set) var currentTime: TimeInterval = 0
+    // Total audio duration in seconds
     public private(set) var duration: TimeInterval = 0
+    // Upcoming track queue
     public private(set) var queue: [Track] = []
+    // Index of current track in active queue
     public private(set) var currentIndex: Int?
+    // Active repeat configuration (off, all, one)
     public var repeatMode: RepeatMode = .off
+    // Active shuffle configuration
     public var shuffleMode: ShuffleMode = .off
 
+    // True while the user is dragging the scrub bar
     public var isSeeking: Bool = false
+    // Target seek timestamp during scrubber interaction
     public var seekPosition: TimeInterval = 0
+    // Audio stream buffering progress ratio
     public var bufferProgress: Double { 1.0 }
 
     // MARK: - Desktop Volume & Mute State
 
+    // Master output volume (0.0 to 1.0)
     public var volume: Float = 1.0 {
         didSet {
             let clamped = min(max(volume, 0.0), 1.0)
@@ -49,32 +54,43 @@ public final class AudioPlayerService {
         }
     }
 
+    // Mute state toggle
     public var isMuted: Bool = false {
         didSet {
             player?.isMuted = isMuted
         }
     }
 
+    // Toggle mute
     public func toggleMute() {
         isMuted.toggle()
     }
 
+    // Increase volume
     public func increaseVolume(by delta: Float = 0.05) {
         volume = min(1.0, volume + delta)
     }
 
+    // Decrease volume
     public func decreaseVolume(by delta: Float = 0.05) {
         volume = max(0.0, volume - delta)
     }
 
     // MARK: - Crossfade & Queue Configuration
 
+    // Enables smooth audio crossfade between consecutive tracks
     public var isCrossfadeEnabled: Bool = false
+    // Length of the crossfade transition in seconds
     public var crossfadeDuration: Double = 4.0
+    // Whether selecting a song maintains the active queue context
     public var playTrackInCurrentQueue: Bool = false
+    // Play tap action immediately inserts song next in queue
     public var tapToPlayNext: Bool = false
+    // Enables micro-fade when skipping tracks to prevent audio pops
     public var smoothSkippingEnabled: Bool = false
+    // Priority queue for tracks explicitly marked to play next
     public var playNextQueue: [Track] = []
+    // Callback invoked whenever a track begins playing
     public var onTrackPlay: ((UUID) -> Void)? = nil
 
     @ObservationIgnored private nonisolated(unsafe) var fadePlayer: AVPlayer?
@@ -100,6 +116,7 @@ public final class AudioPlayerService {
     @ObservationIgnored private var hasCountedCurrentPlay: Bool = false
     @ObservationIgnored private var playbackAccumulatedTime: TimeInterval = 0
 
+    // Initialize with configured properties
     public init() {
         setupAudioSession()
         setupAudioNotifications()
@@ -148,18 +165,24 @@ public final class AudioPlayerService {
     // MARK: - Computed Properties
 
     public var progressRatio: Double {
+        // Ensure preconditions are met before proceeding
         guard duration > 0 else { return 0 }
+        // Time
         let time = isSeeking ? seekPosition : currentTime
         return min(max(time / duration, 0), 1)
     }
 
+    // Controls has next track
     public var hasNextTrack: Bool {
         if !playNextQueue.isEmpty { return true }
+        // Ensure preconditions are met before proceeding
         guard let index = currentIndex, !queue.isEmpty else { return false }
         return index + 1 < queue.count || repeatMode == .all
     }
 
+    // Controls has previous track
     public var hasPreviousTrack: Bool {
+        // Ensure preconditions are met before proceeding
         guard let index = currentIndex, !queue.isEmpty else { return false }
         return index > 0 || currentTime > 3.0
     }
@@ -169,6 +192,7 @@ public final class AudioPlayerService {
         if let firstPlayNext = playNextQueue.first {
             return firstPlayNext
         }
+        // Ensure preconditions are met before proceeding
         guard let index = currentIndex, !queue.isEmpty, index + 1 < queue.count else { return nil }
         return queue[index + 1]
     }
@@ -178,10 +202,12 @@ public final class AudioPlayerService {
     /// Plays a track within the active queue: inserts immediately after the current song and starts playback.
     public func playInCurrentQueue(track: Track) {
         cancelCrossfade()
+        // Ensure preconditions are met before proceeding
         guard !queue.isEmpty, let idx = currentIndex else {
             play(track: track)
             return
         }
+        // Insert index
         let insertIndex = idx + 1
         if insertIndex <= queue.count {
             queue.insert(track, at: insertIndex)
@@ -199,10 +225,12 @@ public final class AudioPlayerService {
             return
         }
         cancelCrossfade()
+        // Serial queue for active queue
         let activeQueue = newQueue.isEmpty ? [track] : newQueue
         self.originalQueue = activeQueue
 
         if shuffleMode == .on {
+            // Shuffled
             var shuffled = activeQueue
             // Keep the selected track at the head of the shuffled queue
             if let idx = shuffled.firstIndex(where: { $0.id == track.id }) {
@@ -230,6 +258,7 @@ public final class AudioPlayerService {
 
     /// Resumes playback.
     public func play() {
+        // Ensure preconditions are met before proceeding
         guard let player = player, player.currentItem != nil else {
             if let track = currentTrack ?? queue.first {
                 loadAndPlay(track: track)
@@ -272,11 +301,13 @@ public final class AudioPlayerService {
         performNext()
     }
 
+    // Perform next
     private func performNext() {
         cancelCrossfade()
 
         // 1. Play from dedicated Play Next queue if available
         if !playNextQueue.isEmpty {
+            // Next song
             let nextSong = playNextQueue.removeFirst()
             loadAndPlay(track: nextSong)
             return
@@ -285,6 +316,7 @@ public final class AudioPlayerService {
         // 2. Otherwise advance in standard queue
         guard !queue.isEmpty, let idx = currentIndex else { return }
 
+        // Next idx
         let nextIdx = idx + 1
         if nextIdx < queue.count {
             currentIndex = nextIdx
@@ -313,6 +345,7 @@ public final class AudioPlayerService {
         performPrevious()
     }
 
+    // Perform previous
     private func performPrevious() {
         cancelCrossfade()
         // If track has been playing for more than 3 seconds, restart and play it
@@ -323,8 +356,10 @@ public final class AudioPlayerService {
             return
         }
 
+        // Ensure preconditions are met before proceeding
         guard !queue.isEmpty, let idx = currentIndex else { return }
 
+        // Prev idx
         let prevIdx = idx - 1
         if prevIdx >= 0 {
             currentIndex = prevIdx
@@ -339,13 +374,18 @@ public final class AudioPlayerService {
     /// Seeks to a specific timestamp in seconds.
     public func seek(to timeInSeconds: TimeInterval) {
         cancelCrossfade()
+        // Ensure preconditions are met before proceeding
         guard let player = player else { return }
+        // Clamped time
         let clampedTime = max(0, min(timeInSeconds, duration))
         self.currentTime = clampedTime
 
+        // Target cm time
         let targetCMTime = CMTime(seconds: clampedTime, preferredTimescale: 600)
+        // Tolerance
         let tolerance = CMTime(seconds: 0.05, preferredTimescale: 600)
         player.seek(to: targetCMTime, toleranceBefore: tolerance, toleranceAfter: tolerance) { [weak self] _ in
+            // Ensure preconditions are met before proceeding
             guard let self = self else { return }
             Task { @MainActor in
                 self.updateNowPlayingElapsedTime()
@@ -356,9 +396,11 @@ public final class AudioPlayerService {
     /// Toggles shuffle mode, reordering the queue while keeping the active track.
     public func toggleShuffle() {
         shuffleMode = shuffleMode.toggled
+        // Ensure preconditions are met before proceeding
         guard let current = currentTrack else { return }
 
         if shuffleMode == .on {
+            // Remaining
             var remaining = queue.filter { $0.id != current.id }
             remaining.shuffle()
             self.queue = [current] + remaining
@@ -386,7 +428,9 @@ public final class AudioPlayerService {
 
     /// Removes an item from the queue.
     public func removeQueueItem(at index: Int) {
+        // Ensure preconditions are met before proceeding
         guard queue.indices.contains(index) else { return }
+        // Removed track
         let removedTrack = queue.remove(at: index)
 
         if let current = currentTrack {
@@ -430,6 +474,7 @@ public final class AudioPlayerService {
 
     /// Adds multiple tracks to the dedicated Play Next queue.
     public func playNext(tracks: [Track]) {
+        // Ensure preconditions are met before proceeding
         guard !tracks.isEmpty else { return }
         if currentTrack == nil && queue.isEmpty {
             if let first = tracks.first {
@@ -443,6 +488,7 @@ public final class AudioPlayerService {
 
     /// Inserts multiple tracks to the very front of the Play Next queue.
     public func insertPlayNextFront(tracks: [Track]) {
+        // Ensure preconditions are met before proceeding
         guard !tracks.isEmpty else { return }
         if currentTrack == nil && queue.isEmpty {
             if let first = tracks.first {
@@ -456,6 +502,7 @@ public final class AudioPlayerService {
 
     /// Removes an item from the Play Next queue.
     public func removePlayNextItem(at index: Int) {
+        // Ensure preconditions are met before proceeding
         guard playNextQueue.indices.contains(index) else { return }
         playNextQueue.remove(at: index)
     }
@@ -472,7 +519,9 @@ public final class AudioPlayerService {
 
     /// Immediately plays a track selected directly from the Play Next queue.
     public func playFromPlayNext(at index: Int) {
+        // Ensure preconditions are met before proceeding
         guard playNextQueue.indices.contains(index) else { return }
+        // Track
         let track = playNextQueue.remove(at: index)
         loadAndPlay(track: track)
     }
@@ -493,6 +542,7 @@ public final class AudioPlayerService {
 
     /// Appends multiple tracks to the end of the current queue.
     public func appendToQueue(tracks: [Track]) {
+        // Ensure preconditions are met before proceeding
         guard !tracks.isEmpty else { return }
         if queue.isEmpty {
             if let first = tracks.first {
@@ -545,6 +595,7 @@ public final class AudioPlayerService {
 
     /// Plays a specific track in the existing queue by its queue index.
     public func playTrackInQueue(at index: Int) {
+        // Ensure preconditions are met before proceeding
         guard queue.indices.contains(index) else { return }
         self.currentIndex = index
         loadAndPlay(track: queue[index])
@@ -552,6 +603,7 @@ public final class AudioPlayerService {
 
     // MARK: - Internal Audio Engine Logic
 
+    // Load and play
     private func loadAndPlay(track: Track) {
         cancelCrossfade()
         self.currentTrack = track
@@ -566,6 +618,7 @@ public final class AudioPlayerService {
 
         // 2. Ensure root folder bookmark is actively accessed and resolve accessible file URL
         _ = SecurityScopedBookmark.shared.resolveAndAccessBookmark()
+        // File system location for resolved url
         let resolvedURL = SecurityScopedBookmark.shared.resolveAccessibleURL(for: track.url)
 
         // Retain security-scoped access for individual file if applicable
@@ -589,6 +642,7 @@ public final class AudioPlayerService {
 
         // Configure player item for pure, lossless playback using AVURLAsset
         let asset = AVURLAsset(url: resolvedURL, options: [AVURLAssetPreferPreciseDurationAndTimingKey: false])
+        // Player item
         let playerItem = AVPlayerItem(asset: asset)
 
         if player == nil {
@@ -609,6 +663,7 @@ public final class AudioPlayerService {
         AppLogger.audio.info("Now playing: \(track.title) by \(track.artist) at \(resolvedURL.path)")
     }
 
+    // Teardown player observers
     private func teardownPlayerObservers() {
         if let token = timeObserverToken {
             player?.removeTimeObserver(token)
@@ -628,13 +683,16 @@ public final class AudioPlayerService {
         playerTimeControlObserver = nil
     }
 
+    // Setup player item observers
     private func setupPlayerItemObservers(for playerItem: AVPlayerItem, track: Track) {
         // 1. Observe playerItem.status
         itemStatusObserver = playerItem.observe(\.status, options: [.new, .initial]) { [weak self] item, _ in
             Task { @MainActor in
+                // Ensure preconditions are met before proceeding
                 guard let self = self else { return }
                 switch item.status {
                 case .readyToPlay:
+                    // D sec
                     let dSec = CMTimeGetSeconds(item.duration)
                     if !dSec.isNaN && !dSec.isInfinite && dSec > 0 {
                         self.duration = dSec
@@ -645,8 +703,11 @@ public final class AudioPlayerService {
                     self.player?.play()
                     AppLogger.audio.info("AVPlayerItem ready to play: \(track.title) (duration: \(self.duration)s)")
                 case .failed:
+                    // Item err
                     let itemErr = item.error?.localizedDescription ?? "None"
+                    // Player err
                     let playerErr = self.player?.error?.localizedDescription ?? "None"
+                    // Error logs
                     let errorLogs = item.errorLog()?.events.compactMap { $0.errorComment }.joined(separator: "; ") ?? "None"
                     AppLogger.audio.error("AVPlayerItem failed for \(track.title). Item Error: \(itemErr). Player Error: \(playerErr). ErrorLog: \(errorLogs)")
                     self.playbackStatus = .stopped
@@ -662,6 +723,7 @@ public final class AudioPlayerService {
         if let player = self.player {
             playerTimeControlObserver = player.observe(\.timeControlStatus, options: [.new]) { [weak self] p, _ in
                 Task { @MainActor in
+                    // Ensure preconditions are met before proceeding
                     guard let self = self else { return }
                     switch p.timeControlStatus {
                     case .playing:
@@ -702,6 +764,7 @@ public final class AudioPlayerService {
             queue: .main
         ) { [weak self] notification in
             Task { @MainActor in
+                // Error
                 let error = notification.userInfo?[AVPlayerItemFailedToPlayToEndTimeErrorKey] as? Error
                 AppLogger.audio.error("AVPlayerItem failed to play to end time: \(error?.localizedDescription ?? "unknown error")")
                 self?.playbackStatus = .stopped
@@ -709,14 +772,19 @@ public final class AudioPlayerService {
         }
     }
 
+    // Setup periodic time observer
     private func setupPeriodicTimeObserver() {
+        // Interval
         let interval = CMTime(seconds: 0.25, preferredTimescale: 600)
         timeObserverToken = player?.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self] time in
+            // Ensure preconditions are met before proceeding
             guard let self = self, !self.isSeeking else { return }
+            // Seconds
             let seconds = CMTimeGetSeconds(time)
             if !seconds.isNaN && !seconds.isInfinite {
                 self.currentTime = seconds
                 if self.duration <= 0, let itemDur = self.player?.currentItem?.duration {
+                    // D sec
                     let dSec = CMTimeGetSeconds(itemDur)
                     if !dSec.isNaN && !dSec.isInfinite && dSec > 0 {
                         self.duration = dSec
@@ -739,6 +807,7 @@ public final class AudioPlayerService {
         }
     }
 
+    // Handle track ended
     private func handleTrackEnded() {
         if !hasCountedCurrentPlay, let track = currentTrack {
             hasCountedCurrentPlay = true
@@ -759,16 +828,21 @@ public final class AudioPlayerService {
 
     // MARK: - Crossfade Transition Engine
 
+    // Check and trigger crossfade if needed
     private func checkAndTriggerCrossfadeIfNeeded() {
+        // Ensure preconditions are met before proceeding
         guard isCrossfadeEnabled,
               crossfadeDuration >= 0.5,
               !isCrossfading,
               duration > (crossfadeDuration * 1.2),
               playbackStatus == .playing else { return }
 
+        // Remaining
         let remaining = duration - currentTime
         if remaining <= crossfadeDuration && remaining > 0 {
+            // Ensure preconditions are met before proceeding
             guard let idx = currentIndex, !queue.isEmpty else { return }
+            // Next idx
             let nextIdx: Int
             if idx + 1 < queue.count {
                 nextIdx = idx + 1
@@ -777,28 +851,36 @@ public final class AudioPlayerService {
             } else {
                 return
             }
+            // Next track
             let nextTrack = queue[nextIdx]
             startCrossfade(to: nextTrack, nextIndex: nextIdx)
         }
     }
 
+    // Start crossfade
     private func startCrossfade(to nextTrack: Track, nextIndex: Int) {
+        // Ensure preconditions are met before proceeding
         guard !isCrossfading else { return }
         isCrossfading = true
         crossfadeTask?.cancel()
 
+        // File system location for resolved next url
         let resolvedNextURL = SecurityScopedBookmark.shared.resolveAccessibleURL(for: nextTrack.url)
         _ = resolvedNextURL.startAccessingSecurityScopedResource()
 
+        // Next asset
         let nextAsset = AVURLAsset(url: resolvedNextURL, options: [AVURLAssetPreferPreciseDurationAndTimingKey: false])
+        // Next item
         let nextItem = AVPlayerItem(asset: nextAsset)
 
+        // Incoming player
         let incomingPlayer = AVPlayer(playerItem: nextItem)
         incomingPlayer.automaticallyWaitsToMinimizeStalling = true
         incomingPlayer.volume = 0.0
         incomingPlayer.isMuted = false
         self.fadePlayer = incomingPlayer
 
+        // Outgoing player
         let outgoingPlayer = self.player
 
         // Immediately update track metadata & UI to next track
@@ -817,7 +899,9 @@ public final class AudioPlayerService {
         // Attach real-time observer to incoming player so UI progress bar tracks next track smoothly from 0.0s
         let interval = CMTime(seconds: 0.1, preferredTimescale: 600)
         self.fadeTimeObserverToken = incomingPlayer.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self] time in
+            // Ensure preconditions are met before proceeding
             guard let self = self, !self.isSeeking else { return }
+            // Seconds
             let seconds = CMTimeGetSeconds(time)
             if !seconds.isNaN && !seconds.isInfinite {
                 self.currentTime = seconds
@@ -827,8 +911,11 @@ public final class AudioPlayerService {
         incomingPlayer.play()
         AppLogger.audio.info("Starting crossfade (\(self.crossfadeDuration)s) to: \(nextTrack.title)")
 
+        // Total fade duration
         let totalFadeDuration = max(self.crossfadeDuration, 0.5)
+        // Fade steps
         let fadeSteps = 40
+        // Step duration
         let stepDuration = totalFadeDuration / Double(fadeSteps)
 
         crossfadeTask = Task { @MainActor in
@@ -837,13 +924,16 @@ public final class AudioPlayerService {
                 try? await Task.sleep(nanoseconds: UInt64(stepDuration * 1_000_000_000))
                 if Task.isCancelled { break }
 
+                // Progress
                 let progress = Float(step) / Float(fadeSteps)
+                // Angle
                 let angle = progress * (Float.pi / 2.0)
                 // Smooth equal-power curve (prevents volume dip in middle of crossfade) scaled by master volume
                 outgoingPlayer?.volume = max(0.0, cos(angle)) * self.volume
                 incomingPlayer.volume = min(1.0, sin(angle)) * self.volume
             }
 
+            // Ensure preconditions are met before proceeding
             guard !Task.isCancelled else { return }
 
             // Finalize crossfade handoff
@@ -885,6 +975,7 @@ public final class AudioPlayerService {
 
         // Capture the outgoing player and master volume before swapping tracks
         let outgoingPlayer = self.player
+        // Master volume
         let masterVolume = self.volume
 
         // ⚠️ Detach the outgoing player's periodic time observer BEFORE nilling self.player.
@@ -923,7 +1014,9 @@ public final class AudioPlayerService {
         incomingPlayer?.volume = 0
 
         smoothSkipTask = Task { @MainActor in
+            // Steps
             let steps = 20
+            // Step duration
             let stepDuration: UInt64 = 25_000_000 // 25ms per step → 500ms total
 
             for step in 1...steps {
@@ -931,13 +1024,16 @@ public final class AudioPlayerService {
                 try? await Task.sleep(nanoseconds: stepDuration)
                 if Task.isCancelled { break }
 
+                // Progress
                 let progress = Float(step) / Float(steps)
+                // Angle
                 let angle = progress * (Float.pi / 2.0)
                 // Equal-power curve: incoming rises as outgoing falls
                 incomingPlayer?.volume = sin(angle) * masterVolume
                 outgoingPlayer?.volume = cos(angle) * masterVolume
             }
 
+            // Ensure preconditions are met before proceeding
             guard !Task.isCancelled else { return }
 
             // Finalize — restore incoming to full volume and silence/stop outgoing
@@ -947,6 +1043,7 @@ public final class AudioPlayerService {
         }
     }
 
+    // Cancel crossfade
     private func cancelCrossfade() {
         if isCrossfading {
             crossfadeTask?.cancel()
@@ -966,9 +1063,11 @@ public final class AudioPlayerService {
         }
     }
 
+    // Setup audio session
     private func setupAudioSession() {
         #if os(iOS)
         do {
+            // Session
             let session = AVAudioSession.sharedInstance()
             try session.setCategory(.playback, mode: .default, options: [])
             try session.setActive(true)
@@ -979,8 +1078,10 @@ public final class AudioPlayerService {
         #endif
     }
 
+    // Ensure audio session active
     private func ensureAudioSessionActive() {
         #if os(iOS)
+        // Session
         let session = AVAudioSession.sharedInstance()
         do {
             if session.category != .playback {
@@ -995,6 +1096,7 @@ public final class AudioPlayerService {
 
     // MARK: - Background Audio Notifications & Lifecycle
 
+    // Setup audio notifications
     private func setupAudioNotifications() {
         #if os(iOS)
         // 1. Interruption Notification (Phone Calls, Siri, Alarms)
@@ -1003,8 +1105,11 @@ public final class AudioPlayerService {
             object: AVAudioSession.sharedInstance(),
             queue: .main
         ) { [weak self] notification in
+            // Ensure preconditions are met before proceeding
             guard let userInfo = notification.userInfo,
+                  // Type value
                   let typeValue = userInfo[AVAudioSessionInterruptionTypeKey] as? UInt,
+                  // Type
                   let type = AVAudioSession.InterruptionType(rawValue: typeValue) else {
                 return
             }
@@ -1013,7 +1118,9 @@ public final class AudioPlayerService {
                 case .began:
                     self?.pause()
                 case .ended:
+                    // Ensure preconditions are met before proceeding
                     guard let optionsValue = userInfo[AVAudioSessionInterruptionOptionKey] as? UInt else { return }
+                    // Options
                     let options = AVAudioSession.InterruptionOptions(rawValue: optionsValue)
                     if options.contains(.shouldResume) {
                         self?.play()
@@ -1030,8 +1137,11 @@ public final class AudioPlayerService {
             object: AVAudioSession.sharedInstance(),
             queue: .main
         ) { [weak self] notification in
+            // Ensure preconditions are met before proceeding
             guard let userInfo = notification.userInfo,
+                  // Reason value
                   let reasonValue = userInfo[AVAudioSessionRouteChangeReasonKey] as? UInt,
+                  // Reason
                   let reason = AVAudioSession.RouteChangeReason(rawValue: reasonValue) else {
                 return
             }
@@ -1064,7 +1174,9 @@ public final class AudioPlayerService {
 
     // MARK: - MediaPlayer Now Playing & Remote Commands
 
+    // Setup remote command center
     private func setupRemoteCommandCenter() {
+        // Command center
         let commandCenter = MPRemoteCommandCenter.shared()
 
         // Play Command
@@ -1115,7 +1227,9 @@ public final class AudioPlayerService {
         // Change Playback Position (Scrubber on Lock Screen & Control Center)
         commandCenter.changePlaybackPositionCommand.isEnabled = true
         commandCenter.changePlaybackPositionCommand.addTarget { [weak self] event in
+            // Ensure preconditions are met before proceeding
             guard let self = self,
+                  // Position event
                   let positionEvent = event as? MPChangePlaybackPositionCommandEvent else {
                 return .commandFailed
             }
@@ -1147,7 +1261,9 @@ public final class AudioPlayerService {
         }
     }
 
+    // Setup now playing info
     private func setupNowPlayingInfo(for track: Track) {
+        // Info
         var info: [String: Any] = [
             MPMediaItemPropertyTitle: track.title,
             MPMediaItemPropertyArtist: track.artist,
@@ -1161,7 +1277,9 @@ public final class AudioPlayerService {
         if let artKey = track.artworkKey {
             Task {
                 if let artData = await ArtworkCacheService.shared.loadArtwork(key: artKey),
+                   // Image
                    let image = platformImage(from: artData) {
+                    // Mp artwork
                     let mpArtwork = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
                     info[MPMediaItemPropertyArtwork] = mpArtwork
                     MPNowPlayingInfoCenter.default().nowPlayingInfo = info
@@ -1172,7 +1290,9 @@ public final class AudioPlayerService {
         MPNowPlayingInfoCenter.default().nowPlayingInfo = info
     }
 
+    // Update now playing playback state
     private func updateNowPlayingPlaybackState() {
+        // Ensure preconditions are met before proceeding
         guard var info = MPNowPlayingInfoCenter.default().nowPlayingInfo else { return }
         info[MPNowPlayingInfoPropertyPlaybackRate] = playbackStatus == .playing ? 1.0 : 0.0
         info[MPNowPlayingInfoPropertyDefaultPlaybackRate] = 1.0
@@ -1180,7 +1300,9 @@ public final class AudioPlayerService {
         MPNowPlayingInfoCenter.default().nowPlayingInfo = info
     }
 
+    // Update now playing elapsed time
     private func updateNowPlayingElapsedTime() {
+        // Ensure preconditions are met before proceeding
         guard var info = MPNowPlayingInfoCenter.default().nowPlayingInfo else { return }
         info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = currentTime
         info[MPNowPlayingInfoPropertyDefaultPlaybackRate] = 1.0
@@ -1188,15 +1310,18 @@ public final class AudioPlayerService {
         MPNowPlayingInfoCenter.default().nowPlayingInfo = info
     }
 
+    // Clear now playing info
     private func clearNowPlayingInfo() {
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
     }
 
     #if os(iOS)
+    // Platform image
     private func platformImage(from data: Data) -> UIImage? {
         UIImage(data: data)
     }
     #else
+    // Platform image
     private func platformImage(from data: Data) -> NSImage? {
         NSImage(data: data)
     }

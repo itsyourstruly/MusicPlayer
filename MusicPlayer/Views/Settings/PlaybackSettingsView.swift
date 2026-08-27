@@ -1,10 +1,3 @@
-//
-//  PlaybackSettingsView.swift
-//  MusicPlayer
-//
-//  Created by Principal Apple Software Engineer on 8/24/26.
-//
-
 import SwiftUI
 
 /// Detailed playback configuration view for configuring track crossfade duration,
@@ -13,11 +6,13 @@ public struct PlaybackSettingsView: View {
     @Bindable var libraryStore: LibraryStore
     @Bindable var playerService: AudioPlayerService
 
+    // Initialize with configured properties
     public init(libraryStore: LibraryStore, playerService: AudioPlayerService) {
         self.libraryStore = libraryStore
         self.playerService = playerService
     }
 
+    // Main view layout structure
     public var body: some View {
         List {
             // MARK: - Crossfade Section
@@ -34,6 +29,7 @@ public struct PlaybackSettingsView: View {
                     }
                 }
                 .tint(Color.blue)
+                // React to state changes
                 .onChange(of: libraryStore.settings.isCrossfadeEnabled) { _, _ in
                     HapticFeedback.selectionChanged()
                     libraryStore.saveSettings()
@@ -68,6 +64,7 @@ public struct PlaybackSettingsView: View {
                                 .foregroundStyle(.secondary)
                         }
                         .tint(Color.blue)
+                        // React to state changes
                         .onChange(of: libraryStore.settings.crossfadeDuration) { _, _ in
                             libraryStore.saveSettings()
                         }
@@ -98,6 +95,7 @@ public struct PlaybackSettingsView: View {
                     }
                 }
                 .tint(Color.blue)
+                // React to state changes
                 .onChange(of: libraryStore.settings.playTrackInCurrentQueue) { _, newValue in
                     HapticFeedback.selectionChanged()
                     if newValue {
@@ -119,6 +117,7 @@ public struct PlaybackSettingsView: View {
                     }
                 }
                 .tint(Color.blue)
+                // React to state changes
                 .onChange(of: libraryStore.settings.tapToPlayNext) { _, newValue in
                     HapticFeedback.selectionChanged()
                     if newValue {
@@ -149,6 +148,7 @@ public struct PlaybackSettingsView: View {
                     }
                 }
                 .tint(Color.blue)
+                // React to state changes
                 .onChange(of: libraryStore.settings.autoPlayNext) { _, _ in
                     HapticFeedback.selectionChanged()
                     libraryStore.saveSettings()
@@ -165,6 +165,7 @@ public struct PlaybackSettingsView: View {
                     }
                 }
                 .tint(Color.blue)
+                // React to state changes
                 .onChange(of: libraryStore.settings.rememberPlaybackPosition) { _, _ in
                     HapticFeedback.selectionChanged()
                     libraryStore.saveSettings()
@@ -181,6 +182,7 @@ public struct PlaybackSettingsView: View {
                     }
                 }
                 .tint(Color.blue)
+                // React to state changes
                 .onChange(of: libraryStore.settings.showAudioSpecsInPlayer) { _, _ in
                     HapticFeedback.selectionChanged()
                     libraryStore.saveSettings()
@@ -197,6 +199,7 @@ public struct PlaybackSettingsView: View {
                     }
                 }
                 .tint(Color.blue)
+                // React to state changes
                 .onChange(of: libraryStore.settings.smoothSkippingEnabled) { _, newValue in
                     HapticFeedback.selectionChanged()
                     libraryStore.saveSettings()
@@ -210,9 +213,11 @@ public struct PlaybackSettingsView: View {
                     .foregroundStyle(.secondary)
             }
         }
+        // Smooth UI transition animation
         .animation(.smooth(duration: 0.25), value: libraryStore.settings.isCrossfadeEnabled)
         .navigationTitle("PLAYBACK")
         .navigationBarTitleDisplayMode(.inline)
+        // Triggered when view appears
         .onAppear {
             playerService.playTrackInCurrentQueue = libraryStore.settings.playTrackInCurrentQueue
             playerService.tapToPlayNext = libraryStore.settings.tapToPlayNext

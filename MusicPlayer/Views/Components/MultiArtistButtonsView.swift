@@ -5,19 +5,27 @@ public struct ArtistFlowLayout: Layout {
     public var horizontalSpacing: CGFloat
     public var verticalSpacing: CGFloat
 
+    // Initialize with configured properties
     public init(horizontalSpacing: CGFloat = 0, verticalSpacing: CGFloat = 4) {
         self.horizontalSpacing = horizontalSpacing
         self.verticalSpacing = verticalSpacing
     }
 
+    // Size that fits
     public func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        // Width
         let width = proposal.width ?? .infinity
+        // Current x
         var currentX: CGFloat = 0
+        // Current y
         var currentY: CGFloat = 0
+        // Line height
         var lineHeight: CGFloat = 0
+        // Max x
         var maxX: CGFloat = 0
 
         for subview in subviews {
+            // Size
             let size = subview.sizeThatFits(.unspecified)
             if currentX + size.width > width && currentX > 0 {
                 currentX = 0
@@ -32,12 +40,17 @@ public struct ArtistFlowLayout: Layout {
         return CGSize(width: min(width, maxX), height: currentY + lineHeight)
     }
 
+    // Place subviews
     public func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        // Current x
         var currentX = bounds.minX
+        // Current y
         var currentY = bounds.minY
+        // Line height
         var lineHeight: CGFloat = 0
 
         for subview in subviews {
+            // Size
             let size = subview.sizeThatFits(.unspecified)
             if currentX + size.width > bounds.maxX && currentX > bounds.minX {
                 currentX = bounds.minX
@@ -53,14 +66,22 @@ public struct ArtistFlowLayout: Layout {
 
 /// Reusable view that parses and renders multi-artist strings as discrete, individually selectable plain text buttons, wrapping across lines to fit all artists.
 public struct MultiArtistButtonsView: View {
+    // Raw artist
     public let rawArtist: String
+    // Joined artists
     public let joinedArtists: [String]
+    // Font
     public let font: Font
+    // Foreground color
     public let foregroundColor: Color
+    // Separator color
     public let separatorColor: Color
+    // Line limit
     public let lineLimit: Int?
+    // On select artist
     public let onSelectArtist: (String) -> Void
 
+    // Initialize with configured properties
     public init(
         rawArtist: String,
         joinedArtists: [String] = [],
@@ -80,13 +101,18 @@ public struct MultiArtistButtonsView: View {
     }
 
     private var matchedJoinedName: String? {
+        // Clean
         let clean = rawArtist.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        // Ensure preconditions are met before proceeding
         guard !clean.isEmpty else { return nil }
         for joined in joinedArtists {
+            // Joined clean
             let joinedClean = joined.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
             if clean == joinedClean { return joined }
+            // Joined parts
             let joinedParts = ArtistParser.parseArtists(from: joined).map { $0.lowercased() }
             if joinedParts.count > 1 {
+                // Raw parts
                 let rawParts = ArtistParser.parseArtists(from: rawArtist).map { $0.lowercased() }
                 if Set(joinedParts).isSubset(of: Set(rawParts)) {
                     return joined
@@ -103,6 +129,7 @@ public struct MultiArtistButtonsView: View {
         return ArtistParser.parse(rawArtist: rawArtist)
     }
 
+    // Main view layout structure
     public var body: some View {
         if lineLimit == 1 {
             HStack(spacing: 0) {

@@ -1,22 +1,19 @@
-//
-//  MacSidebarView.swift
-//  MusicPlayer
-//
-//  Created by Principal Apple Software Engineer on 8/26/26.
-//
-
 import SwiftUI
 
 /// Categorized native macOS sidebar adhering to Apple HIG, minimalist aesthetics, and strict typographic restraint.
 public struct MacSidebarView: View {
+    // Library store
     public let libraryStore: LibraryStore
+    // Player service
     public let playerService: AudioPlayerService
     @Binding var selectedItem: MacNavigationItem?
     public let onOpenSettings: () -> Void
+    // On create playlist
     public let onCreatePlaylist: () -> Void
 
     @Environment(\.appTheme) private var appTheme
 
+    // Initialize with configured properties
     public init(
         libraryStore: LibraryStore,
         playerService: AudioPlayerService,
@@ -31,6 +28,7 @@ public struct MacSidebarView: View {
         self.onCreatePlaylist = onCreatePlaylist
     }
 
+    // Main view layout structure
     public var body: some View {
         VStack(spacing: 0) {
             // App Branding Header
@@ -152,6 +150,7 @@ public struct MacSidebarView: View {
         .frame(height: 44)
     }
 
+    // Section header
     private func sectionHeader(_ title: String) -> some View {
         Text(title)
             .font(.system(size: 9, weight: .bold, design: .monospaced))
@@ -162,12 +161,14 @@ public struct MacSidebarView: View {
             .padding(.bottom, 2)
     }
 
+    // Sidebar row
     private func sidebarRow(
         item: MacNavigationItem,
         title: String,
         count: Int? = nil,
         highlightBadge: Bool = false
     ) -> some View {
+        // Flag indicating if selected
         let isSelected = selectedItem == item
 
         return Button(action: {
@@ -210,9 +211,13 @@ public struct MacSidebarView: View {
         .buttonStyle(.plain)
     }
 
+    // Playlist row
     private func playlistRow(playlist: Playlist) -> some View {
+        // Nav item
         let navItem = MacNavigationItem.playlist(playlist.id)
+        // Flag indicating if selected
         let isSelected = selectedItem == navItem
+        // Flag indicating if pinned
         let isPinned = libraryStore.isPlaylistPinned(playlist)
 
         return Button(action: {
@@ -251,12 +256,14 @@ public struct MacSidebarView: View {
         .buttonStyle(.plain)
         .contextMenu {
             Button("PLAY") {
+                // Tracks
                 let tracks = libraryStore.tracks(for: playlist)
                 if let first = tracks.first {
                     playerService.play(track: first, inQueue: tracks)
                 }
             }
             Button("PLAY NEXT") {
+                // Tracks
                 let tracks = libraryStore.tracks(for: playlist)
                 playerService.playNext(tracks: tracks)
             }

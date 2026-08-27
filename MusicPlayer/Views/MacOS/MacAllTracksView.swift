@@ -1,10 +1,3 @@
-//
-//  MacAllTracksView.swift
-//  MusicPlayer
-//
-//  Created by Principal Apple Software Engineer on 8/26/26.
-//
-
 import SwiftUI
 
 /// Desktop multi-column table view for library tracks with column sorting, hover states, and context actions.
@@ -12,14 +5,20 @@ import SwiftUI
 public struct MacAllTracksView: View {
     @Bindable var libraryStore: LibraryStore
     public let playerService: AudioPlayerService
+    // On select artist
     public let onSelectArtist: (Artist) -> Void
+    // On select album
     public let onSelectAlbum: (Album) -> Void
+    // On show track info
     public let onShowTrackInfo: (Track) -> Void
+    // On add to playlist
     public let onAddToPlaylist: (Track) -> Void
+    // On match online
     public let onMatchOnline: (Track) -> Void
 
     @Environment(\.appTheme) private var appTheme
 
+    // Initialize with configured properties
     public init(
         libraryStore: LibraryStore,
         playerService: AudioPlayerService,
@@ -38,6 +37,7 @@ public struct MacAllTracksView: View {
         self.onMatchOnline = onMatchOnline
     }
 
+    // Main view layout structure
     public var body: some View {
         VStack(spacing: 0) {
             // Top Toolbar: Search & Quick Shuffle
@@ -74,11 +74,13 @@ public struct MacAllTracksView: View {
                                     playerService.enqueue(track: track)
                                 },
                                 onSelectArtist: {
+                                    // Primary performing artist
                                     if let artist = libraryStore.findArtist(name: track.artist) {
                                         onSelectArtist(artist)
                                     }
                                 },
                                 onSelectAlbum: {
+                                    // Album or release title
                                     if let album = libraryStore.findAlbum(title: track.album, artist: track.artist) {
                                         onSelectAlbum(album)
                                     }
@@ -116,6 +118,7 @@ public struct MacAllTracksView: View {
 
             // Shuffle All Button
             Button(action: {
+                // All
                 var all = libraryStore.filteredTracks
                 all.shuffle()
                 if let first = all.first {
@@ -205,7 +208,9 @@ public struct MacAllTracksView: View {
         .background(appTheme.secondaryBackgroundColor.opacity(0.35))
     }
 
+    // Sortable column header
     private func sortableColumnHeader(title: String, option: TrackSortOption) -> some View {
+        // Flag indicating if selected
         let isSelected = libraryStore.trackSortOption == option
 
         return Button(action: {
@@ -268,22 +273,35 @@ public struct MacAllTracksView: View {
 
 /// Dedicated lightweight table row view with isolated local hover state.
 private struct MacTrackTableRowView: View {
+    // Track
     let track: Track
+    // Flag indicating if current
     let isCurrent: Bool
+    // Flag indicating if playing
     let isPlaying: Bool
+    // Play count
     let playCount: Int
+    // On play
     let onPlay: () -> Void
+    // On play next
     let onPlayNext: () -> Void
+    // On enqueue
     let onEnqueue: () -> Void
+    // On select artist
     let onSelectArtist: () -> Void
+    // On select album
     let onSelectAlbum: () -> Void
+    // On show track info
     let onShowTrackInfo: () -> Void
+    // On add to playlist
     let onAddToPlaylist: () -> Void
+    // On match online
     let onMatchOnline: () -> Void
 
     @Environment(\.appTheme) private var appTheme
     @State private var isHovered: Bool = false
 
+    // Body
     var body: some View {
         HStack(spacing: 8) {
             // Index or Playing Status
@@ -292,6 +310,7 @@ private struct MacTrackTableRowView: View {
                     Text(isPlaying ? "▶" : "❚❚")
                         .font(.system(size: 9, weight: .bold))
                         .foregroundStyle(appTheme.accentColor)
+                // Position of the track on its disc
                 } else if let trackNumber = track.trackNumber, trackNumber > 0 {
                     Text("\(trackNumber)")
                         .font(.system(size: 10, design: .monospaced))
@@ -313,7 +332,6 @@ private struct MacTrackTableRowView: View {
             )
             .frame(width: 28, height: 28)
 
-            // Title
             VStack(alignment: .leading, spacing: 1) {
                 Text(track.title)
                     .font(.system(size: 12, weight: isCurrent ? .bold : .medium))
@@ -322,7 +340,6 @@ private struct MacTrackTableRowView: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
-            // Artist
             Button(action: onSelectArtist) {
                 Text(track.artist)
                     .font(.system(size: 11))
@@ -332,7 +349,6 @@ private struct MacTrackTableRowView: View {
             .buttonStyle(.plain)
             .frame(width: 160, alignment: .leading)
 
-            // Album
             Button(action: onSelectAlbum) {
                 Text(track.album)
                     .font(.system(size: 11))

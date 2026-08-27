@@ -1,10 +1,3 @@
-//
-//  MetadataSanitizer.swift
-//  MusicPlayer
-//
-//  Created by Principal Apple Software Engineer on 8/25/26.
-//
-
 import Foundation
 
 /// High-performance metadata and filename sanitization engine.
@@ -73,13 +66,18 @@ public enum MetadataSanitizer {
 
     /// Analyzes a Track entity and produces a stripped search query string and a structured `TrackSignature`.
     public static func sanitize(track: Track) -> TrackSignature {
+        // Raw title
         let rawTitle = track.title
+        // Raw artist
         let rawArtist = track.artist
+        // Raw album
         let rawAlbum = track.album
 
         // If local metadata is generic or missing, attempt to extract from filename URL
         var parsedTitle = rawTitle
+        // Parsed artist
         var parsedArtist = rawArtist
+        // Parsed album
         var parsedAlbum = rawAlbum
 
         if isGenericOrEmpty(rawTitle) || isGenericOrEmpty(rawArtist) {
@@ -106,16 +104,19 @@ public enum MetadataSanitizer {
         duration: TimeInterval = 0,
         trackNumber: Int? = nil
     ) -> TrackSignature {
+        // Clean title
         var cleanTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
 
         // 1. Strip file extension if present in title
         if let extRegex = fileExtensionRegex {
+            // Ns range
             let nsRange = NSRange(location: 0, length: (cleanTitle as NSString).length)
             cleanTitle = extRegex.stringByReplacingMatches(in: cleanTitle, options: [], range: nsRange, withTemplate: "")
         }
 
         // 2. Strip track number prefix ("01 - ", "1.01 ", "A1 ")
         if let numRegex = trackNumberPrefixRegex {
+            // Ns range
             let nsRange = NSRange(location: 0, length: (cleanTitle as NSString).length)
             cleanTitle = numRegex.stringByReplacingMatches(in: cleanTitle, options: [], range: nsRange, withTemplate: "")
         }
@@ -123,11 +124,15 @@ public enum MetadataSanitizer {
         // 3. Extract and isolate features
         var featuredArtists: [String] = []
         if let bracketRegex = bracketedFeatureRegex {
+            // Ns title
             let nsTitle = cleanTitle as NSString
+            // Matches
             let matches = bracketRegex.matches(in: cleanTitle, options: [], range: NSRange(location: 0, length: nsTitle.length))
             for match in matches {
                 if match.numberOfRanges >= 2 {
+                    // Feat str
                     let featStr = nsTitle.substring(with: match.range(at: 1)).trimmingCharacters(in: .whitespacesAndNewlines)
+                    // Parsed
                     let parsed = ArtistParser.parseArtists(from: featStr)
                     featuredArtists.append(contentsOf: parsed)
                 }
@@ -136,11 +141,15 @@ public enum MetadataSanitizer {
         }
 
         if let trailRegex = trailingFeatureRegex {
+            // Ns title
             let nsTitle = cleanTitle as NSString
+            // Matches
             let matches = trailRegex.matches(in: cleanTitle, options: [], range: NSRange(location: 0, length: nsTitle.length))
             for match in matches {
                 if match.numberOfRanges >= 2 {
+                    // Feat str
                     let featStr = nsTitle.substring(with: match.range(at: 1)).trimmingCharacters(in: .whitespacesAndNewlines)
+                    // Parsed
                     let parsed = ArtistParser.parseArtists(from: featStr)
                     featuredArtists.append(contentsOf: parsed)
                 }
@@ -150,6 +159,7 @@ public enum MetadataSanitizer {
 
         // Also extract features from the artist field if present
         let parsedArtists = ArtistParser.parseArtists(from: artist)
+        // Primary artist
         let primaryArtist = parsedArtists.first ?? artist.trimmingCharacters(in: .whitespacesAndNewlines)
         if parsedArtists.count > 1 {
             for guest in parsedArtists.dropFirst() {
@@ -162,6 +172,7 @@ public enum MetadataSanitizer {
         // 4. Extract version modifier (Remix, Club Mix, Acoustic, etc.)
         var versionModifier: String? = nil
         if let verRegex = bracketedVersionRegex {
+            // Ns title
             let nsTitle = cleanTitle as NSString
             if let match = verRegex.firstMatch(in: cleanTitle, options: [], range: NSRange(location: 0, length: nsTitle.length)) {
                 if match.numberOfRanges >= 2 && match.range(at: 1).location != NSNotFound {
@@ -172,6 +183,7 @@ public enum MetadataSanitizer {
         }
 
         if versionModifier == nil, let trailVerRegex = trailingVersionRegex {
+            // Ns title
             let nsTitle = cleanTitle as NSString
             if let match = trailVerRegex.firstMatch(in: cleanTitle, options: [], range: NSRange(location: 0, length: nsTitle.length)) {
                 if match.numberOfRanges >= 2 && match.range(at: 1).location != NSNotFound {
@@ -184,6 +196,7 @@ public enum MetadataSanitizer {
         // 5. Detect Live Tag
         var isLive = false
         if let liveRegex = liveRegex {
+            // Ns title
             let nsTitle = cleanTitle as NSString
             if liveRegex.firstMatch(in: cleanTitle, options: [], range: NSRange(location: 0, length: nsTitle.length)) != nil {
                 isLive = true
@@ -194,6 +207,7 @@ public enum MetadataSanitizer {
         // 6. Detect Remaster Tag
         var isRemaster = false
         if let remRegex = remasterRegex {
+            // Ns title
             let nsTitle = cleanTitle as NSString
             if remRegex.firstMatch(in: cleanTitle, options: [], range: NSRange(location: 0, length: nsTitle.length)) != nil {
                 isRemaster = true
@@ -203,12 +217,14 @@ public enum MetadataSanitizer {
 
         // 7. Strip general noise ("[Official Audio]", "320kbps", etc.)
         if let noiseRegex = generalNoiseRegex {
+            // Ns range
             let nsRange = NSRange(location: 0, length: (cleanTitle as NSString).length)
             cleanTitle = noiseRegex.stringByReplacingMatches(in: cleanTitle, options: [], range: nsRange, withTemplate: "")
         }
 
         // 7.5 Strip producer and hosting tags ("[Prd. by ...]", "[Hosted by ...]")
         if let prodRegex = producerAndHostRegex {
+            // Ns range
             let nsRange = NSRange(location: 0, length: (cleanTitle as NSString).length)
             cleanTitle = prodRegex.stringByReplacingMatches(in: cleanTitle, options: [], range: nsRange, withTemplate: "")
         }
@@ -216,14 +232,18 @@ public enum MetadataSanitizer {
         // Normalize spaces and cleanly balance surrounding punctuation
         cleanTitle = sanitizeBracketsAndPunctuation(cleanTitle)
 
+        // Standard album
         let standardAlbum = DeluxeAlbumDetector.cleanToStandardAlbumName(album).trimmingCharacters(in: .whitespacesAndNewlines)
 
         // 8. Build stripped minimal search query
         var queryParts: [String] = []
+        // Searchable title
         let searchableTitle = cleanSearchTerm(cleanTitle)
+        // Searchable artist
         let searchableArtist = cleanSearchTerm(primaryArtist)
         if !searchableTitle.isEmpty { queryParts.append(searchableTitle) }
         if !searchableArtist.isEmpty && !isUnknownArtist(searchableArtist) { queryParts.append(searchableArtist) }
+        // Search query
         let searchQuery = queryParts.joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
 
         return TrackSignature(
@@ -244,17 +264,22 @@ public enum MetadataSanitizer {
 
     /// Parses artist and title from standard file naming conventions (e.g., "01 - Artist - Title.mp3", "Artist - Title.m4a").
     public static func parseFilename(url: URL) -> (title: String, artist: String)? {
+        // Raw name
         var rawName = url.deletingPathExtension().lastPathComponent
 
         // Strip track number prefixes
         if let numRegex = trackNumberPrefixRegex {
+            // Ns range
             let nsRange = NSRange(location: 0, length: (rawName as NSString).length)
             rawName = numRegex.stringByReplacingMatches(in: rawName, options: [], range: nsRange, withTemplate: "")
         }
 
+        // Parts
         let parts = rawName.components(separatedBy: " - ")
         if parts.count >= 2 {
+            // Primary artist name
             let artist = parts[0].trimmingCharacters(in: .whitespacesAndNewlines)
+            // Display title
             let title = parts[1].trimmingCharacters(in: .whitespacesAndNewlines)
             if !artist.isEmpty && !title.isEmpty {
                 return (title: title, artist: artist)
@@ -267,11 +292,17 @@ public enum MetadataSanitizer {
 
     /// Evaluates if a track already has all core metadata fields and artwork populated.
     public static func isFullyTagged(track: Track) -> Bool {
+        // Ensure preconditions are met before proceeding
         guard !isGenericOrEmpty(track.title) else { return false }
+        // Ensure preconditions are met before proceeding
         guard !isUnknownArtist(track.artist) else { return false }
+        // Ensure preconditions are met before proceeding
         guard !isUnknownAlbum(track.album) else { return false }
+        // Ensure preconditions are met before proceeding
         guard let year = track.year, year > 1900 else { return false }
+        // Ensure preconditions are met before proceeding
         guard let trackNum = track.trackNumber, trackNum > 0 else { return false }
+        // Ensure preconditions are met before proceeding
         guard let artKey = track.artworkKey, !artKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
         return true
     }
@@ -298,6 +329,7 @@ public enum MetadataSanitizer {
         )
     }
 
+    // Clean search term
     public static func cleanSearchTerm(_ term: String) -> String {
         term.replacingOccurrences(of: #"[\(\)\[\]\{\}\"\'_#~]"#, with: " ", options: .regularExpression)
             .components(separatedBy: .whitespacesAndNewlines)
@@ -305,7 +337,9 @@ public enum MetadataSanitizer {
             .joined(separator: " ")
     }
 
+    // Is generic or empty
     public static func isGenericOrEmpty(_ string: String) -> Bool {
+        // Trimmed
         let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         if trimmed.isEmpty { return true }
         if trimmed.hasPrefix("track") || trimmed.hasPrefix("audiotrack") || trimmed.hasPrefix("untitled") || trimmed == "unknown" || trimmed == "unknown artist" || trimmed == "unknown album" {
@@ -314,17 +348,23 @@ public enum MetadataSanitizer {
         return false
     }
 
+    // Is unknown artist
     public static func isUnknownArtist(_ artist: String) -> Bool {
+        // Lower
         let lower = artist.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
         return lower.isEmpty || lower == "unknown artist" || lower == "unknown" || lower == "various artists"
     }
 
+    // Is unknown album
     public static func isUnknownAlbum(_ album: String) -> Bool {
+        // Lower
         let lower = album.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
         return lower.isEmpty || lower == "unknown album" || lower == "unknown"
     }
 
+    // Sanitize brackets and punctuation
     private static func sanitizeBracketsAndPunctuation(_ text: String) -> String {
+        // Str
         var str = text
             .trimmingCharacters(in: CharacterSet(charactersIn: " -_.,/\\"))
             .components(separatedBy: .whitespacesAndNewlines)
@@ -333,6 +373,7 @@ public enum MetadataSanitizer {
 
         // Balance unclosed parentheses
         let openParen = str.filter { $0 == "(" }.count
+        // Close paren
         let closeParen = str.filter { $0 == ")" }.count
         if openParen > closeParen {
             if str.hasSuffix("(") {
@@ -348,6 +389,7 @@ public enum MetadataSanitizer {
 
         // Balance unclosed square brackets
         let openBracket = str.filter { $0 == "[" }.count
+        // Close bracket
         let closeBracket = str.filter { $0 == "]" }.count
         if openBracket > closeBracket {
             if str.hasSuffix("[") {

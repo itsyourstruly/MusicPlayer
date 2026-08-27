@@ -1,10 +1,3 @@
-//
-//  PlayerControlsView.swift
-//  MusicPlayer
-//
-//  Created by Principal Apple Software Engineer on 8/24/26.
-//
-
 import SwiftUI
 
 /// Pure minimal typographic playback control deck without backgrounds.
@@ -14,6 +7,7 @@ public struct PlayerControlsView: View {
     public var foregroundColor: Color
     public var secondaryForegroundColor: Color
 
+    // Initialize with configured properties
     public init(
         playerService: AudioPlayerService,
         foregroundColor: Color = Color.primary,
@@ -24,6 +18,7 @@ public struct PlayerControlsView: View {
         self.secondaryForegroundColor = secondaryForegroundColor
     }
 
+    // Main view layout structure
     public var body: some View {
         VStack(spacing: 22) {
             // Main Transport Controls (PREV, PLAY/PAUSE, NEXT) - Pure Prominent Text with Zero Drift

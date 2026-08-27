@@ -1,20 +1,17 @@
-//
-//  MacPlaybackBarView.swift
-//  MusicPlayer
-//
-//  Created by Principal Apple Software Engineer on 8/26/26.
-//
-
 import SwiftUI
 import AVKit
 
 /// Sleek, minimalist desktop playback console adhering to Apple HIG and strict typographic restraint.
 public struct MacPlaybackBarView: View {
+    // Player service
     public let playerService: AudioPlayerService
+    // Library store
     public let libraryStore: LibraryStore
     @Binding var isQueuePresented: Bool
     public let onOpenTrackInfo: () -> Void
+    // On select artist
     public let onSelectArtist: (String) -> Void
+    // On select album
     public let onSelectAlbum: (String, String) -> Void
 
     @Environment(\.appTheme) private var appTheme
@@ -22,6 +19,7 @@ public struct MacPlaybackBarView: View {
     @State private var isDraggingScrubber: Bool = false
     @State private var dragScrubPosition: Double = 0.0
 
+    // Initialize with configured properties
     public init(
         playerService: AudioPlayerService,
         libraryStore: LibraryStore,
@@ -38,6 +36,7 @@ public struct MacPlaybackBarView: View {
         self.onSelectAlbum = onSelectAlbum
     }
 
+    // Main view layout structure
     public var body: some View {
         HStack(spacing: 16) {
             // Left: Current Track Info
@@ -256,7 +255,9 @@ public struct MacPlaybackBarView: View {
 
                 // Interactive Progress Slider Bar
                 GeometryReader { geometry in
+                    // Total duration
                     let totalDuration = max(playerService.duration, 0.01)
+                    // Current progress
                     let currentProgress = min(max(currentTime / totalDuration, 0.0), 1.0)
 
                     ZStack(alignment: .leading) {
@@ -280,17 +281,23 @@ public struct MacPlaybackBarView: View {
                             isHoveringScrubber = hovering
                         }
                     }
+                    // Interactive drag and touch gesture handling
                     .gesture(
                         DragGesture(minimumDistance: 0)
                             .onChanged { value in
                                 isDraggingScrubber = true
+                                // Clamped x
                                 let clampedX = min(max(0, value.location.x), geometry.size.width)
+                                // Progress
                                 let progress = Double(clampedX / max(geometry.size.width, 1))
                                 dragScrubPosition = progress * totalDuration
                             }
                             .onEnded { value in
+                                // Clamped x
                                 let clampedX = min(max(0, value.location.x), geometry.size.width)
+                                // Progress
                                 let progress = Double(clampedX / max(geometry.size.width, 1))
+                                // Target time
                                 let targetTime = progress * totalDuration
                                 playerService.seek(to: targetTime)
                                 isDraggingScrubber = false
@@ -398,13 +405,16 @@ public struct MacPlaybackBarView: View {
 #if os(macOS)
 /// Native AppKit AVRoutePickerView wrapper for macOS.
 struct MacAirPlayRoutePicker: NSViewRepresentable {
+    // Make ns view
     func makeNSView(context: Context) -> AVRoutePickerView {
+        // Picker
         let picker = AVRoutePickerView()
         picker.setRoutePickerButtonColor(.secondaryLabelColor, for: .normal)
         picker.isRoutePickerButtonBordered = false
         return picker
     }
 
+    // Update ns view
     func updateNSView(_ nsView: AVRoutePickerView, context: Context) {}
 }
 #endif

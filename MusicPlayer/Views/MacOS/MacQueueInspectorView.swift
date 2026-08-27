@@ -1,21 +1,18 @@
-//
-//  MacQueueInspectorView.swift
-//  MusicPlayer
-//
-//  Created by Principal Apple Software Engineer on 8/26/26.
-//
-
 import SwiftUI
 
 /// Slide-out trailing queue inspector panel adhering to Apple HIG, strict typographic restraint,
 /// and smooth lazy loading for extensive playback queues.
 public struct MacQueueInspectorView: View {
+    // Player service
     public let playerService: AudioPlayerService
+    // Library store
     public let libraryStore: LibraryStore
+    // On close
     public let onClose: () -> Void
 
     @Environment(\.appTheme) private var appTheme
 
+    // Initialize with configured properties
     public init(
         playerService: AudioPlayerService,
         libraryStore: LibraryStore,
@@ -26,6 +23,7 @@ public struct MacQueueInspectorView: View {
         self.onClose = onClose
     }
 
+    // Main view layout structure
     public var body: some View {
         VStack(spacing: 0) {
             // Header Bar
@@ -93,6 +91,7 @@ public struct MacQueueInspectorView: View {
         .frame(height: 44)
     }
 
+    // Now playing section
     private func nowPlayingSection(track: Track) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("NOW PLAYING")
@@ -149,6 +148,7 @@ public struct MacQueueInspectorView: View {
 
                 Spacer()
 
+                // Total queue duration
                 let totalQueueDuration = playerService.queue.reduce(0.0) { $0 + $1.duration }
                 Text("\(playerService.queue.count) • \(TimeFormatting.formatTime(totalQueueDuration))")
                     .font(.system(size: 8.5, design: .monospaced))
@@ -179,15 +179,21 @@ public struct MacQueueInspectorView: View {
 
 // MARK: - Isolated Queue Row View
 
+// MacQueueRowView representation
 private struct MacQueueRowView: View {
+    // Index
     let index: Int
+    // Track
     let track: Track
+    // On play
     let onPlay: () -> Void
+    // On remove
     let onRemove: () -> Void
 
     @Environment(\.appTheme) private var appTheme
     @State private var isHovered: Bool = false
 
+    // Body
     var body: some View {
         HStack(spacing: 6) {
             Text("\(index)")

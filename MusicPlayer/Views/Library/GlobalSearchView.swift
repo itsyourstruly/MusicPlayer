@@ -8,12 +8,18 @@ public struct GlobalSearchView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.appTheme) private var appTheme
 
+    // SearchResults representation
     public struct SearchResults {
+        // All tracks loaded in the user library
         public var tracks: [Track] = []
+        // Grouped album entities
         public var albums: [Album] = []
+        // Grouped artist entities
         public var artists: [Artist] = []
+        // User-created and smart playlists
         public var playlists: [Playlist] = []
 
+        // Controls has results
         public var hasResults: Bool {
             !tracks.isEmpty || !albums.isEmpty || !artists.isEmpty || !playlists.isEmpty
         }
@@ -38,11 +44,13 @@ public struct GlobalSearchView: View {
     @State private var onlineResults: OnlineSearchResults = OnlineSearchResults()
     @State private var isOnlineSearching: Bool = false
 
+    // Online columns
     private let onlineColumns = [
         GridItem(.flexible(), spacing: 14),
         GridItem(.flexible(), spacing: 14)
     ]
 
+    // Initialize with configured properties
     public init(
         libraryStore: LibraryStore,
         playerService: AudioPlayerService,
@@ -60,6 +68,7 @@ public struct GlobalSearchView: View {
         searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    // Main view layout structure
     public var body: some View {
         ScrollView(.vertical, showsIndicators: false) {
             if isOnlineMode {
@@ -104,6 +113,7 @@ public struct GlobalSearchView: View {
         .navigationDestination(item: $selectedAlbumForNavigation) { album in
             AlbumDetailView(album: album, libraryStore: libraryStore, playerService: playerService)
         }
+        // Triggered when view appears
         .onAppear {
             isSearchPresented = true
             if isOnlineMode {
@@ -112,8 +122,10 @@ public struct GlobalSearchView: View {
                 performSearch(for: searchQuery)
             }
         }
+        // React to state changes
         .onChange(of: searchQuery) { _, newQuery in
             searchTask?.cancel()
+            // Clean
             let clean = newQuery.trimmingCharacters(in: .whitespacesAndNewlines)
             if clean.isEmpty {
                 self.results = .empty
@@ -129,6 +141,7 @@ public struct GlobalSearchView: View {
                 }
             }
         }
+        // Triggered when view disappears
         .onDisappear {
             searchTask?.cancel()
         }
@@ -255,10 +268,13 @@ public struct GlobalSearchView: View {
         .padding(.bottom, 140) // Space for player bar
     }
 
+    // Trigger online search
     private func triggerOnlineSearch(query: String, immediate: Bool = false) {
         searchTask?.cancel()
 
+        // Clean
         let clean = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Ensure preconditions are met before proceeding
         guard !clean.isEmpty else {
             self.onlineResults = OnlineSearchResults()
             self.isOnlineSearching = false
@@ -272,6 +288,7 @@ public struct GlobalSearchView: View {
             }
             if Task.isCancelled { return }
 
+            // Results
             let results = await OnlineDiscoveryService.shared.search(query: clean)
             if !Task.isCancelled {
                 self.onlineResults = results
@@ -280,14 +297,19 @@ public struct GlobalSearchView: View {
         }
     }
 
+    // Perform search
     private func performSearch(for query: String) {
+        // Clean query
         let cleanQuery = FuzzyMatcher.normalize(query)
+        // Ensure preconditions are met before proceeding
         guard !cleanQuery.isEmpty else {
             self.results = .empty
             return
         }
 
+        // Scored tracks
         let scoredTracks: [(Track, Int)] = libraryStore.tracks.compactMap { track in
+            // Score
             let score = FuzzyMatcher.scoreTrack(
                 normalizedTitle: track.normalizedTitle,
                 normalizedArtist: track.normalizedArtist,
@@ -297,22 +319,32 @@ public struct GlobalSearchView: View {
             )
             return score > 0 ? (track, score) : nil
         }
+        // Matched tracks
         let matchedTracks = scoredTracks.sorted { $0.1 > $1.1 }.map { $0.0 }
 
+        // Matched albums
         let matchedAlbums = libraryStore.searchAlbums(query: cleanQuery)
 
+        // Scored artists
         let scoredArtists: [(Artist, Int)] = libraryStore.artists.compactMap { artist in
+            // Score
             let score = FuzzyMatcher.scoreArtist(normalizedName: artist.normalizedName, cleanQuery: cleanQuery)
             return score > 0 ? (artist, score) : nil
         }
+        // Matched artists
         let matchedArtists = scoredArtists.sorted { $0.1 > $1.1 }.map { $0.0 }
 
+        // Scored playlists
         let scoredPlaylists: [(Playlist, Int)] = libraryStore.playlists.compactMap { playlist in
+            // Name score
             let nameScore = FuzzyMatcher.evaluateScore(cleanText: playlist.normalizedName, cleanQuery: cleanQuery)
+            // Token score
             let tokenScore = FuzzyMatcher.evaluateScore(cleanText: playlist.searchTokens, cleanQuery: cleanQuery)
+            // Max score
             let maxScore = max(nameScore * 2, tokenScore)
             return maxScore > 0 ? (playlist, maxScore) : nil
         }
+        // Matched playlists
         let matchedPlaylists = scoredPlaylists.sorted { $0.1 > $1.1 }.map { $0.0 }
 
         if !Task.isCancelled {

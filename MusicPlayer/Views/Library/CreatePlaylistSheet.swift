@@ -8,14 +8,17 @@ public struct CreatePlaylistSheet: View {
     @State private var playlistName: String = ""
     @State private var playlistDescription: String = ""
 
+    // Initialize with configured properties
     public init(libraryStore: LibraryStore) {
         self.libraryStore = libraryStore
     }
 
+    // Controls is valid
     private var isValid: Bool {
         !playlistName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
+    // Main view layout structure
     public var body: some View {
         NavigationStack {
             Form {
@@ -50,7 +53,9 @@ public struct CreatePlaylistSheet: View {
         .presentationDetents([.medium])
     }
 
+    // Create and dismiss
     private func createAndDismiss() {
+        // Ensure preconditions are met before proceeding
         guard isValid else { return }
         libraryStore.createPlaylist(name: playlistName, description: playlistDescription)
         dismiss()

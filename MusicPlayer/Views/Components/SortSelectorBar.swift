@@ -3,12 +3,15 @@ import SwiftUI
 /// Reusable sort selector row featuring generous touch hit targets, forward/reverse sorting toggle,
 /// and bold blue highlight state when reverse sorting is active.
 public struct SortSelectorBar<Option: Identifiable & Equatable>: View {
+    // Display title
     public let title: String
+    // Options
     public let options: [Option]
     @Binding public var selectedOption: Option
     @Binding public var isReversed: Bool
     public let labelForOption: (Option) -> String
 
+    // Initialize with configured properties
     public init(
         title: String = "SORT:",
         options: [Option],
@@ -23,6 +26,7 @@ public struct SortSelectorBar<Option: Identifiable & Equatable>: View {
         self.labelForOption = labelForOption
     }
 
+    // Main view layout structure
     public var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 2) {
@@ -32,6 +36,7 @@ public struct SortSelectorBar<Option: Identifiable & Equatable>: View {
                     .padding(.trailing, 4)
 
                 ForEach(options) { option in
+                    // Flag indicating if selected
                     let isSelected = selectedOption == option
                     Button(action: {
                         HapticFeedback.selectionChanged()

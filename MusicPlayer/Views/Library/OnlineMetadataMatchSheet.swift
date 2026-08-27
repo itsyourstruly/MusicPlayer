@@ -1,15 +1,9 @@
-//
-//  OnlineMetadataMatchSheet.swift
-//  MusicPlayer
-//
-//  Created by Principal Apple Software Engineer on 8/25/26.
-//
-
 import SwiftUI
 
 /// Interactive sheet for searching verified online metadata and high-res artwork,
 /// previewing differences, and applying updates directly to the track and file on disk.
 public struct OnlineMetadataMatchSheet: View {
+    // Track
     public let track: Track
     @Bindable var libraryStore: LibraryStore
     @Environment(\.dismiss) private var dismiss
@@ -23,11 +17,13 @@ public struct OnlineMetadataMatchSheet: View {
     @State private var isApplying: Bool = false
     @State private var searchQuery: String = ""
 
+    // Initialize with configured properties
     public init(track: Track, libraryStore: LibraryStore) {
         self.track = track
         self.libraryStore = libraryStore
     }
 
+    // Main view layout structure
     public var body: some View {
         NavigationStack {
             ScrollView(.vertical, showsIndicators: true) {
@@ -73,6 +69,7 @@ public struct OnlineMetadataMatchSheet: View {
                     .font(.system(size: 13, weight: .bold, design: .monospaced))
                 }
             }
+            // Async lifecycle task
             .task {
                 searchQuery = "\(track.title) \(track.artist)".trimmingCharacters(in: .whitespacesAndNewlines)
                 await performAutoSearch()
@@ -196,11 +193,13 @@ public struct OnlineMetadataMatchSheet: View {
                                 .lineLimit(1)
 
                             HStack(spacing: 6) {
+                                // Release year
                                 if let year = match.releaseYear {
                                     Text("\(year)")
                                         .font(.system(size: 10, design: .monospaced))
                                         .foregroundStyle(.secondary)
                                 }
+                                // Musical genre classification
                                 if let genre = match.genre {
                                     Text("• \(genre)")
                                         .font(.system(size: 10, design: .monospaced))
@@ -229,6 +228,7 @@ public struct OnlineMetadataMatchSheet: View {
 
     // MARK: - Selected Match Diff View
 
+    // Selected match diff view
     private func selectedMatchDiffView(match: OnlineTrackMetadata) -> some View {
         VStack(spacing: 16) {
             // High-Res Artwork & Identity Header
@@ -384,7 +384,9 @@ public struct OnlineMetadataMatchSheet: View {
         }
     }
 
+    // Diff row
     private func diffRow(label: String, current: String, online: String) -> some View {
+        // Flag indicating if different
         let isDifferent = current.trimmingCharacters(in: .whitespacesAndNewlines) != online.trimmingCharacters(in: .whitespacesAndNewlines)
 
         return HStack(alignment: .top) {
@@ -413,25 +415,32 @@ public struct OnlineMetadataMatchSheet: View {
 
     // MARK: - Handlers
 
+    // Perform auto search
     private func performAutoSearch() async {
         isSearching = true
+        // Candidates
         let candidates = await MusicMetadataService.shared.searchOnline(for: track)
         self.searchResults = candidates
         self.isSearching = false
+        // Signature
         let signature = MetadataSanitizer.sanitize(track: track)
         if let best = DisambiguationMatcher.bestMatch(for: signature, in: candidates) ?? candidates.first {
             selectMatch(best)
         }
     }
 
+    // Perform custom search
     private func performCustomSearch() async {
+        // Query
         let query = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Ensure preconditions are met before proceeding
         guard !query.isEmpty else { return }
 
         isSearching = true
         selectedMatch = nil
         downloadedArtwork = nil
 
+        // Candidates
         let candidates = await MusicMetadataService.shared.searchOnline(query: query)
         self.searchResults = candidates
         self.isSearching = false
@@ -440,10 +449,13 @@ public struct OnlineMetadataMatchSheet: View {
         }
     }
 
+    // Select match
     private func selectMatch(_ match: OnlineTrackMetadata) {
         self.selectedMatch = match
         Task {
+            // File path location
             if let artURL = match.artworkURL {
+                // Data
                 let data = await MusicMetadataService.shared.downloadArtworkData(from: artURL)
                 await MainActor.run {
                     self.downloadedArtwork = data
@@ -452,6 +464,7 @@ public struct OnlineMetadataMatchSheet: View {
         }
     }
 
+    // Apply match
     private func applyMatch(_ match: OnlineTrackMetadata) {
         isApplying = true
         Task {

@@ -1,10 +1,3 @@
-//
-//  DuplicateResolverView.swift
-//  MusicPlayer
-//
-//  Created by Principal Apple Software Engineer on 8/25/26.
-//
-
 import SwiftUI
 
 /// Comprehensive duplicate manager and cleaner view allowing side-by-side comparison of audio tracks,
@@ -20,10 +13,12 @@ public struct DuplicateResolverView: View {
     @State private var deletionStatusBanner: String? = nil
     @State private var deletionErrorAlertMessage: String? = nil
 
+    // Initialize with configured properties
     public init(libraryStore: LibraryStore) {
         self.libraryStore = libraryStore
     }
 
+    // Main view layout structure
     public var body: some View {
         NavigationStack {
             Group {
@@ -96,7 +91,9 @@ public struct DuplicateResolverView: View {
                     deleteAllSecondaryDuplicates()
                 }
             } message: {
+                // Bytes
                 let bytes = libraryStore.totalDuplicateSavingsBytes
+                // Count
                 let count = libraryStore.totalDuplicateTracksCount
                 Text("This will permanently move \(count) redundant audio files (\(ByteFormatting.formatFileSize(bytes: bytes))) to Trash. Your selected primary versions will be safely retained in your library.")
             }
@@ -130,21 +127,27 @@ public struct DuplicateResolverView: View {
 
     // MARK: - Deletion Handlers
 
+    // Delete all secondary duplicates
     private func deleteAllSecondaryDuplicates() {
+        // Tracks to delete
         let tracksToDelete = libraryStore.duplicateGroups.flatMap { $0.duplicateCandidates.map { $0.track } }
+        // Ensure preconditions are met before proceeding
         guard !tracksToDelete.isEmpty else { return }
 
         isProcessingDeletion = true
         deletionStatusBanner = nil
 
         Task {
+            // Res
             let res = await libraryStore.deleteDuplicateTracks(tracksToDelete: tracksToDelete)
             await libraryStore.recalculateDuplicates()
 
             isProcessingDeletion = false
             HapticFeedback.notificationSuccess()
 
+            // Remaining groups
             let remainingGroups = libraryStore.duplicateGroups.count
+            // Remaining tracks
             let remainingTracks = libraryStore.totalDuplicateTracksCount
 
             if res.failedCount > 0 {
@@ -159,18 +162,21 @@ public struct DuplicateResolverView: View {
         }
     }
 
+    // Delete single track
     private func deleteSingleTrack(_ track: Track) {
         trackToDelete = nil
         isProcessingDeletion = true
         deletionStatusBanner = nil
 
         Task {
+            // Success
             let success = await libraryStore.deleteSingleTrackFile(track: track)
             await libraryStore.recalculateDuplicates()
 
             isProcessingDeletion = false
             HapticFeedback.notificationSuccess()
 
+            // Remaining groups
             let remainingGroups = libraryStore.duplicateGroups.count
             if success {
                 if remainingGroups == 0 {
@@ -189,11 +195,14 @@ public struct DuplicateResolverView: View {
 
 /// Interactive deletion status message banner.
 private struct DeletionFeedbackBanner: View {
+    // Message
     let message: String
+    // On dismiss
     let onDismiss: () -> Void
 
     @Environment(\.appTheme) private var appTheme
 
+    // Body
     var body: some View {
         HStack(alignment: .center, spacing: 10) {
             Text(message)
@@ -223,6 +232,7 @@ private struct DeletionFeedbackBanner: View {
 private struct DeletionProcessingBanner: View {
     @Environment(\.appTheme) private var appTheme
 
+    // Body
     var body: some View {
         HStack(spacing: 12) {
             ProgressView()
@@ -242,15 +252,22 @@ private struct DeletionProcessingBanner: View {
 
 /// Summary and global actions card at top of Duplicate Manager.
 private struct DuplicateSummaryHeaderView: View {
+    // Groups count
     let groupsCount: Int
+    // Redundant count
     let redundantCount: Int
+    // Savings bytes
     let savingsBytes: Int64
+    // Flag indicating if deleting
     let isDeleting: Bool
+    // On auto resolve
     let onAutoResolve: () -> Void
+    // On delete all
     let onDeleteAll: () -> Void
 
     @Environment(\.appTheme) private var appTheme
 
+    // Body
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .top) {
@@ -306,13 +323,18 @@ private struct DuplicateSummaryHeaderView: View {
 
 /// Duplicate cluster card containing horizontally scrollable side-by-side candidates with artwork and full metadata.
 private struct DuplicateClusterCardView: View {
+    // Group
     let group: DuplicateGroup
+    // Flag indicating if deleting
     let isDeleting: Bool
+    // On select primary
     let onSelectPrimary: (UUID) -> Void
+    // On delete track
     let onDeleteTrack: (Track) -> Void
 
     @Environment(\.appTheme) private var appTheme
 
+    // Body
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             // Group Header
@@ -377,14 +399,20 @@ private struct DuplicateClusterCardView: View {
 
 /// An individual candidate card displaying album cover at top, followed by full side-by-side metadata and actions.
 private struct CandidateComparisonCard: View {
+    // Candidate
     let candidate: DuplicateCandidate
+    // Flag indicating if primary
     let isPrimary: Bool
+    // Flag indicating if deleting
     let isDeleting: Bool
+    // On select
     let onSelect: () -> Void
+    // On delete
     let onDelete: () -> Void
 
     @Environment(\.appTheme) private var appTheme
 
+    // Body
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             // Album Artwork at top
@@ -515,6 +543,7 @@ private struct CandidateComparisonCard: View {
         )
     }
 
+    // Meta row
     private func metaRow(label: String, value: String) -> some View {
         HStack(alignment: .top) {
             Text(label)
@@ -533,8 +562,10 @@ private struct CandidateComparisonCard: View {
 
 /// Empty state when no duplicate files exist or after full deletion.
 private struct EmptyDuplicatesStateView: View {
+    // Status banner
     let statusBanner: String?
 
+    // Body
     var body: some View {
         VStack(spacing: 16) {
             if let banner = statusBanner {

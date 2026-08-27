@@ -1,39 +1,55 @@
-//
-//  Track.swift
-//  MusicPlayer
-//
-//  Created by Principal Apple Software Engineer on 8/24/26.
-//
-
 import Foundation
 
 /// Core immutable audio track entity containing complete metadata and playback specifications.
 public struct Track: Identifiable, Codable, Sendable, Hashable {
+    // Unique identifier
     public let id: UUID
+    // Display title
     public let title: String
+    // Primary artist name
     public let artist: String
+    // Album title
     public let album: String
+    // Album artist
     public let albumArtist: String?
+    // Musical genre
     public let genre: String?
+    // Release year
     public let year: Int?
+    // Track number
     public let trackNumber: Int?
+    // Total tracks
     public let totalTracks: Int?
+    // Disc number
     public let discNumber: Int?
+    // Duration in seconds
     public let duration: TimeInterval
+    // Local audio file URL
     public let url: URL
+    // Artwork key
     public let artworkKey: String?
+    // Date added
     public let dateAdded: Date
+    // File info
     public let fileInfo: AudioFileInfo?
+    // Track lyrics
     public let lyrics: String?
 
+    // Original track number
     public let originalTrackNumber: Int?
+    // Deluxe track number
     public let deluxeTrackNumber: Int?
 
+    // Normalized title
     public let normalizedTitle: String
+    // Normalized artist
     public let normalizedArtist: String
+    // Normalized album
     public let normalizedAlbum: String
+    // Search tokens
     public let searchTokens: String
 
+    // Initialize with configured properties
     public init(
         id: UUID = UUID(),
         title: String,
@@ -73,9 +89,13 @@ public struct Track: Identifiable, Codable, Sendable, Hashable {
         self.fileInfo = fileInfo
         self.lyrics = lyrics
 
+        // N title
         let nTitle = FuzzyMatcher.normalize(title)
+        // N artist
         let nArtist = FuzzyMatcher.normalize(artist)
+        // N album
         let nAlbum = FuzzyMatcher.normalize(album)
+        // N genre
         let nGenre = genre != nil ? FuzzyMatcher.normalize(genre!) : ""
 
         self.normalizedTitle = nTitle
@@ -84,7 +104,9 @@ public struct Track: Identifiable, Codable, Sendable, Hashable {
         self.searchTokens = "\(nTitle) \(nArtist) \(nAlbum) \(nGenre)"
     }
 
+    // Initialize with configured properties
     public init(from decoder: Decoder) throws {
+        // Container
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
         self.title = try container.decodeIfPresent(String.self, forKey: .title) ?? "Unknown Title"
@@ -99,14 +121,18 @@ public struct Track: Identifiable, Codable, Sendable, Hashable {
         self.totalTracks = try container.decodeIfPresent(Int.self, forKey: .totalTracks)
         self.discNumber = try container.decodeIfPresent(Int.self, forKey: .discNumber)
         self.duration = try container.decodeIfPresent(TimeInterval.self, forKey: .duration) ?? 0
+        // File path location
         if let decodedURL = try? container.decode(URL.self, forKey: .url) {
             self.url = decodedURL
         } else if let urlString = try? container.decode(String.self, forKey: .url) {
             if urlString.hasPrefix("file://") {
+                // Local file URL pointing to the audio asset
                 if let url = URL(string: urlString) {
                     self.url = url
                 } else {
+                    // File system location for raw path
                     let rawPath = urlString.replacingOccurrences(of: "file://", with: "")
+                    // Unescaped
                     let unescaped = rawPath.removingPercentEncoding ?? rawPath
                     self.url = URL(fileURLWithPath: unescaped)
                 }
@@ -121,9 +147,13 @@ public struct Track: Identifiable, Codable, Sendable, Hashable {
         self.fileInfo = try container.decodeIfPresent(AudioFileInfo.self, forKey: .fileInfo)
         self.lyrics = try container.decodeIfPresent(String.self, forKey: .lyrics)
 
+        // N title
         let nTitle = FuzzyMatcher.normalize(self.title)
+        // N artist
         let nArtist = FuzzyMatcher.normalize(self.artist)
+        // N album
         let nAlbum = FuzzyMatcher.normalize(self.album)
+        // N genre
         let nGenre = self.genre != nil ? FuzzyMatcher.normalize(self.genre!) : ""
 
         self.normalizedTitle = nTitle
@@ -132,11 +162,15 @@ public struct Track: Identifiable, Codable, Sendable, Hashable {
         self.searchTokens = "\(nTitle) \(nArtist) \(nAlbum) \(nGenre)"
     }
 
+    // Defines CodingKeys cases
     private enum CodingKeys: String, CodingKey {
+        // Id option
         case id, title, artist, album, albumArtist, genre, year, trackNumber, originalTrackNumber, deluxeTrackNumber, totalTracks, discNumber, duration, url, artworkKey, dateAdded, fileInfo, lyrics
     }
 
+    // Encode
     public func encode(to encoder: Encoder) throws {
+        // Container
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(id, forKey: .id)
         try container.encode(title, forKey: .title)
@@ -192,11 +226,14 @@ public struct Track: Identifiable, Codable, Sendable, Hashable {
     /// Formatted technical specification summary (e.g. "FLAC • 96 kHz" or "MP3 • 320 kbps").
     public var technicalSummary: String {
         if let info = fileInfo {
+            // Fmt
             let fmt = info.fileExtension.uppercased()
             if info.bitRate > 0 {
+                // Kbps
                 let kbps = Int(info.bitRate / 1000.0)
                 return "\(fmt) • \(kbps) kbps"
             } else if info.sampleRate > 0 {
+                // Rate
                 let rate = Int(info.sampleRate / 1000.0)
                 return "\(fmt) • \(rate) kHz"
             } else {

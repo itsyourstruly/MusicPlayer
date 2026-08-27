@@ -5,15 +5,18 @@ public struct AlbumsListView: View {
     @Bindable var libraryStore: LibraryStore
     @Bindable var playerService: AudioPlayerService
 
+    // Columns
     private let columns = [
         GridItem(.adaptive(minimum: 155), spacing: 14)
     ]
 
+    // Initialize with configured properties
     public init(libraryStore: LibraryStore, playerService: AudioPlayerService) {
         self.libraryStore = libraryStore
         self.playerService = playerService
     }
 
+    // Main view layout structure
     public var body: some View {
         VStack(spacing: 10) {
             // Sort Selector Bar (TITLE, MOST, ARTIST, DURATION) with enlarged hit target and reverse blue toggle
@@ -34,6 +37,7 @@ public struct AlbumsListView: View {
             } else {
                 LazyVGrid(columns: columns, spacing: 18) {
                     ForEach(libraryStore.filteredAlbums) { album in
+                        // Flag indicating if pinned
                         let isPinned = libraryStore.isAlbumPinned(album)
                         NavigationLink(destination: AlbumDetailView(album: album, libraryStore: libraryStore, playerService: playerService)) {
                             VStack(alignment: .leading, spacing: 6) {

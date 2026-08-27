@@ -1,10 +1,3 @@
-//
-//  DisambiguationMatcher.swift
-//  MusicPlayer
-//
-//  Created by Principal Apple Software Engineer on 8/25/26.
-//
-
 import Foundation
 
 /// High-precision heuristic and disambiguation engine for evaluating online Apple Music catalog tracks
@@ -24,6 +17,7 @@ public enum DisambiguationMatcher {
     ) -> Int? {
         // 1. Audio Duration Validation (Relaxed tolerance for bitrate estimations & padding)
         if signature.duration > 0, let onlineDuration = online.duration, onlineDuration > 0 {
+            // Duration delta
             let durationDelta = abs(signature.duration - onlineDuration)
             // Only reject if length differs drastically (> 90s) when album is unknown
             if durationDelta > 90.0 && MetadataSanitizer.isUnknownAlbum(signature.standardAlbum) {
@@ -42,12 +36,16 @@ public enum DisambiguationMatcher {
 
         // If local track is a remix/version, online candidate MUST have matching modifier
         if let localModifier = signature.versionModifier {
+            // Ensure preconditions are met before proceeding
             guard let onlineModifier = onlineSignature.versionModifier else {
                 // Local is remix/version, online is standard track -> reject
                 return nil
             }
+            // Norm local mod
             let normLocalMod = normalize(localModifier)
+            // Norm online mod
             let normOnlineMod = normalize(onlineModifier)
+            // Mod sim
             let modSim = FuzzyMatcher.levenshteinSimilarity(normLocalMod, normOnlineMod)
             if modSim < 0.50 && !normLocalMod.contains(normOnlineMod) && !normOnlineMod.contains(normLocalMod) {
                 return nil
@@ -55,6 +53,7 @@ public enum DisambiguationMatcher {
         } else {
             // Local track is standard; if online is explicitly an alternate remix/version, reject
             if let onlineModifier = onlineSignature.versionModifier {
+                // Norm online mod
                 let normOnlineMod = normalize(onlineModifier)
                 if normOnlineMod.contains("remix") || normOnlineMod.contains("club mix") || normOnlineMod.contains("dub") || normOnlineMod.contains("vip") {
                     return nil
@@ -72,15 +71,19 @@ public enum DisambiguationMatcher {
 
         // 4. Title Similarity Scoring
         let normLocalTitle = normalize(signature.coreTitle)
+        // Norm online title
         let normOnlineTitle = normalize(onlineSignature.coreTitle)
 
+        // Title score
         var titleScore = 0
         if normLocalTitle == normOnlineTitle {
             titleScore = 500
         } else if normLocalTitle.contains(normOnlineTitle) || normOnlineTitle.contains(normLocalTitle) {
+            // Ratio
             let ratio = Double(min(normLocalTitle.count, normOnlineTitle.count)) / Double(max(normLocalTitle.count, normOnlineTitle.count, 1))
             titleScore = 400 + Int(ratio * 80)
         } else {
+            // Sim
             let sim = FuzzyMatcher.levenshteinSimilarity(normLocalTitle, normOnlineTitle)
             if sim < 0.55 {
                 return nil // Title is too dissimilar
@@ -90,9 +93,12 @@ public enum DisambiguationMatcher {
 
         // 5. Artist Similarity Scoring
         let normLocalArtist = normalize(signature.primaryArtist)
+        // Norm online artist
         let normOnlineArtist = normalize(onlineSignature.primaryArtist)
 
+        // Artist score
         var artistScore = 0
+        // Flag indicating if artist known
         let isArtistKnown = !MetadataSanitizer.isUnknownArtist(signature.primaryArtist)
 
         if isArtistKnown {
@@ -101,6 +107,7 @@ public enum DisambiguationMatcher {
             } else if normLocalArtist.contains(normOnlineArtist) || normOnlineArtist.contains(normLocalArtist) {
                 artistScore = 280
             } else {
+                // Sim
                 let sim = FuzzyMatcher.levenshteinSimilarity(normLocalArtist, normOnlineArtist)
                 if sim < 0.50 {
                     return nil // Artist mismatch
@@ -113,8 +120,11 @@ public enum DisambiguationMatcher {
 
         // 6. Album Fidelity Scoring
         var albumScore = 0
+        // Norm local album
         let normLocalAlbum = normalize(signature.standardAlbum)
+        // Norm online album
         let normOnlineAlbum = normalize(onlineSignature.standardAlbum)
+        // Flag indicating if album known
         let isAlbumKnown = !MetadataSanitizer.isUnknownAlbum(signature.standardAlbum)
 
         if isAlbumKnown {
@@ -138,6 +148,7 @@ public enum DisambiguationMatcher {
         // 8. Duration Proximity Bonus
         var durationBonus = 0
         if signature.duration > 0, let onlineDuration = online.duration, onlineDuration > 0 {
+            // Delta
             let delta = abs(signature.duration - onlineDuration)
             if delta <= 2.0 {
                 durationBonus = 100
@@ -149,6 +160,7 @@ public enum DisambiguationMatcher {
         // Calculate Total Score
         let totalScore = titleScore + artistScore + albumScore + trackNumBonus + durationBonus
 
+        // Ensure preconditions are met before proceeding
         guard totalScore >= minimumAcceptanceThreshold else {
             return nil
         }
@@ -161,7 +173,9 @@ public enum DisambiguationMatcher {
         for signature: TrackSignature,
         in candidates: [OnlineTrackMetadata]
     ) -> OnlineTrackMetadata? {
+        // Highest score
         var highestScore = -1
+        // Best candidate
         var bestCandidate: OnlineTrackMetadata? = nil
 
         for candidate in candidates {
@@ -178,6 +192,7 @@ public enum DisambiguationMatcher {
 
     // MARK: - Helpers
 
+    // Normalize
     private static func normalize(_ str: String) -> String {
         str.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
             .components(separatedBy: CharacterSet.alphanumerics.inverted)

@@ -3,11 +3,16 @@ import SwiftUI
 /// Minimal, high-contrast typographic empty state component.
 /// Strictly avoids SF Symbols or illustrative graphics.
 public struct EmptyStateView: View {
+    // Display title
     public let title: String
+    // Message
     public let message: String
+    // Action title
     public let actionTitle: String?
+    // Action
     public let action: (() -> Void)?
 
+    // Initialize with configured properties
     public init(
         title: String,
         message: String,
@@ -20,6 +25,7 @@ public struct EmptyStateView: View {
         self.action = action
     }
 
+    // Main view layout structure
     public var body: some View {
         VStack(spacing: 16) {
             Text(title)

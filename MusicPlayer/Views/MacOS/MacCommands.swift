@@ -1,19 +1,17 @@
-//
-//  MacCommands.swift
-//  MusicPlayer
-//
-//  Created by Principal Apple Software Engineer on 8/26/26.
-//
-
 import SwiftUI
 
 /// Concurrency-safe macOS Menu Bar commands and keyboard shortcuts.
 public struct MacPlaybackCommands: Commands {
+    // Player service
     public let playerService: AudioPlayerService
+    // Library store
     public let libraryStore: LibraryStore
+    // On new playlist
     public let onNewPlaylist: () -> Void
+    // On open settings
     public let onOpenSettings: () -> Void
 
+    // Initialize with configured properties
     public init(
         playerService: AudioPlayerService,
         libraryStore: LibraryStore,

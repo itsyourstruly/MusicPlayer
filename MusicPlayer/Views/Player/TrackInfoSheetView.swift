@@ -1,10 +1,3 @@
-//
-//  TrackInfoSheetView.swift
-//  MusicPlayer
-//
-//  Created by Principal Apple Software Engineer on 8/24/26.
-//
-
 import SwiftUI
 import AVFoundation
 #if canImport(UIKit)
@@ -15,18 +8,22 @@ import AppKit
 
 /// Comprehensive technical audio file inspector sheet displaying container, codec, stream, tag metadata, and file system specifications.
 public struct TrackInfoSheetView: View {
+    // Track
     public let track: Track
+    // Injected library store dependency
     public var libraryStore: LibraryStore?
     @Environment(\.dismiss) private var dismiss
     @State private var copiedPathToast: Bool = false
     @State private var showingOnlineMetadataSheet: Bool = false
     @State private var dynamicTags: [(key: String, value: String)] = []
 
+    // Initialize with configured properties
     public init(track: Track, libraryStore: LibraryStore? = nil) {
         self.track = track
         self.libraryStore = libraryStore
     }
 
+    // Main view layout structure
     public var body: some View {
         NavigationStack {
             List {
@@ -36,14 +33,17 @@ public struct TrackInfoSheetView: View {
                     infoRow(label: "ARTIST", value: track.artist)
                     infoRow(label: "ALBUM", value: track.album)
 
+                    // Release year
                     if let year = track.year, year > 0 {
                         infoRow(label: "RELEASE DATE", value: String(year))
                     }
 
+                    // Album-level artist credit for compilations
                     if let albumArtist = track.albumArtist, !albumArtist.isEmpty {
                         infoRow(label: "ALBUM ARTIST", value: albumArtist)
                     }
 
+                    // Musical genre classification
                     if let genre = track.genre, !genre.isEmpty {
                         infoRow(label: "GENRE", value: genre)
                     }
@@ -52,6 +52,7 @@ public struct TrackInfoSheetView: View {
                         infoRow(label: "DISC NUMBER", value: String(disc))
                     }
 
+                    // Injected library store dependency
                     if let libraryStore = libraryStore {
                         Button(action: { showingOnlineMetadataSheet = true }) {
                             Text("FETCH ONLINE METADATA & ARTWORK")
@@ -130,6 +131,7 @@ public struct TrackInfoSheetView: View {
                 Section("ASSETS & LYRICS") {
                     infoRow(label: "ARTWORK", value: track.artworkKey != nil ? "EMBEDDED (CACHED)" : "NONE / SYSTEM PLACEHOLDER")
 
+                    // Synchronized or plain text lyrics if available
                     if let lyrics = track.lyrics, !lyrics.isEmpty {
                         VStack(alignment: .leading, spacing: 6) {
                             Text("LYRICS")
@@ -154,26 +156,35 @@ public struct TrackInfoSheetView: View {
                     .font(.system(size: 13, weight: .bold, design: .monospaced))
                 }
             }
+            // Modal presentation sheet
             .sheet(isPresented: $showingOnlineMetadataSheet) {
+                // Injected library store dependency
                 if let libraryStore = libraryStore {
                     OnlineMetadataMatchSheet(track: track, libraryStore: libraryStore)
                         .tint(libraryStore.settings.appTheme.accentColor)
                         .environment(\.appTheme, libraryStore.settings.appTheme)
                 }
             }
+            // Async lifecycle task
             .task {
                 await loadDynamicTags()
             }
         }
     }
 
+    // Load dynamic tags
     private func loadDynamicTags() async {
+        // Asset
         let asset = AVURLAsset(url: track.url)
+        // Ensure preconditions are met before proceeding
         guard let metadata = try? await asset.load(.metadata) else { return }
 
+        // List
         var list: [(key: String, value: String)] = []
         for item in metadata {
+            // Raw key
             let rawKey = item.commonKey?.rawValue ?? item.keyString ?? (item.key as? String) ?? (item.key as? NSNumber)?.stringValue ?? ""
+            // Ensure preconditions are met before proceeding
             guard !rawKey.isEmpty else { continue }
 
             // Skip keys already prominently displayed in primary sections
@@ -182,12 +193,14 @@ public struct TrackInfoSheetView: View {
                 .replacingOccurrences(of: "©", with: "")
                 .trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
 
+            // Upper
             let upper = cleanKey.uppercased()
             if ["TITLE", "ARTIST", "ALBUM", "GENRE", "CREATIONDATE", "DATE", "YEAR", "ARTWORK"].contains(upper) {
                 continue
             }
 
             if let val = try? await item.load(.stringValue) {
+                // Trimmed val
                 let trimmedVal = val.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
                 if !trimmedVal.isEmpty && !list.contains(where: { $0.key == upper }) {
                     list.append((key: upper, value: trimmedVal))
@@ -198,6 +211,7 @@ public struct TrackInfoSheetView: View {
         self.dynamicTags = list.sorted { $0.key < $1.key }
     }
 
+    // Info row
     private func infoRow(label: String, value: String) -> some View {
         HStack(alignment: .top) {
             Text(label)
@@ -215,6 +229,7 @@ public struct TrackInfoSheetView: View {
         .padding(.vertical, 2)
     }
 
+    // Copy file path
     private func copyFilePath() {
         #if canImport(UIKit)
         UIPasteboard.general.string = track.url.path

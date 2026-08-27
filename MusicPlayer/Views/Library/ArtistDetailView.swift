@@ -1,14 +1,8 @@
-//
-//  ArtistDetailView.swift
-//  MusicPlayer
-//
-//  Created by Principal Apple Software Engineer on 8/24/26.
-//
-
 import SwiftUI
 
 /// Detailed discography and track view for a specific artist.
 public struct ArtistDetailView: View {
+    // Primary artist name
     public let artist: Artist
     @Bindable var libraryStore: LibraryStore
     @Bindable var playerService: AudioPlayerService
@@ -18,6 +12,7 @@ public struct ArtistDetailView: View {
     @State private var selectedTrackForInfo: Track? = nil
     @State private var showingFavorites: Bool = false
 
+    // Initialize with configured properties
     public init(
         artist: Artist,
         libraryStore: LibraryStore,
@@ -28,6 +23,7 @@ public struct ArtistDetailView: View {
         self.playerService = playerService
     }
 
+    // Main view layout structure
     public var body: some View {
         ScrollView(.vertical, showsIndicators: false) {
             VStack(alignment: .leading, spacing: 20) {
@@ -46,6 +42,7 @@ public struct ArtistDetailView: View {
                     .buttonStyle(TypographicButtonStyle(variant: .primary, size: .regular))
 
                     Button(action: {
+                        // Shuffled
                         var shuffled = artist.tracks
                         shuffled.shuffle()
                         if let first = shuffled.first {
@@ -229,7 +226,9 @@ public struct ArtistDetailView: View {
 
                     LazyVStack(spacing: 4) {
                         ForEach(Array(displayedArtistTracks.enumerated()), id: \.element.id) { index, track in
+                            // Count
                             let count = libraryStore.playCount(for: track.id)
+                            // Trailing label
                             let trailingLabel = showingFavorites ? (count == 1 ? "1 PLAY" : "\(count) PLAYS") : nil
 
                             TrackRowView(
@@ -277,6 +276,7 @@ public struct ArtistDetailView: View {
         .background(libraryStore.settings.appTheme.backgroundColor.ignoresSafeArea())
         .navigationTitle(artist.name)
         .navigationBarTitleDisplayMode(.inline)
+        // Modal presentation sheet
         .sheet(item: $selectedTrackForInfo) { track in
             TrackInfoSheetView(track: track, libraryStore: libraryStore)
         }
@@ -308,7 +308,9 @@ public struct ArtistDetailView: View {
     private var displayedArtistTracks: [Track] {
         if showingFavorites {
             return artist.tracks.sorted { lhs, rhs in
+                // P l
                 let pL = libraryStore.playCount(for: lhs.id)
+                // P r
                 let pR = libraryStore.playCount(for: rhs.id)
                 if pL != pR {
                     return pL > pR
@@ -321,12 +323,16 @@ public struct ArtistDetailView: View {
     }
 
     private var ownAlbums: [Album] {
+        // Joined
         let joined = libraryStore.settings.joinedArtists
+        // List
         let list = libraryStore.albums.filter {
             $0.isLeadOrCollaborativeAlbum(for: artist.name, joinedArtists: joined) && !$0.isSingle
         }
         return list.sorted { lhs, rhs in
+            // Y l
             let yL = lhs.resolvedYear ?? 0
+            // Y r
             let yR = rhs.resolvedYear ?? 0
             if yL != yR { return yL > yR }
             return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
@@ -334,12 +340,16 @@ public struct ArtistDetailView: View {
     }
 
     private var ownSingles: [Album] {
+        // Joined
         let joined = libraryStore.settings.joinedArtists
+        // List
         let list = libraryStore.albums.filter {
             $0.isLeadOrCollaborativeAlbum(for: artist.name, joinedArtists: joined) && $0.isSingle
         }
         return list.sorted { lhs, rhs in
+            // Y l
             let yL = lhs.resolvedYear ?? 0
+            // Y r
             let yR = rhs.resolvedYear ?? 0
             if yL != yR { return yL > yR }
             return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
@@ -347,18 +357,23 @@ public struct ArtistDetailView: View {
     }
 
     private var featuredAlbums: [Album] {
+        // Joined
         let joined = libraryStore.settings.joinedArtists
+        // List
         let list = libraryStore.albums.filter {
             $0.isFeaturedAlbum(for: artist.name, joinedArtists: joined)
         }
         return list.sorted { lhs, rhs in
+            // Y l
             let yL = lhs.resolvedYear ?? 0
+            // Y r
             let yR = rhs.resolvedYear ?? 0
             if yL != yR { return yL > yR }
             return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
         }
     }
 
+    // Album card
     private func albumCard(album: Album) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             AlbumArtworkView(

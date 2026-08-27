@@ -1,17 +1,12 @@
-//
-//  MacMainView.swift
-//  MusicPlayer
-//
-//  Created by Principal Apple Software Engineer on 8/26/26.
-//
-
 import SwiftUI
 import UniformTypeIdentifiers
 
 /// Root macOS navigation coordinator utilizing NavigationSplitView, persistent bottom playback bar,
 /// slide-out queue inspector, and drag-and-drop file import.
 public struct MacMainView: View {
+    // Library store
     public let libraryStore: LibraryStore
+    // Player service
     public let playerService: AudioPlayerService
 
     @State private var selectedNavItem: MacNavigationItem? = .home
@@ -27,11 +22,13 @@ public struct MacMainView: View {
 
     @Environment(\.appTheme) private var appTheme
 
+    // Initialize with configured properties
     public init(libraryStore: LibraryStore, playerService: AudioPlayerService) {
         self.libraryStore = libraryStore
         self.playerService = playerService
     }
 
+    // Main view layout structure
     public var body: some View {
         VStack(spacing: 0) {
             // Main Desktop 2-Pane Navigation with Trailing Inspector
@@ -80,36 +77,42 @@ public struct MacMainView: View {
         .background(appTheme.backgroundColor)
         .tint(libraryStore.settings.appTheme.accentColor)
         .environment(\.appTheme, libraryStore.settings.appTheme)
+        // Modal presentation sheet
         .sheet(isPresented: $showingSettings) {
             SettingsView(libraryStore: libraryStore, playerService: playerService)
                 .frame(minWidth: 580, idealWidth: 640, minHeight: 480, idealHeight: 560)
                 .tint(libraryStore.settings.appTheme.accentColor)
                 .environment(\.appTheme, libraryStore.settings.appTheme)
         }
+        // Modal presentation sheet
         .sheet(isPresented: $showingCreatePlaylist) {
             CreatePlaylistSheet(libraryStore: libraryStore)
                 .frame(minWidth: 380, minHeight: 220)
                 .tint(libraryStore.settings.appTheme.accentColor)
                 .environment(\.appTheme, libraryStore.settings.appTheme)
         }
+        // Modal presentation sheet
         .sheet(item: $selectedTrackForInfo) { track in
             TrackInfoSheetView(track: track, libraryStore: libraryStore)
                 .frame(minWidth: 460, minHeight: 440)
                 .tint(libraryStore.settings.appTheme.accentColor)
                 .environment(\.appTheme, libraryStore.settings.appTheme)
         }
+        // Modal presentation sheet
         .sheet(item: $selectedTrackForPlaylist) { track in
             playlistPickerSheet(for: track)
                 .frame(minWidth: 380, minHeight: 320)
                 .tint(libraryStore.settings.appTheme.accentColor)
                 .environment(\.appTheme, libraryStore.settings.appTheme)
         }
+        // Modal presentation sheet
         .sheet(item: $selectedTrackForMatch) { track in
             OnlineMetadataMatchSheet(track: track, libraryStore: libraryStore)
                 .frame(minWidth: 580, minHeight: 520)
                 .tint(libraryStore.settings.appTheme.accentColor)
                 .environment(\.appTheme, libraryStore.settings.appTheme)
         }
+        // Modal presentation sheet
         .sheet(item: $selectedArtistForNav) { artist in
             NavigationStack {
                 ArtistDetailView(
@@ -128,6 +131,7 @@ public struct MacMainView: View {
             .tint(libraryStore.settings.appTheme.accentColor)
             .environment(\.appTheme, libraryStore.settings.appTheme)
         }
+        // Modal presentation sheet
         .sheet(item: $selectedAlbumForNav) { album in
             NavigationStack {
                 AlbumDetailView(
@@ -268,6 +272,7 @@ public struct MacMainView: View {
                 MetadataComparisonListView(libraryStore: libraryStore)
             }
 
+        // Unique identifier
         case .playlist(let playlistID):
             NavigationStack {
                 PlaylistDetailView(
@@ -281,6 +286,7 @@ public struct MacMainView: View {
 
     // MARK: - Helper Modals & Drag-and-Drop
 
+    // Playlist picker sheet
     private func playlistPickerSheet(for track: Track) -> some View {
         NavigationStack {
             List {
@@ -324,19 +330,24 @@ public struct MacMainView: View {
         }
     }
 
+    // Handle drop
     private func handleDrop(providers: [NSItemProvider]) -> Bool {
         for provider in providers {
             provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
+                // Ensure preconditions are met before proceeding
                 guard let data = item as? Data,
+                      // Local audio file URL
                       let url = URL(dataRepresentation: data, relativeTo: nil) else {
                     return
                 }
                 Task { @MainActor in
+                    // Flag indicating if dir
                     var isDir: ObjCBool = false
                     if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir) {
                         if isDir.boolValue {
                             await libraryStore.linkAndScanFolder(url: url)
                         } else {
+                            // Parent
                             let parent = url.deletingLastPathComponent()
                             await libraryStore.linkAndScanFolder(url: parent)
                         }

@@ -1,10 +1,3 @@
-//
-//  VerifiedGoodTracksListView.swift
-//  MusicPlayer
-//
-//  Created by Principal Apple Software Engineer on 8/25/26.
-//
-
 import SwiftUI
 
 /// Double-check sheet for tracks that were verified and determined to already match online records.
@@ -18,11 +11,13 @@ public struct VerifiedGoodTracksListView: View {
     @State private var recheckingTrackID: UUID? = nil
     @State private var searchText: String = ""
 
+    // Initialize with configured properties
     public init(libraryStore: LibraryStore) {
         self.libraryStore = libraryStore
     }
 
     private var filteredDiffs: [MetadataDiff] {
+        // Query
         let query = FuzzyMatcher.normalize(searchText)
         if query.isEmpty { return libraryStore.verifiedGoodDiffs }
         return libraryStore.verifiedGoodDiffs.filter { diff in
@@ -33,6 +28,7 @@ public struct VerifiedGoodTracksListView: View {
         }
     }
 
+    // Main view layout structure
     public var body: some View {
         NavigationStack {
             Group {
@@ -177,6 +173,7 @@ public struct VerifiedGoodTracksListView: View {
 
     // MARK: - Actions
 
+    // Apply online tags
     private func applyOnlineTags(_ diff: MetadataDiff) {
         Task {
             _ = await libraryStore.applyOnlineMetadata(
@@ -188,6 +185,7 @@ public struct VerifiedGoodTracksListView: View {
         }
     }
 
+    // Rescan single track
     private func rescanSingleTrack(_ track: Track) {
         recheckingTrackID = track.id
         Task {
@@ -200,13 +198,18 @@ public struct VerifiedGoodTracksListView: View {
 
 /// Side-by-side card displaying local track vs verified online match with confirm badge.
 private struct VerifiedGoodTrackCard: View {
+    // Diff
     let diff: MetadataDiff
+    // Flag indicating if rechecking
     let isRechecking: Bool
+    // On apply online
     let onApplyOnline: () -> Void
+    // On rescan
     let onRescan: () -> Void
 
     @Environment(\.appTheme) private var appTheme
 
+    // Body
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             // Header
@@ -270,6 +273,7 @@ private struct VerifiedGoodTrackCard: View {
                         }
 
                         if let t = diff.localTrack.trackNumber, t > 0 {
+                            // Total str
                             let totalStr = diff.localTrack.totalTracks.map { " of \($0)" } ?? ""
                             metaItem(label: "TRACK #", value: "\(t)\(totalStr)")
                         } else {
@@ -322,6 +326,7 @@ private struct VerifiedGoodTrackCard: View {
 
                         // Year
                         if let y = diff.onlineMetadata.releaseYear, y > 0 {
+                            // Flag indicating if enriched
                             let isEnriched = diff.localTrack.year == nil || diff.localTrack.year == 0
                             onlineMetaItem(label: "YEAR", value: String(y), arrowBadge: isEnriched ? "→ ENRICH" : "→ MATCH")
                         } else if diff.isYearTransferredFromLocal, let localY = diff.localTrack.year {
@@ -337,9 +342,11 @@ private struct VerifiedGoodTrackCard: View {
 
                         // Track Number
                         if let t = diff.onlineMetadata.trackNumber, t > 0 {
+                            // Total str
                             let totalStr = diff.onlineMetadata.totalTracks.map { " of \($0)" } ?? ""
                             onlineMetaItem(label: "TRACK #", value: "\(t)\(totalStr)", arrowBadge: "→ MATCH")
                         } else if diff.isTrackNumberTransferredFromLocal, let localT = diff.localTrack.trackNumber {
+                            // Total str
                             let totalStr = diff.localTrack.totalTracks.map { " of \($0)" } ?? ""
                             onlineMetaItem(label: "TRACK #", value: "\(localT)\(totalStr)", arrowBadge: "→ KEEP LOCAL", isTransferred: true)
                         } else {
@@ -381,6 +388,7 @@ private struct VerifiedGoodTrackCard: View {
         )
     }
 
+    // Meta item
     private func metaItem(label: String, value: String, isMissing: Bool = false) -> some View {
         VStack(alignment: .leading, spacing: 1) {
             Text(label)
@@ -393,6 +401,7 @@ private struct VerifiedGoodTrackCard: View {
         }
     }
 
+    // Online meta item
     private func onlineMetaItem(
         label: String,
         value: String,

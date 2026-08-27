@@ -34,6 +34,7 @@ public struct FullScreenPlayerView: View {
         isDark: true
     )
 
+    // Initialize with configured properties
     public init(
         playerService: AudioPlayerService,
         libraryStore: LibraryStore,
@@ -44,11 +45,16 @@ public struct FullScreenPlayerView: View {
         self.onDismiss = onDismiss
     }
 
+    // Main view layout structure
     public var body: some View {
         GeometryReader { geo in
+            // Top inset
             let topInset = geo.safeAreaInsets.top
+            // Bottom inset
             let bottomInset = geo.safeAreaInsets.bottom
+            // Artwork dimension
             let artworkDimension = min(geo.size.width - 44, geo.size.height * 0.42, 350)
+            // Flag indicating if playing
             let isPlaying = playerService.playbackStatus.isPlaying
 
             ZStack {
@@ -184,7 +190,9 @@ public struct FullScreenPlayerView: View {
                     )
                 }
             }
+            // Async lifecycle task
             .task(id: playerService.currentTrack?.artworkKey) {
+                // New palette
                 let newPalette = await ArtworkColorExtractor.shared.extractPrimaryColor(
                     for: playerService.currentTrack?.artworkKey,
                     fallback: Color.appSecondaryBackground
@@ -193,9 +201,11 @@ public struct FullScreenPlayerView: View {
                     self.palette = newPalette
                 }
             }
+            // Triggered when view appears
             .onAppear {
                 start3DFloatingAnimationLoop()
             }
+            // Triggered when view disappears
             .onDisappear {
                 swayAnimationTask?.cancel()
                 currentPitch = 0.0
@@ -213,6 +223,7 @@ public struct FullScreenPlayerView: View {
                 touchStretchX = 1.0
                 touchStretchY = 1.0
             }
+            // React to state changes
             .onChange(of: playerService.playbackStatus.isPlaying) { _, isPlaying in
                 if isPlaying {
                     start3DFloatingAnimationLoop()
@@ -236,6 +247,7 @@ public struct FullScreenPlayerView: View {
                     }
                 }
             }
+            // React to state changes
             .onChange(of: playerService.currentTrack?.id) { _, _ in
                 if playerService.playbackStatus.isPlaying {
                     start3DFloatingAnimationLoop()
@@ -247,17 +259,22 @@ public struct FullScreenPlayerView: View {
         .offset(y: max(0, dragOffsetY))
         .scaleEffect(dragOffsetY > 0 ? max(0.85, 1.0 - (dragOffsetY / 900)) : 1.0, anchor: .bottom)
         .opacity(dragOffsetY > 0 ? max(0.7, 1.0 - (dragOffsetY / 500)) : 1.0)
+        // Interactive drag and touch gesture handling
         .gesture(
             DragGesture()
                 .onChanged { value in
+                    // Ensure preconditions are met before proceeding
                     guard !isTouchingArtwork else { return }
                     if value.translation.height > 0 {
                         dragOffsetY = value.translation.height
                     }
                 }
                 .onEnded { value in
+                    // Ensure preconditions are met before proceeding
                     guard !isTouchingArtwork else { return }
+                    // H
                     let h = value.translation.height
+                    // Predicted h
                     let predictedH = value.predictedEndTranslation.height
 
                     // Pull down past threshold -> Minimize back to miniplayer
@@ -277,19 +294,23 @@ public struct FullScreenPlayerView: View {
                     }
                 }
         )
+        // Modal presentation sheet
         .sheet(isPresented: $showingQueue) {
             PlayerQueueView(playerService: playerService)
         }
+        // Modal presentation sheet
         .sheet(isPresented: $showingFileInfo) {
             if let track = playerService.currentTrack {
                 TrackInfoSheetView(track: track, libraryStore: libraryStore)
             }
         }
+        // Modal presentation sheet
         .sheet(isPresented: $showingPlaylistPicker) {
             if let track = playerService.currentTrack {
                 playlistPickerSheet(for: track)
             }
         }
+        // Modal presentation sheet
         .sheet(item: $selectedArtistForNavigation) { artist in
             NavigationStack {
                 ArtistDetailView(
@@ -307,6 +328,7 @@ public struct FullScreenPlayerView: View {
                 }
             }
         }
+        // Modal presentation sheet
         .sheet(item: $selectedAlbumForNavigation) { album in
             NavigationStack {
                 AlbumDetailView(
@@ -328,12 +350,16 @@ public struct FullScreenPlayerView: View {
 
     // MARK: - Interactive 3D Touch Down & Torque Physics
 
+    // Handle artwork touch
     private func handleArtworkTouch(location: CGPoint, dimension: CGFloat) {
+        // Center x
         let centerX = dimension / 2.0
+        // Center y
         let centerY = dimension / 2.0
 
         // Normalized touch offsets from center (-1.0 to 1.0)
         let normX = max(-1.0, min(1.0, (location.x - centerX) / (dimension / 2.0)))
+        // Norm y
         let normY = max(-1.0, min(1.0, (location.y - centerY) / (dimension / 2.0)))
 
         if !isTouchingArtwork {
@@ -347,8 +373,11 @@ public struct FullScreenPlayerView: View {
         // Tapping Right (normX > 0) -> positive yaw pushes right edge into screen
         // Tapping Left (normX < 0) -> negative yaw pushes left edge into screen
         let maxAngle: Double = 12.0
+        // Calculated pitch
         let calculatedPitch = -Double(normY) * maxAngle
+        // Calculated yaw
         let calculatedYaw = Double(normX) * maxAngle
+        // Calculated roll
         let calculatedRoll = Double(normX * normY) * -2.8
 
         withAnimation(.interactiveSpring(response: 0.25, dampingFraction: 0.72, blendDuration: 0.08)) {
@@ -362,7 +391,9 @@ public struct FullScreenPlayerView: View {
         }
     }
 
+    // Handle artwork touch ended
     private func handleArtworkTouchEnded() {
+        // Ensure preconditions are met before proceeding
         guard isTouchingArtwork else { return }
 
         // Retain the tilted touch pose in the main rotation state so the cover stays in this position
@@ -384,6 +415,7 @@ public struct FullScreenPlayerView: View {
 
     // MARK: - Dynamic Multi-Directional 3D Floating Engine (Sides, Corners, 2D Roll, Variable Pitches)
 
+    // Start 3 d floating animation loop
     private func start3DFloatingAnimationLoop() {
         swayAnimationTask?.cancel()
         swayAnimationTask = Task { @MainActor in
@@ -410,6 +442,7 @@ public struct FullScreenPlayerView: View {
 
                 // 1. Active wander phase duration: 4 to 7 seconds
                 let activePhaseTargetDuration = Double.random(in: 4.0...7.0)
+                // Phase start time
                 let phaseStartTime = Date()
 
                 while !Task.isCancelled && playerService.playbackStatus.isPlaying && Date().timeIntervalSince(phaseStartTime) < activePhaseTargetDuration {
@@ -420,6 +453,7 @@ public struct FullScreenPlayerView: View {
 
                     // Weighted pose selection: 45% subtle free wander, 35% corner/side tilts, 20% deep pitch
                     let poseRoll = Double.random(in: 0.0...1.0)
+                    // Pose type
                     let poseType: Int
                     if poseRoll < 0.45 {
                         poseType = 3 // Asymmetric Free Wander
@@ -431,21 +465,31 @@ public struct FullScreenPlayerView: View {
 
                     // Non-linear power distribution prioritizing smaller, subtle baseline movements (~75% gentle, ~25% bold)
                     let rawDistribution = Double.random(in: 0.0...1.0)
+                    // Biased factor
                     let biasedFactor = pow(rawDistribution, 2.2)
+                    // Strength
                     let strength = 0.22 + biasedFactor * 1.28
 
+                    // Target pitch
                     var targetPitch: Double = 0.0
+                    // Target yaw
                     var targetYaw: Double = 0.0
+                    // Target roll
                     var targetRoll: Double = 0.0
+                    // Target elevation
                     var targetElevation: CGFloat = 0.0
 
                     switch poseType {
                     case 0:
                         // Corner Tilt (Top-Left, Top-Right, Bottom-Left, Bottom-Right)
                         let isTop = Bool.random()
+                        // Flag indicating if left
                         let isLeft = Bool.random()
+                        // Pitch mag
                         let pitchMag = Double.random(in: 3.5...6.5) * strength
+                        // Yaw mag
                         let yawMag = Double.random(in: 3.5...6.2) * strength
+                        // Roll mag
                         let rollMag = Double.random(in: 1.0...2.2) * strength
 
                         targetPitch = isTop ? -pitchMag * 0.75 : pitchMag
@@ -479,6 +523,7 @@ public struct FullScreenPlayerView: View {
 
                     // Subtle organic stretch elasticity responding to 3D corner/side momentum & strength (more pronounced on rare big moves)
                     let stretchXCalc = 1.0 + (abs(targetYaw) / 8.0) * 0.018 * min(1.2, strength) - (abs(targetPitch) / 9.0) * 0.008 * min(1.2, strength)
+                    // Stretch y calc
                     let stretchYCalc = 1.0 + (abs(targetPitch) / 9.0) * 0.016 * min(1.2, strength) - (abs(targetYaw) / 8.0) * 0.008 * min(1.2, strength)
 
                     // Paced waypoint interval (1.15s to 1.75s) with seamless easeInOut deceleration
@@ -503,6 +548,7 @@ public struct FullScreenPlayerView: View {
 
                 // 2. Return to center every 4-7 seconds for exactly 2.0 seconds (smooth 1.15s glide + 0.85s centered rest)
                 if !isTouchingArtwork {
+                    // Center glide duration
                     let centerGlideDuration: Double = 1.15
                     withAnimation(.easeInOut(duration: centerGlideDuration)) {
                         currentPitch = 0.0
@@ -532,31 +578,45 @@ public struct FullScreenPlayerView: View {
 
     // MARK: - Subviews
 
+    // Hero artwork view
     private func heroArtworkView(track: Track, dimension: CGFloat, isPlaying: Bool) -> some View {
+        // Flag indicating if album color
         let isAlbumColor = libraryStore.settings.playerBackgroundStyle == .albumColor
+        // Primary shadow color
         let primaryShadowColor: Color = isAlbumColor ?
             Color.black.opacity(isPlaying ? 0.35 : 0.0) :
             palette.primaryColor.opacity(isPlaying ? 0.28 : 0.0)
+        // Deep shadow color
         let deepShadowColor: Color = Color.black.opacity(
             isPlaying ? (isAlbumColor ? 0.30 : 0.24) : 0.0
         )
+        // Contact shadow color
         let contactShadowColor: Color = Color.black.opacity(
             isPlaying ? (isAlbumColor ? 0.16 : 0.10) : 0.0
         )
 
         // Effective 3D angles & offsets blending touch interaction and floating engine
         let effectivePitch: Double = isTouchingArtwork ? touchPitch : currentPitch
+        // Effective yaw
         let effectiveYaw: Double = isTouchingArtwork ? touchYaw : currentYaw
+        // Effective roll
         let effectiveRoll: Double = isTouchingArtwork ? touchRoll : currentRoll
+        // Effective elevation
         let effectiveElevation: CGFloat = isTouchingArtwork ? touchElevation : currentElevation
+        // Effective stretch x
         let effectiveStretchX: CGFloat = isTouchingArtwork ? touchStretchX : currentStretchX
+        // Effective stretch y
         let effectiveStretchY: CGFloat = isTouchingArtwork ? touchStretchY : currentStretchY
+        // Effective scale
         let effectiveScale: CGFloat = (isPlaying ? 1.0 : 0.84) * (isTouchingArtwork ? touchScale : 1.0)
 
         // Dynamically adjusted shadow projection responding in real-time to current 3D orientation & altitude
         let shadowOffsetX: CGFloat = isPlaying ? CGFloat(effectiveYaw * -1.85 + effectiveRoll * 0.7) : 0
+        // Base shadow offset y
         let baseShadowOffsetY: Double = 11.5 + effectivePitch * 1.5 + Double(effectiveElevation * 0.75)
+        // Shadow offset y
         let shadowOffsetY: CGFloat = isPlaying ? CGFloat(baseShadowOffsetY) : 0
+        // Shadow radius
         let shadowRadius: CGFloat = isPlaying ? max(14.0, 24.0 + effectiveElevation * 1.2) : 0
 
         return AlbumArtworkView(
@@ -615,8 +675,10 @@ public struct FullScreenPlayerView: View {
         )
         // Dynamic Play/Pause & Touch Press Spring Scale Effect
         .scaleEffect(effectiveScale, anchor: .center)
+        // Smooth UI transition animation
         .animation(.spring(response: 0.46, dampingFraction: 0.72), value: isPlaying)
         .contentShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+        // Interactive drag and touch gesture handling
         .gesture(
             LongPressGesture(minimumDuration: 1.0)
                 .sequenced(before: DragGesture(minimumDistance: 0, coordinateSpace: .local))
@@ -645,6 +707,7 @@ public struct FullScreenPlayerView: View {
         .padding(.horizontal, 32)
     }
 
+    // Top bar
     private func topBar(track: Track) -> some View {
         VStack(spacing: 8) {
             // Pull Grab Bar
@@ -706,6 +769,7 @@ public struct FullScreenPlayerView: View {
         }
     }
 
+    // Playlist picker sheet
     private func playlistPickerSheet(for track: Track) -> some View {
         NavigationStack {
             List {

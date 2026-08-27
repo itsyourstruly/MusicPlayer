@@ -1,23 +1,20 @@
-//
-//  Playlist.swift
-//  MusicPlayer
-//
-//  Created by Principal Apple Software Engineer on 8/24/26.
-//
-
 import Foundation
 
 /// User-curated custom playlist entity supporting pinning, ordering, and metadata.
 public struct Playlist: Identifiable, Codable, Sendable, Hashable {
+    // Unique identifier
     public let id: UUID
     public var name: String
     public var description: String
+    // Controls is pinned
     public var isPinned: Bool
     public var customArtworkKey: String?
     public var trackIDs: [UUID]
+    // Date created
     public let dateCreated: Date
     public var dateModified: Date
 
+    // Initialize with configured properties
     public init(
         id: UUID = UUID(),
         name: String,
@@ -38,11 +35,15 @@ public struct Playlist: Identifiable, Codable, Sendable, Hashable {
         self.dateModified = dateModified
     }
 
+    // Defines CodingKeys cases
     enum CodingKeys: String, CodingKey {
+        // Id option
         case id, name, description, isPinned, customArtworkKey, trackIDs, dateCreated, dateModified
     }
 
+    // Initialize with configured properties
     public init(from decoder: Decoder) throws {
+        // Container
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.id = try container.decode(UUID.self, forKey: .id)
         self.name = try container.decode(String.self, forKey: .name)
@@ -58,8 +59,11 @@ public struct Playlist: Identifiable, Codable, Sendable, Hashable {
         FuzzyMatcher.normalize(name)
     }
 
+    // Combined search token string for fast indexed search
     public var searchTokens: String {
+        // N name
         let nName = FuzzyMatcher.normalize(name)
+        // N desc
         let nDesc = FuzzyMatcher.normalize(description)
         return "\(nName) \(nDesc)"
     }

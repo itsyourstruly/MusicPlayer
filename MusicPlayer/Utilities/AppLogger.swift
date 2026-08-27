@@ -1,17 +1,16 @@
-//
-//  AppLogger.swift
-//  MusicPlayer
-//
-//  Created by Principal Apple Software Engineer on 8/24/26.
-//
-
 import Foundation
 @_exported import os
 
 /// Structured, high-performance system logger utilizing Apple's unified logging system (`os.Logger`).
 /// Adheres strictly to subsystem and category separation for clean console filtering and zero performance overhead.
+///
+/// Usage: `AppLogger.audio.debug("Playing \(track.title)")`
+/// Filter in Console.app by subsystem or category without touching code.
 public enum AppLogger {
+    // Falls back to a static string if the bundle ID is unavailable (e.g. during unit testing)
     private static let subsystem: String = Bundle.main.bundleIdentifier ?? "com.musicplayer.app"
+
+    // MARK: - Categories
 
     /// Logs related to audio engine, playback states, queue transitions, and hardware interruptions.
     public static let audio: Logger = Logger(subsystem: subsystem, category: "Audio")

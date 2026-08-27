@@ -1,10 +1,3 @@
-//
-//  OnlineSearchDiscoveryView.swift
-//  MusicPlayer
-//
-//  Created by Principal Apple Software Engineer on 8/25/26.
-//
-
 import SwiftUI
 
 /// Dedicated online music search and deep exploration screen matching the Library 2-column layout.
@@ -17,13 +10,16 @@ public struct OnlineSearchDiscoveryView: View {
     @State private var searchTask: Task<Void, Never>? = nil
     @Environment(\.appTheme) private var appTheme
 
+    // Columns
     private let columns = [
         GridItem(.flexible(), spacing: 14),
         GridItem(.flexible(), spacing: 14)
     ]
 
+    // Initialize with configured properties
     public init() {}
 
+    // Main view layout structure
     public var body: some View {
         VStack(spacing: 0) {
             // Search Input Header
@@ -47,9 +43,11 @@ public struct OnlineSearchDiscoveryView: View {
         .background(appTheme.backgroundColor.ignoresSafeArea())
         .navigationTitle("ONLINE DISCOVERY")
         .navigationBarTitleDisplayMode(.inline)
+        // React to state changes
         .onChange(of: query) { _, newQuery in
             triggerSearch(query: newQuery, immediate: false)
         }
+        // Triggered when view disappears
         .onDisappear {
             searchTask?.cancel()
             previewManager.stop()
@@ -120,10 +118,13 @@ public struct OnlineSearchDiscoveryView: View {
         .background(appTheme.backgroundColor)
     }
 
+    // Trigger search
     private func triggerSearch(query: String, immediate: Bool = false) {
         searchTask?.cancel()
 
+        // Clean
         let clean = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Ensure preconditions are met before proceeding
         guard !clean.isEmpty else {
             self.results = OnlineSearchResults()
             self.isSearching = false
@@ -137,6 +138,7 @@ public struct OnlineSearchDiscoveryView: View {
             }
             if Task.isCancelled { return }
 
+            // Search results
             let searchResults = await OnlineDiscoveryService.shared.search(query: clean)
             if !Task.isCancelled {
                 self.results = searchResults
@@ -245,14 +247,18 @@ public struct OnlineSearchDiscoveryView: View {
 
 // MARK: - 2-Column Grid Cards (Library Aesthetic)
 
+// OnlineArtistGridCard representation
 public struct OnlineArtistGridCard: View {
+    // Primary artist name
     public let artist: OnlineArtistItem
     @Environment(\.appTheme) private var appTheme
 
+    // Initialize with configured properties
     public init(artist: OnlineArtistItem) {
         self.artist = artist
     }
 
+    // Main view layout structure
     public var body: some View {
         NavigationLink(destination: OnlineArtistDetailView(artist: artist)) {
             VStack(alignment: .leading, spacing: 8) {
@@ -306,14 +312,18 @@ public struct OnlineArtistGridCard: View {
     }
 }
 
+// OnlineAlbumGridCard representation
 public struct OnlineAlbumGridCard: View {
+    // Album title
     public let album: OnlineAlbumItem
     @Environment(\.appTheme) private var appTheme
 
+    // Initialize with configured properties
     public init(album: OnlineAlbumItem) {
         self.album = album
     }
 
+    // Main view layout structure
     public var body: some View {
         NavigationLink(destination: OnlineAlbumDetailView(album: album)) {
             VStack(alignment: .leading, spacing: 8) {
@@ -360,15 +370,19 @@ public struct OnlineAlbumGridCard: View {
     }
 }
 
+// OnlineTrackGridCard representation
 public struct OnlineTrackGridCard: View {
+    // Track
     public let track: OnlineTrackItem
     @State private var previewManager = OnlineAudioPreviewManager.shared
     @Environment(\.appTheme) private var appTheme
 
+    // Initialize with configured properties
     public init(track: OnlineTrackItem) {
         self.track = track
     }
 
+    // Main view layout structure
     public var body: some View {
         NavigationLink(destination: OnlineTrackDetailView(track: track)) {
             VStack(alignment: .leading, spacing: 8) {

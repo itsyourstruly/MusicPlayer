@@ -1,16 +1,12 @@
-//
-//  ArtistSectionFullListView.swift
-//  MusicPlayer
-//
-//  Created by Principal Apple Software Engineer on 8/26/26.
-//
-
 import SwiftUI
 
 /// Full-page vertical scrollable grid view for an artist's discography section (Albums, Singles, Featured On).
 public struct ArtistSectionFullListView: View {
+    // Display title
     public let title: String
+    // Artist name
     public let artistName: String
+    // Albums
     public let albums: [Album]
     @Bindable var libraryStore: LibraryStore
     @Bindable var playerService: AudioPlayerService
@@ -18,10 +14,12 @@ public struct ArtistSectionFullListView: View {
     @State private var searchQuery: String = ""
     @FocusState private var isSearchFocused: Bool
 
+    // Columns
     private let columns = [
         GridItem(.adaptive(minimum: 155), spacing: 14)
     ]
 
+    // Initialize with configured properties
     public init(
         title: String,
         artistName: String,
@@ -37,10 +35,14 @@ public struct ArtistSectionFullListView: View {
     }
 
     private var displayedAlbums: [Album] {
+        // Clean query
         let cleanQuery = FuzzyMatcher.normalize(searchQuery)
+        // Ensure preconditions are met before proceeding
         guard !cleanQuery.isEmpty else { return albums }
 
+        // Scored
         let scored: [(Album, Int)] = albums.compactMap { album in
+            // Score
             let score = FuzzyMatcher.scoreAlbum(
                 normalizedTitle: album.normalizedTitle,
                 normalizedArtist: album.normalizedArtist,
@@ -54,6 +56,7 @@ public struct ArtistSectionFullListView: View {
         }.map { $0.0 }
     }
 
+    // Main view layout structure
     public var body: some View {
         ScrollView(.vertical, showsIndicators: true) {
             VStack(alignment: .leading, spacing: 16) {

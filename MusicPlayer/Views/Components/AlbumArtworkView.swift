@@ -8,14 +8,18 @@ import AppKit
 
 /// High-performance asynchronous album artwork view with decoded image caching and typographic fallback.
 public struct AlbumArtworkView: View {
+    // Artwork key
     public let artworkKey: String?
+    // Display title
     public let title: String
+    // Subtitle
     public let subtitle: String?
     public var cornerRadius: CGFloat = 8
 
     @State private var loadedImage: Image?
     @State private var isLoading: Bool = false
 
+    // Initialize with configured properties
     public init(
         artworkKey: String?,
         title: String,
@@ -28,6 +32,7 @@ public struct AlbumArtworkView: View {
         self.cornerRadius = cornerRadius
     }
 
+    // Main view layout structure
     public var body: some View {
         ZStack {
             if let image = loadedImage {
@@ -39,6 +44,7 @@ public struct AlbumArtworkView: View {
             }
         }
         .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+        // Async lifecycle task
         .task(id: artworkKey) {
             await loadArtwork()
         }
@@ -66,7 +72,9 @@ public struct AlbumArtworkView: View {
         .aspectRatio(1.0, contentMode: .fill)
     }
 
+    // Load artwork
     private func loadArtwork() async {
+        // Ensure preconditions are met before proceeding
         guard let key = artworkKey, !key.isEmpty else {
             withAnimation(.easeInOut(duration: 0.35)) {
                 loadedImage = nil
@@ -74,6 +82,7 @@ public struct AlbumArtworkView: View {
             return
         }
 
+        // Platform img
         let platformImg = await ArtworkCacheService.shared.loadDecodedArtwork(key: key)
         if let platformImg = platformImg {
             #if canImport(UIKit)
@@ -92,10 +101,14 @@ public struct AlbumArtworkView: View {
         }
     }
 
+    // Initials
     private func initials(from text: String) -> String {
+        // Words
         let words = text.split(separator: " ")
         if words.count >= 2 {
+            // First
             let first = words[0].prefix(1)
+            // Second
             let second = words[1].prefix(1)
             return "\(first)\(second)".uppercased()
         } else if let firstWord = words.first {

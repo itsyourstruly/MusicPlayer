@@ -1,10 +1,3 @@
-//
-//  Color+Semantic.swift
-//  MusicPlayer
-//
-//  Created by Principal Apple Software Engineer on 8/24/26.
-//
-
 import SwiftUI
 
 #if canImport(UIKit)
@@ -14,7 +7,13 @@ import AppKit
 #endif
 
 /// Cross-platform semantic color extensions providing uniform styling across iOS and macOS.
+///
+/// Each property bridges to the closest native system color on the current platform,
+/// so the app adapts to light/dark mode automatically without conditional view code.
 public extension Color {
+
+    // MARK: - Backgrounds
+
     /// Primary background color matching the platform's standard canvas.
     static var appBackground: Color {
         #if canImport(UIKit)
@@ -48,6 +47,8 @@ public extension Color {
         #endif
     }
 
+    // MARK: - Fills & Separators
+
     /// Standard border and separator color.
     static var appSeparator: Color {
         #if canImport(UIKit)
@@ -64,6 +65,7 @@ public extension Color {
         #if canImport(UIKit)
         return Color(uiColor: .tertiarySystemFill)
         #elseif canImport(AppKit)
+        // quaternaryLabelColor is the closest macOS equivalent to the iOS tertiary fill token
         return Color(nsColor: .quaternaryLabelColor)
         #else
         return Color.gray.opacity(0.2)
@@ -80,6 +82,8 @@ public extension Color {
         return Color.gray.opacity(0.15)
         #endif
     }
+
+    // MARK: - Special
 
     /// Inverted background color for high-contrast foreground items.
     static var appInvertedBackground: Color {

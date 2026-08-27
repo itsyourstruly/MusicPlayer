@@ -1,10 +1,3 @@
-//
-//  TrackSignature.swift
-//  MusicPlayer
-//
-//  Created by Principal Apple Software Engineer on 8/25/26.
-//
-
 import Foundation
 
 /// Structured metadata signature capturing clean identity and contextual modifiers for accurate matching.
@@ -39,6 +32,7 @@ public struct TrackSignature: Sendable, Hashable {
     /// Local track number on disc (if available).
     public let trackNumber: Int?
 
+    // Initialize with configured properties
     public init(
         searchQuery: String,
         coreTitle: String,

@@ -1,23 +1,27 @@
-//
-//  AppSettings.swift
-//  MusicPlayer
-//
-//  Created by Principal Apple Software Engineer on 8/24/26.
-//
-
 import SwiftUI
+
+// MARK: - AppTheme
 
 /// Available overall application themes customizing backgrounds, surfaces, text, and accents.
 public enum AppTheme: String, CaseIterable, Identifiable, Codable, Sendable {
+    // Dark option
     case dark
+    // Gray option
     case gray
+    // Blue option
     case blue
+    // Green option
     case green
+    // Orange option
     case orange
+    // Red option
     case red
+    // Purple option
     case purple
+    // Teal option
     case teal
 
+    // Unique track identifier
     public var id: String { rawValue }
 
     public var displayName: String {
@@ -33,6 +37,7 @@ public enum AppTheme: String, CaseIterable, Identifiable, Codable, Sendable {
         }
     }
 
+    // Accent drives interactive controls, progress bars, and highlighted text.
     public var accentColor: Color {
         switch self {
         case .dark: return Color(red: 0.95, green: 0.95, blue: 0.96)
@@ -46,6 +51,7 @@ public enum AppTheme: String, CaseIterable, Identifiable, Codable, Sendable {
         }
     }
 
+    // Deepest layer — used for full-screen backgrounds and modal backdrops.
     public var backgroundColor: Color {
         switch self {
         case .dark: return Color(red: 0.04, green: 0.04, blue: 0.05)
@@ -59,6 +65,7 @@ public enum AppTheme: String, CaseIterable, Identifiable, Codable, Sendable {
         }
     }
 
+    // Card/sheet surfaces sit one step above the background.
     public var secondaryBackgroundColor: Color {
         switch self {
         case .dark: return Color(red: 0.12, green: 0.12, blue: 0.14)
@@ -72,6 +79,7 @@ public enum AppTheme: String, CaseIterable, Identifiable, Codable, Sendable {
         }
     }
 
+    // Third elevation — inset controls, selected rows, pressed states.
     public var tertiaryBackgroundColor: Color {
         switch self {
         case .dark: return Color(red: 0.18, green: 0.18, blue: 0.20)
@@ -98,6 +106,7 @@ public enum AppTheme: String, CaseIterable, Identifiable, Codable, Sendable {
         }
     }
 
+    // Used for subtitles, metadata labels, and secondary UI copy.
     public var secondaryTextColor: Color {
         switch self {
         case .dark: return Color(red: 0.65, green: 0.65, blue: 0.68)
@@ -111,6 +120,7 @@ public enum AppTheme: String, CaseIterable, Identifiable, Codable, Sendable {
         }
     }
 
+    // Thin horizontal rules and list dividers.
     public var separatorColor: Color {
         switch self {
         case .dark: return Color(red: 0.22, green: 0.22, blue: 0.25)
@@ -124,6 +134,7 @@ public enum AppTheme: String, CaseIterable, Identifiable, Codable, Sendable {
         }
     }
 
+    // Slightly lighter than `backgroundColor` — used when the player background style is set to `solid`.
     public var solidPlayerBackground: Color {
         switch self {
         case .dark: return Color(red: 0.08, green: 0.08, blue: 0.10)
@@ -146,12 +157,18 @@ public enum AppTheme: String, CaseIterable, Identifiable, Codable, Sendable {
 /// Backwards compatibility alias for AccentTheme
 public typealias AccentTheme = AppTheme
 
+// MARK: - PlayerBackgroundStyle
+
 /// Available background styling modes for the audio player cards.
 public enum PlayerBackgroundStyle: String, CaseIterable, Identifiable, Codable, Sendable {
+    // Album color option
     case albumColor
+    // Album blur option
     case albumBlur
+    // Solid option
     case solid
 
+    // Unique track identifier
     public var id: String { rawValue }
 
     public var displayName: String {
@@ -171,6 +188,8 @@ public enum PlayerBackgroundStyle: String, CaseIterable, Identifiable, Codable, 
     }
 }
 
+// MARK: - AppSettings
+
 /// User preferences and persistent application configuration.
 public struct AppSettings: Codable, Sendable {
     public var appTheme: AppTheme
@@ -179,7 +198,9 @@ public struct AppSettings: Codable, Sendable {
     public var autoPlayNext: Bool
     public var rememberPlaybackPosition: Bool
     public var showAudioSpecsInPlayer: Bool
+    // Enables smooth audio crossfade between consecutive tracks
     public var isCrossfadeEnabled: Bool
+    // Length of the crossfade transition in seconds
     public var crossfadeDuration: Double
     public var lastScanDate: Date?
     public var linkedFolderName: String?
@@ -188,10 +209,13 @@ public struct AppSettings: Codable, Sendable {
     public var autoHideDuplicates: Bool
     public var autoEnrichMissingArtwork: Bool
     public var writeMetadataToAudioFiles: Bool
+    // Whether selecting a song maintains the active queue context
     public var playTrackInCurrentQueue: Bool
+    // Play tap action immediately inserts song next in queue
     public var tapToPlayNext: Bool
     public var customShuffleTarget: ShuffleTarget
     public var joinedArtists: [String]
+    // Enables micro-fade when skipping tracks to prevent audio pops
     public var smoothSkippingEnabled: Bool
 
     /// Backwards compatibility property
@@ -200,6 +224,7 @@ public struct AppSettings: Codable, Sendable {
         set { appTheme = newValue }
     }
 
+    // Initialize with configured properties
     public init(
         appTheme: AppTheme = .dark,
         defaultLibraryCategory: LibraryCategory = .artists,
@@ -244,31 +269,54 @@ public struct AppSettings: Codable, Sendable {
 
     // MARK: - Custom Codable to seamlessly decode older settings JSON
     enum CodingKeys: String, CodingKey {
+        // App theme option
         case appTheme
-        case accentTheme
+        // Accent theme option
+        case accentTheme   // Legacy key retained for backwards decoding
+        // Default library category option
         case defaultLibraryCategory
+        // Player background style option
         case playerBackgroundStyle
+        // Auto play next option
         case autoPlayNext
+        // Remember playback position option
         case rememberPlaybackPosition
+        // Show audio specs in player option
         case showAudioSpecsInPlayer
+        // Is crossfade enabled option
         case isCrossfadeEnabled
+        // Crossfade duration option
         case crossfadeDuration
+        // Last scan date option
         case lastScanDate
+        // Linked folder name option
         case linkedFolderName
+        // Total scanned files option
         case totalScannedFiles
+        // Auto hide duplicates option
         case autoHideDuplicates
+        // Auto enrich missing artwork option
         case autoEnrichMissingArtwork
+        // Write metadata to audio files option
         case writeMetadataToAudioFiles
+        // Play track in current queue option
         case playTrackInCurrentQueue
+        // Tap to play next option
         case tapToPlayNext
+        // Custom shuffle target option
         case customShuffleTarget
+        // Joined artists option
         case joinedArtists
+        // Smooth skipping enabled option
         case smoothSkippingEnabled
     }
 
+    // Initialize with configured properties
     public init(from decoder: Decoder) throws {
+        // Container
         let container = try decoder.container(keyedBy: CodingKeys.self)
 
+        // Prefer the current `appTheme` key; fall back to the old `accentTheme` string and remap renamed cases.
         if let theme = try container.decodeIfPresent(AppTheme.self, forKey: .appTheme) {
             self.appTheme = theme
         } else if let oldAccent = try container.decodeIfPresent(String.self, forKey: .accentTheme) {
@@ -283,6 +331,7 @@ public struct AppSettings: Codable, Sendable {
             self.appTheme = .dark
         }
 
+        // All other settings use safe decodeIfPresent with sensible defaults so missing keys don't throw.
         self.defaultLibraryCategory = try container.decodeIfPresent(LibraryCategory.self, forKey: .defaultLibraryCategory) ?? .artists
         self.playerBackgroundStyle = try container.decodeIfPresent(PlayerBackgroundStyle.self, forKey: .playerBackgroundStyle) ?? .albumColor
         self.autoPlayNext = try container.decodeIfPresent(Bool.self, forKey: .autoPlayNext) ?? true
@@ -303,7 +352,9 @@ public struct AppSettings: Codable, Sendable {
         self.smoothSkippingEnabled = try container.decodeIfPresent(Bool.self, forKey: .smoothSkippingEnabled) ?? false
     }
 
+    // Encode
     public func encode(to encoder: Encoder) throws {
+        // Container
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(appTheme, forKey: .appTheme)
         try container.encode(defaultLibraryCategory, forKey: .defaultLibraryCategory)
@@ -327,13 +378,17 @@ public struct AppSettings: Codable, Sendable {
     }
 }
 
+// MARK: - ShuffleTarget
+
 /// Target entity for the custom Home shuffle trigger.
 public enum ShuffleTarget: Codable, Equatable, Sendable {
+    // All option
     case all
     case artist(name: String)
     case album(title: String, artist: String)
     case playlist(id: UUID, name: String)
 
+    // Controls is all
     public var isAll: Bool {
         if case .all = self { return true }
         return false
@@ -343,11 +398,13 @@ public enum ShuffleTarget: Codable, Equatable, Sendable {
         switch self {
         case .all: return "ALL"
         case .artist(let name): return name.uppercased()
+        // Display title of the song
         case .album(let title, _): return title.uppercased()
         case .playlist(_, let name): return name.uppercased()
         }
     }
 
+    /// Short category label shown alongside `displayName` in the Home shuffle button.
     public var typeLabel: String {
         switch self {
         case .all: return "LIBRARY"

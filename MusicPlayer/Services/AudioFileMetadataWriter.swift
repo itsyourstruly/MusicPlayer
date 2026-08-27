@@ -1,10 +1,3 @@
-//
-//  AudioFileMetadataWriter.swift
-//  MusicPlayer
-//
-//  Created by Principal Apple Software Engineer on 8/25/26.
-//
-
 import Foundation
 import AVFoundation
 import os
@@ -15,8 +8,10 @@ import os
 public struct AudioFileMetadataWriter: Sendable {
     public static let shared = AudioFileMetadataWriter()
 
+    // File manager
     private let fileManager = FileManager.default
 
+    // Initialize with configured properties
     public init() {}
 
     /// Safely writes updated metadata and artwork into the target audio file on disk without re-encoding audio samples.
@@ -49,9 +44,12 @@ public struct AudioFileMetadataWriter: Sendable {
     ) async -> Bool {
         // Ensure root linked folder security-scoped access is active along with target file access
         let rootURL = SecurityScopedBookmark.shared.currentFolderURL ?? SecurityScopedBookmark.shared.resolveAndAccessBookmark()
+        // Flag indicating if root accessing
         let isRootAccessing = rootURL?.startAccessingSecurityScopedResource() ?? false
+        // Flag indicating if file accessing
         let isFileAccessing = fileURL.startAccessingSecurityScopedResource()
 
+        // Cleanup upon exiting scope
         defer {
             if isFileAccessing {
                 fileURL.stopAccessingSecurityScopedResource()
@@ -67,6 +65,7 @@ public struct AudioFileMetadataWriter: Sendable {
             return false
         }
 
+        // Ext
         let ext = fileURL.pathExtension.lowercased()
 
         switch ext {
@@ -138,10 +137,14 @@ public struct AudioFileMetadataWriter: Sendable {
         discNumber: Int?,
         artworkData: Data?
     ) async -> Bool {
+        // Temp directory
         let tempDirectory = fileManager.temporaryDirectory
+        // File system location for local source url
         let localSourceURL = tempDirectory.appendingPathComponent("src_\(UUID().uuidString).m4a")
+        // File system location for temp output url
         let tempOutputURL = tempDirectory.appendingPathComponent("meta_\(UUID().uuidString).m4a")
 
+        // Cleanup upon exiting scope
         defer {
             try? fileManager.removeItem(at: localSourceURL)
             try? fileManager.removeItem(at: tempOutputURL)
@@ -155,8 +158,10 @@ public struct AudioFileMetadataWriter: Sendable {
             return false
         }
 
+        // Asset
         let asset = AVURLAsset(url: localSourceURL)
 
+        // Ensure preconditions are met before proceeding
         guard let exportSession = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetPassthrough) else {
             AppLogger.storage.error("Failed to initialize passthrough export session for \(fileURL.lastPathComponent)")
             return false
@@ -169,8 +174,8 @@ public struct AudioFileMetadataWriter: Sendable {
         // Build metadata item collection
         var metadataItems: [AVMutableMetadataItem] = []
 
-        // Title
         if !title.isEmpty {
+            // Item
             let item = AVMutableMetadataItem()
             item.identifier = .commonIdentifierTitle
             item.value = title as NSString
@@ -178,8 +183,8 @@ public struct AudioFileMetadataWriter: Sendable {
             metadataItems.append(item)
         }
 
-        // Artist
         if !artist.isEmpty {
+            // Item
             let item = AVMutableMetadataItem()
             item.identifier = .commonIdentifierArtist
             item.value = artist as NSString
@@ -187,8 +192,8 @@ public struct AudioFileMetadataWriter: Sendable {
             metadataItems.append(item)
         }
 
-        // Album
         if !album.isEmpty {
+            // Item
             let item = AVMutableMetadataItem()
             item.identifier = .commonIdentifierAlbumName
             item.value = album as NSString
@@ -198,6 +203,7 @@ public struct AudioFileMetadataWriter: Sendable {
 
         // Album Artist
         if let albArtist = albumArtist, !albArtist.isEmpty {
+            // Item
             let item = AVMutableMetadataItem()
             item.keySpace = .iTunes
             item.key = "aART" as NSString
@@ -208,6 +214,7 @@ public struct AudioFileMetadataWriter: Sendable {
 
         // Year / Release Date
         if let y = year, y > 0 {
+            // Item
             let item = AVMutableMetadataItem()
             item.identifier = .commonIdentifierCreationDate
             item.value = String(y) as NSString
@@ -217,6 +224,7 @@ public struct AudioFileMetadataWriter: Sendable {
 
         // Genre
         if let g = genre, !g.isEmpty {
+            // Item
             let item = AVMutableMetadataItem()
             item.identifier = .commonIdentifierType
             item.value = g as NSString
@@ -226,8 +234,11 @@ public struct AudioFileMetadataWriter: Sendable {
 
         // Track Number (trkn: 8-byte big-endian payload)
         if let trackNum = trackNumber, trackNum > 0 {
+            // Total
             let total = totalTracks ?? 0
+            // Track bytes
             var trackBytes: [UInt8] = [0, 0, 0, UInt8(min(255, trackNum)), 0, UInt8(min(255, total)), 0, 0]
+            // Item
             let item = AVMutableMetadataItem()
             item.keySpace = .iTunes
             item.key = "trkn" as NSString
@@ -238,7 +249,9 @@ public struct AudioFileMetadataWriter: Sendable {
 
         // Disc Number (disk: 6-byte big-endian payload)
         if let discNum = discNumber, discNum > 0 {
+            // Disc bytes
             var discBytes: [UInt8] = [0, 0, 0, UInt8(min(255, discNum)), 0, 0]
+            // Item
             let item = AVMutableMetadataItem()
             item.keySpace = .iTunes
             item.key = "disk" as NSString
@@ -249,6 +262,7 @@ public struct AudioFileMetadataWriter: Sendable {
 
         // Embedded Artwork (covr)
         if let art = artworkData, !art.isEmpty {
+            // Item
             let item = AVMutableMetadataItem()
             item.identifier = .commonIdentifierArtwork
             item.value = art as NSData
@@ -258,9 +272,11 @@ public struct AudioFileMetadataWriter: Sendable {
 
         exportSession.metadata = metadataItems
 
+        // Exported
         let exported = await exportWithTimeout(session: exportSession, timeoutSeconds: 6.0)
 
         if exported && exportSession.status == .completed {
+            // Replaced
             let replaced = coordinateReplace(targetURL: fileURL, tempURL: tempOutputURL)
             if replaced {
                 AppLogger.storage.info("Successfully updated M4A tags losslessly via NSFileCoordinator for: \(fileURL.lastPathComponent)")
@@ -270,6 +286,7 @@ public struct AudioFileMetadataWriter: Sendable {
                 return false
             }
         } else {
+            // Err
             let err = exportSession.error?.localizedDescription ?? (exported ? "Unknown error" : "Export timed out after 6.0s")
             AppLogger.storage.warning("AVAssetExportSession incomplete (\(err)) for: \(fileURL.lastPathComponent). Skipping disk write.")
             return false
@@ -293,25 +310,33 @@ public struct AudioFileMetadataWriter: Sendable {
         discNumber: Int?,
         artworkData: Data?
     ) -> Bool {
+        // Ensure preconditions are met before proceeding
         guard let fileHandle = try? FileHandle(forReadingFrom: fileURL) else {
             AppLogger.storage.error("Unable to open MP3 file for reading: \(fileURL.path)")
             return false
         }
+        // Cleanup upon exiting scope
         defer { try? fileHandle.close() }
 
+        // File size
         let fileSize = (try? fileManager.attributesOfItem(atPath: fileURL.path)[.size] as? NSNumber)?.int64Value ?? 0
+        // Ensure preconditions are met before proceeding
         guard fileSize > 10 else { return false }
 
         // Inspect existing ID3v2 header
         let headerData = (try? fileHandle.read(upToCount: 10)) ?? Data()
+        // Audio offset
         var audioOffset: UInt64 = 0
 
         if headerData.count == 10 && headerData[0] == 0x49 && headerData[1] == 0x44 && headerData[2] == 0x33 { // "ID3"
+            // Tag size
             let tagSize = (Int(headerData[6] & 0x7F) << 21) |
                           (Int(headerData[7] & 0x7F) << 14) |
                           (Int(headerData[8] & 0x7F) << 7) |
                           Int(headerData[9] & 0x7F)
+            // Flags
             let flags = headerData[5]
+            // Flag indicating if footer
             let hasFooter = (flags & 0x10) != 0
             audioOffset = UInt64(10 + tagSize + (hasFooter ? 10 : 0))
         }
@@ -352,6 +377,7 @@ public struct AudioFileMetadataWriter: Sendable {
 
         // TRCK - Track Number (e.g. "5" or "5/12")
         if let trackNum = trackNumber, trackNum > 0 {
+            // Str
             let str = (totalTracks != nil && totalTracks! > 0) ? "\(trackNum)/\(totalTracks!)" : "\(trackNum)"
             frameData.append(buildID3TextFrame(id: "TRCK", text: str))
         }
@@ -368,18 +394,22 @@ public struct AudioFileMetadataWriter: Sendable {
 
         // Construct 10-byte ID3v2.3 Header
         var tagHeader = Data([0x49, 0x44, 0x33, 0x03, 0x00, 0x00]) // "ID3", version 2.3.0, no flags
+        // Synchsafe
         let synchsafe = encodeSynchsafe(frameData.count)
         tagHeader.append(contentsOf: synchsafe)
 
         // Write new tag + original MPEG audio stream to sandbox temporary file
         let tempDirectory = fileManager.temporaryDirectory
+        // File system location for temp url
         let tempURL = tempDirectory.appendingPathComponent("meta_\(UUID().uuidString).mp3")
         fileManager.createFile(atPath: tempURL.path, contents: nil)
 
+        // Ensure preconditions are met before proceeding
         guard let writeHandle = try? FileHandle(forWritingTo: tempURL) else {
             AppLogger.storage.error("Failed to create MP3 write handle at \(tempURL.path)")
             return false
         }
+        // Cleanup upon exiting scope
         defer { try? writeHandle.close() }
 
         do {
@@ -388,10 +418,13 @@ public struct AudioFileMetadataWriter: Sendable {
 
             // Seek to audio frames and stream copy in 64KB chunks
             try fileHandle.seek(toOffset: audioOffset)
+            // Chunk size
             let chunkSize = 65536
 
             while true {
+                // Chunk
                 let chunk = try fileHandle.read(upToCount: chunkSize)
+                // Ensure preconditions are met before proceeding
                 guard let chunk = chunk, !chunk.isEmpty else { break }
                 try writeHandle.write(contentsOf: chunk)
             }
@@ -414,9 +447,13 @@ public struct AudioFileMetadataWriter: Sendable {
         }
     }
 
+    // Build id 3 text frame
     private func buildID3TextFrame(id: String, text: String) -> Data {
+        // Utf 8 bytes
         let utf8Bytes = Array(text.utf8)
+        // Payload size
         let payloadSize = 1 + utf8Bytes.count // 1 byte for encoding (0x03 = UTF-8)
+        // Frame
         var frame = Data(id.utf8)
 
         // 4-byte frame size (big endian)
@@ -434,11 +471,16 @@ public struct AudioFileMetadataWriter: Sendable {
         return frame
     }
 
+    // Build id 3 picture frame
     private func buildID3PictureFrame(imageData: Data) -> Data {
+        // Flag indicating if png
         let isPNG = imageData.count > 8 && imageData[0] == 0x89 && imageData[1] == 0x50
+        // Mime type
         let mimeType = isPNG ? "image/png" : "image/jpeg"
+        // Mime bytes
         let mimeBytes = Array(mimeType.utf8) + [0x00] // null-terminated
 
+        // Payload
         var payload = Data()
         payload.append(0x00) // Encoding: ISO-8859-1 for MIME and description
         payload.append(contentsOf: mimeBytes)
@@ -446,7 +488,9 @@ public struct AudioFileMetadataWriter: Sendable {
         payload.append(0x00) // Description: empty null-terminated string
         payload.append(imageData)
 
+        // Frame
         var frame = Data("APIC".utf8)
+        // Payload size
         let payloadSize = payload.count
         frame.append(UInt8((payloadSize >> 24) & 0xFF))
         frame.append(UInt8((payloadSize >> 16) & 0xFF))
@@ -457,6 +501,7 @@ public struct AudioFileMetadataWriter: Sendable {
         return frame
     }
 
+    // Encode synchsafe
     private func encodeSynchsafe(_ value: Int) -> [UInt8] {
         [
             UInt8((value >> 21) & 0x7F),
@@ -482,7 +527,9 @@ public struct AudioFileMetadataWriter: Sendable {
         discNumber: Int?,
         artworkData: Data?
     ) -> Bool {
+        // Ensure preconditions are met before proceeding
         guard let fileHandle = try? FileHandle(forReadingFrom: fileURL) else { return false }
+        // Cleanup upon exiting scope
         defer { try? fileHandle.close() }
 
         // Read and verify 4-byte FLAC marker: "fLaC"
@@ -492,24 +539,32 @@ public struct AudioFileMetadataWriter: Sendable {
 
         // Scan existing metadata blocks to find STREAMINFO block and start of audio frames
         var streamInfoBlock: Data? = nil
+        // Flag indicating if last
         var isLast = false
 
         while !isLast {
+            // Ensure preconditions are met before proceeding
             guard let header = try? fileHandle.read(upToCount: 4), header.count == 4 else { break }
             isLast = (header[0] & 0x80) != 0
+            // Block type
             let blockType = header[0] & 0x7F
+            // Block size
             let blockSize = (Int(header[1]) << 16) | (Int(header[2]) << 8) | Int(header[3])
 
+            // Ensure preconditions are met before proceeding
             guard let blockContent = try? fileHandle.read(upToCount: blockSize), blockContent.count == blockSize else { break }
 
             if blockType == 0 { // STREAMINFO
+                // Clean header
                 var cleanHeader = header
                 cleanHeader[0] = 0x00 // not last block
                 streamInfoBlock = cleanHeader + blockContent
             }
         }
 
+        // Audio frame offset
         let audioFrameOffset = (try? fileHandle.offset()) ?? 0
+        // Ensure preconditions are met before proceeding
         guard let streamInfo = streamInfoBlock else { return false }
 
         // Construct new VORBIS_COMMENT block (Type 4)
@@ -524,20 +579,26 @@ public struct AudioFileMetadataWriter: Sendable {
         if let tot = totalTracks, tot > 0 { comments.append("TRACKTOTAL=\(tot)") }
         if let dsc = discNumber, dsc > 0 { comments.append("DISCNUMBER=\(dsc)") }
 
+        // Vorbis payload
         let vorbisPayload = buildVorbisCommentPayload(comments: comments)
+        // Flag indicating if artwork
         let hasArtwork = (artworkData != nil && !artworkData!.isEmpty)
 
+        // Vorbis header
         var vorbisHeader = Data()
         vorbisHeader.append(hasArtwork ? 0x04 : 0x84) // Type 4, marked last if no artwork
         vorbisHeader.append(UInt8((vorbisPayload.count >> 16) & 0xFF))
         vorbisHeader.append(UInt8((vorbisPayload.count >> 8) & 0xFF))
         vorbisHeader.append(UInt8(vorbisPayload.count & 0xFF))
+        // Vorbis block
         let vorbisBlock = vorbisHeader + vorbisPayload
 
         // Construct optional PICTURE block (Type 6)
         var pictureBlock: Data? = nil
         if let art = artworkData, !art.isEmpty {
+            // Pic payload
             let picPayload = buildFLACPicturePayload(imageData: art)
+            // Pic header
             var picHeader = Data()
             picHeader.append(0x86) // Type 6, marked as last metadata block (0x80 | 6)
             picHeader.append(UInt8((picPayload.count >> 16) & 0xFF))
@@ -548,10 +609,13 @@ public struct AudioFileMetadataWriter: Sendable {
 
         // Write new FLAC container + exact audio frame copy to temporary sandbox file
         let tempDirectory = fileManager.temporaryDirectory
+        // File system location for temp url
         let tempURL = tempDirectory.appendingPathComponent("meta_\(UUID().uuidString).flac")
         fileManager.createFile(atPath: tempURL.path, contents: nil)
 
+        // Ensure preconditions are met before proceeding
         guard let writeHandle = try? FileHandle(forWritingTo: tempURL) else { return false }
+        // Cleanup upon exiting scope
         defer { try? writeHandle.close() }
 
         do {
@@ -563,9 +627,12 @@ public struct AudioFileMetadataWriter: Sendable {
             }
 
             try fileHandle.seek(toOffset: audioFrameOffset)
+            // Chunk size
             let chunkSize = 65536
             while true {
+                // Chunk
                 let chunk = try fileHandle.read(upToCount: chunkSize)
+                // Ensure preconditions are met before proceeding
                 guard let chunk = chunk, !chunk.isEmpty else { break }
                 try writeHandle.write(contentsOf: chunk)
             }
@@ -588,9 +655,13 @@ public struct AudioFileMetadataWriter: Sendable {
         }
     }
 
+    // Build vorbis comment payload
     private func buildVorbisCommentPayload(comments: [String]) -> Data {
+        // Data
         var data = Data()
+        // Vendor
         let vendor = "MusicPlayer"
+        // Vendor bytes
         let vendorBytes = Array(vendor.utf8)
 
         // Vendor string length (32-bit little endian) & string
@@ -608,6 +679,7 @@ public struct AudioFileMetadataWriter: Sendable {
         data.append(UInt8((count >> 24) & 0xFF))
 
         for c in comments {
+            // C bytes
             let cBytes = Array(c.utf8)
             data.append(UInt8(cBytes.count & 0xFF))
             data.append(UInt8((cBytes.count >> 8) & 0xFF))
@@ -618,10 +690,15 @@ public struct AudioFileMetadataWriter: Sendable {
         return data
     }
 
+    // Build flac picture payload
     private func buildFLACPicturePayload(imageData: Data) -> Data {
+        // Data
         var data = Data()
+        // Flag indicating if png
         let isPNG = imageData.count > 8 && imageData[0] == 0x89 && imageData[1] == 0x50
+        // Mime
         let mime = isPNG ? "image/png" : "image/jpeg"
+        // Mime bytes
         let mimeBytes = Array(mime.utf8)
 
         // Picture type: 3 (Cover Front) 32-bit big endian
@@ -653,10 +730,14 @@ public struct AudioFileMetadataWriter: Sendable {
 
     // MARK: - NSFileCoordinator Safe Atomic Replacement for iCloud Drive & Local Disks
 
+    // Coordinate replace
     private func coordinateReplace(targetURL: URL, tempURL: URL) -> Bool {
+        // Coordinator error
         var coordinatorError: NSError?
+        // Replace success
         var replaceSuccess = false
 
+        // Coordinator
         let coordinator = NSFileCoordinator(filePresenter: nil)
         coordinator.coordinate(
             writingItemAt: targetURL,
@@ -707,6 +788,7 @@ public struct AudioFileMetadataWriter: Sendable {
         return replaceSuccess
     }
 
+    // Export with timeout
     private func exportWithTimeout(session: AVAssetExportSession, timeoutSeconds: Double = 6.0) async -> Bool {
         await withTaskGroup(of: Bool.self) { group in
             group.addTask {
@@ -714,11 +796,13 @@ public struct AudioFileMetadataWriter: Sendable {
                 return session.status == .completed
             }
             group.addTask {
+                // Sleep ns
                 let sleepNs = UInt64(timeoutSeconds * 1_000_000_000)
                 try? await Task.sleep(nanoseconds: sleepNs)
                 session.cancelExport()
                 return false
             }
+            // First result
             let firstResult = await group.next() ?? false
             group.cancelAll()
             return firstResult

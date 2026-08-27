@@ -2,6 +2,7 @@ import SwiftUI
 
 /// Detailed album view displaying artwork, metadata tags, summary duration, and sorted tracks.
 public struct AlbumDetailView: View {
+    // Album title
     public let album: Album
     @Bindable var libraryStore: LibraryStore
     @Bindable var playerService: AudioPlayerService
@@ -18,6 +19,7 @@ public struct AlbumDetailView: View {
     @State private var albumDiffs: [MetadataDiff] = []
     @State private var navigateToOnlineSearch: Bool = false
 
+    // Initialize with configured properties
     public init(
         album: Album,
         libraryStore: LibraryStore,
@@ -29,9 +31,13 @@ public struct AlbumDetailView: View {
     }
 
     private var displayedTracks: [Track] {
+        // Clean query
         let cleanQuery = FuzzyMatcher.normalize(searchQuery)
+        // Ensure preconditions are met before proceeding
         guard !cleanQuery.isEmpty else { return album.tracks }
+        // Scored
         let scored: [(Track, Int)] = album.tracks.compactMap { track in
+            // Score
             let score = FuzzyMatcher.scoreTrack(
                 normalizedTitle: track.normalizedTitle,
                 normalizedArtist: track.normalizedArtist,
@@ -44,6 +50,7 @@ public struct AlbumDetailView: View {
         return scored.sorted { $0.1 > $1.1 }.map { $0.0 }
     }
 
+    // Main view layout structure
     public var body: some View {
         VStack(spacing: 0) {
             // Smooth Top Search Bar (Decoupled from ScrollView, zero layout jitter)
@@ -94,6 +101,7 @@ public struct AlbumDetailView: View {
                         .buttonStyle(TypographicButtonStyle(variant: .primary, size: .regular))
 
                         Button(action: {
+                            // Shuffled
                             var shuffled = album.tracks
                             shuffled.shuffle()
                             if let first = shuffled.first {
@@ -178,6 +186,7 @@ public struct AlbumDetailView: View {
                                         isTapToPlayNextEnabled: libraryStore.settings.tapToPlayNext,
                                         showAlbumSubtitle: false,
                                         onPlay: {
+                                            // Original index
                                             let originalIndex = album.tracks.firstIndex(where: { $0.id == track.id }) ?? index
                                             playerService.play(track: track, inQueue: album.tracks, startIndex: originalIndex)
                                         },
@@ -224,12 +233,15 @@ public struct AlbumDetailView: View {
                 }
             }
         }
+        // Modal presentation sheet
         .sheet(item: $selectedTrackForInfo) { track in
             TrackInfoSheetView(track: track, libraryStore: libraryStore)
         }
+        // Modal presentation sheet
         .sheet(isPresented: $showingPlaylistPicker) {
             playlistPickerSheet(for: album.tracks)
         }
+        // Modal presentation sheet
         .sheet(isPresented: $showingMetadataSheet) {
             AlbumMetadataReviewSheet(
                 album: album,
@@ -254,10 +266,12 @@ public struct AlbumDetailView: View {
         }
     }
 
+    // Check album metadata
     private func checkAlbumMetadata() {
         isCheckingMetadata = true
         showingMetadataSheet = true
         Task {
+            // Diffs
             let diffs = await libraryStore.checkMetadataForAlbum(album: album)
             await MainActor.run {
                 self.albumDiffs = diffs
@@ -267,6 +281,7 @@ public struct AlbumDetailView: View {
     }
 
 
+    // Playlist picker sheet
     private func playlistPickerSheet(for albumTracks: [Track]) -> some View {
         NavigationStack {
             List {
@@ -328,6 +343,7 @@ public struct AlbumDetailView: View {
         .presentationDragIndicator(.visible)
     }
 
+    // Toggle search
     private func toggleSearch() {
         if isSearching {
             isSearchFocused = false
@@ -416,10 +432,13 @@ public struct AlbumDetailView: View {
 
 /// Dedicated side-by-side metadata review sheet for an entire album.
 public struct AlbumMetadataReviewSheet: View {
+    // Album title
     public let album: Album
     @Bindable var libraryStore: LibraryStore
     public let diffs: [MetadataDiff]
+    // Flag indicating if loading
     public let isLoading: Bool
+    // On recheck
     public let onRecheck: () -> Void
 
     @Environment(\.dismiss) private var dismiss
@@ -429,6 +448,7 @@ public struct AlbumMetadataReviewSheet: View {
     @State private var enrichProgress: Double = 0.0
     @State private var enrichStatusText: String = ""
 
+    // Initialize with configured properties
     public init(
         album: Album,
         libraryStore: LibraryStore,
@@ -443,6 +463,7 @@ public struct AlbumMetadataReviewSheet: View {
         self.onRecheck = onRecheck
     }
 
+    // Main view layout structure
     public var body: some View {
         NavigationStack {
             Group {
@@ -525,6 +546,7 @@ public struct AlbumMetadataReviewSheet: View {
         }
     }
 
+    // Apply single
     private func applySingle(diff: MetadataDiff) {
         Task {
             _ = await libraryStore.applyOnlineMetadata(
@@ -536,7 +558,9 @@ public struct AlbumMetadataReviewSheet: View {
         }
     }
 
+    // Enrich all
     private func enrichAll() {
+        // Ensure preconditions are met before proceeding
         guard !diffs.isEmpty else { return }
         isEnrichingAll = true
         enrichProgress = 0.0

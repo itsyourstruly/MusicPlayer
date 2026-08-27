@@ -5,18 +5,22 @@ import UIKit
 
 /// High-fidelity native UIKit visual effect blur representation.
 public struct VisualEffectBlurView: UIViewRepresentable {
+    // Style
     public let style: UIBlurEffect.Style
 
+    // Initialize with configured properties
     public init(style: UIBlurEffect.Style = .systemMaterial) {
         self.style = style
     }
 
+    // Make ui view
     public func makeUIView(context: Context) -> UIVisualEffectView {
         let view = UIVisualEffectView(effect: UIBlurEffect(style: style))
         view.backgroundColor = .clear
         return view
     }
 
+    // Update ui view
     public func updateUIView(_ uiView: UIVisualEffectView, context: Context) {
         uiView.effect = UIBlurEffect(style: style)
     }
@@ -26,8 +30,10 @@ public struct VisualEffectBlurView: UIViewRepresentable {
 /// Pure native Apple iOS 26 Glass Pill container with hardware-accelerated optical blur,
 /// crystal specular highlights, and Fresnel edge refraction.
 public struct NativeGlassPillModifier: ViewModifier {
+    // Initialize with configured properties
     public init() {}
 
+    // Body
     public func body(content: Content) -> some View {
         #if os(visionOS)
         content

@@ -1,10 +1,3 @@
-//
-//  AllTracksListView.swift
-//  MusicPlayer
-//
-//  Created by Principal Apple Software Engineer on 8/24/26.
-//
-
 import SwiftUI
 
 /// Flat list view of all indexed tracks with real-time sorting and context actions.
@@ -17,11 +10,13 @@ public struct AllTracksListView: View {
     @State private var selectedArtistForNavigation: Artist? = nil
     @State private var selectedAlbumForNavigation: Album? = nil
 
+    // Initialize with configured properties
     public init(libraryStore: LibraryStore, playerService: AudioPlayerService) {
         self.libraryStore = libraryStore
         self.playerService = playerService
     }
 
+    // Main view layout structure
     public var body: some View {
         VStack(spacing: 10) {
             // Sort Selector Bar (TITLE, ARTIST, ALBUM) with enlarged tap target and reverse blue toggle
@@ -85,9 +80,11 @@ public struct AllTracksListView: View {
                 .padding(.horizontal, 16)
             }
         }
+        // Modal presentation sheet
         .sheet(item: $selectedTrackForInfo) { track in
             TrackInfoSheetView(track: track, libraryStore: libraryStore)
         }
+        // Modal presentation sheet
         .sheet(item: $selectedTrackForPlaylist) { track in
             playlistPickerSheet(for: track)
         }
@@ -99,6 +96,7 @@ public struct AllTracksListView: View {
         }
     }
 
+    // Playlist picker sheet
     private func playlistPickerSheet(for track: Track) -> some View {
         NavigationStack {
             List {

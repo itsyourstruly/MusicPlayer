@@ -1,14 +1,8 @@
-//
-//  AudioFileInfo.swift
-//  MusicPlayer
-//
-//  Created by Principal Apple Software Engineer on 8/24/26.
-//
-
 import Foundation
 
 /// Detailed audio file specification and container metadata.
 public struct AudioFileInfo: Identifiable, Codable, Sendable, Hashable {
+    /// Keyed by file path so lookups from `Track.fileInfo` remain O(1) in dictionaries.
     public var id: String { filePath }
 
     /// Full file URL string representation.
@@ -44,6 +38,7 @@ public struct AudioFileInfo: Identifiable, Codable, Sendable, Hashable {
     /// Date file was last modified on disk.
     public let modificationDate: Date?
 
+    // Initialize with configured properties
     public init(
         filePath: String,
         fileName: String,
@@ -59,6 +54,7 @@ public struct AudioFileInfo: Identifiable, Codable, Sendable, Hashable {
     ) {
         self.filePath = filePath
         self.fileName = fileName
+        // Normalise to uppercase so comparisons like `ext == "FLAC"` always work regardless of source casing.
         self.fileExtension = fileExtension.uppercased()
         self.fileSizeBytes = fileSizeBytes
         self.sampleRate = sampleRate
@@ -82,6 +78,7 @@ public struct AudioFileInfo: Identifiable, Codable, Sendable, Hashable {
         case 8:
             return "7.1 Surround (8 Ch)"
         default:
+            // Handles unusual channel counts (e.g. ambisonic or custom multi-track layouts).
             return "\(channelCount) Channels"
         }
     }

@@ -1,10 +1,3 @@
-//
-//  MetadataComparisonListView.swift
-//  MusicPlayer
-//
-//  Created by Principal Apple Software Engineer on 8/25/26.
-//
-
 import SwiftUI
 
 /// High-performance metadata review sheet presenting side-by-side comparisons of local tracks
@@ -23,8 +16,10 @@ public struct MetadataComparisonListView: View {
     @State private var enrichStatusText: String = ""
     @State private var searchText: String = ""
 
+    // Custom diffs
     private let customDiffs: [MetadataDiff]?
 
+    // Initialize with configured properties
     public init(libraryStore: LibraryStore, customDiffs: [MetadataDiff]? = nil) {
         self.libraryStore = libraryStore
         self.customDiffs = customDiffs
@@ -35,7 +30,9 @@ public struct MetadataComparisonListView: View {
     }
 
     private var filteredDiffs: [MetadataDiff] {
+        // List
         let list = activeDiffs
+        // Query
         let query = FuzzyMatcher.normalize(searchText)
         if query.isEmpty { return list }
         return list.filter { diff in
@@ -46,6 +43,7 @@ public struct MetadataComparisonListView: View {
         }
     }
 
+    // Main view layout structure
     public var body: some View {
         NavigationStack {
             Group {
@@ -242,6 +240,7 @@ public struct MetadataComparisonListView: View {
 
     // MARK: - Actions
 
+    // Apply single diff
     private func applySingleDiff(_ diff: MetadataDiff) {
         Task {
             _ = await libraryStore.applyOnlineMetadata(
@@ -253,8 +252,11 @@ public struct MetadataComparisonListView: View {
         }
     }
 
+    // Enrich all diffs
     private func enrichAllDiffs() {
+        // Diffs to enrich
         let diffsToEnrich = activeDiffs
+        // Ensure preconditions are met before proceeding
         guard !diffsToEnrich.isEmpty else { return }
 
         isEnrichingAll = true
@@ -263,6 +265,7 @@ public struct MetadataComparisonListView: View {
         enrichStatusText = "Preparing batch enrichment for \(diffsToEnrich.count) tracks..."
 
         Task {
+            // Count
             let count = await libraryStore.applyBatchOnlineMetadata(
                 diffs: diffsToEnrich,
                 preserveLocalTitleAndArtist: preserveFeatures,
@@ -288,12 +291,19 @@ public struct MetadataComparisonListView: View {
 
 /// Header summary card with batch action, feature preservation toggle, and direct disk file writing toggle.
 public struct EnrichHeaderCardView: View {
+    // Diffs count
     public let diffsCount: Int
+    // Flag indicating if background checking
     public let isBackgroundChecking: Bool
+    // Background status
     public let backgroundStatus: String
+    // Background progress
     public let backgroundProgress: Double
+    // Flag indicating if enriching
     public let isEnriching: Bool
+    // Progress
     public let progress: Double
+    // Status text
     public let statusText: String
     @Binding public var preserveFeatures: Bool
     @Binding public var writeToFile: Bool
@@ -301,6 +311,7 @@ public struct EnrichHeaderCardView: View {
 
     @Environment(\.appTheme) private var appTheme
 
+    // Initialize with configured properties
     public init(
         diffsCount: Int,
         isBackgroundChecking: Bool = false,
@@ -325,6 +336,7 @@ public struct EnrichHeaderCardView: View {
         self.onEnrichAll = onEnrichAll
     }
 
+    // Main view layout structure
     public var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .top) {
@@ -418,18 +430,23 @@ public struct EnrichHeaderCardView: View {
 
 /// Side-by-side comparison card displaying Local Track on Left and Online Track on Right.
 public struct MetadataSideBySideDiffCard: View {
+    // Diff
     public let diff: MetadataDiff
+    // Preserve features
     public let preserveFeatures: Bool
+    // On apply
     public let onApply: () -> Void
 
     @Environment(\.appTheme) private var appTheme
 
+    // Initialize with configured properties
     public init(diff: MetadataDiff, preserveFeatures: Bool, onApply: @escaping () -> Void) {
         self.diff = diff
         self.preserveFeatures = preserveFeatures
         self.onApply = onApply
     }
 
+    // Main view layout structure
     public var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             // Track Identity Header
@@ -495,15 +512,19 @@ public struct MetadataSideBySideDiffCard: View {
 
 /// Left Column: Original Local Track with full metadata list and transfer indicators.
 public struct LocalTrackComparisonColumn: View {
+    // Diff
     public let diff: MetadataDiff
+    // Preserve features
     public let preserveFeatures: Bool
     @Environment(\.appTheme) private var appTheme
 
+    // Initialize with configured properties
     public init(diff: MetadataDiff, preserveFeatures: Bool = true) {
         self.diff = diff
         self.preserveFeatures = preserveFeatures
     }
 
+    // Initialize with configured properties
     public init(track: Track) {
         self.diff = MetadataDiff(localTrack: track, onlineMetadata: OnlineTrackMetadata(title: track.title, artist: track.artist, album: track.album), preserveLocalTitleAndArtist: true)
         self.preserveFeatures = true
@@ -511,6 +532,7 @@ public struct LocalTrackComparisonColumn: View {
 
     private var track: Track { diff.localTrack }
 
+    // Main view layout structure
     public var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("ORIGINAL METADATA")
@@ -566,8 +588,10 @@ public struct LocalTrackComparisonColumn: View {
                     )
                 }
 
+                // Track num str
                 let trackNumStr: String = {
                     if let t = track.trackNumber, t > 0 {
+                        // Total str
                         let totalStr = track.totalTracks.map { " of \($0)" } ?? ""
                         return "\(t)\(totalStr)"
                     }
@@ -594,6 +618,7 @@ public struct LocalTrackComparisonColumn: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
+    // Local meta row
     private func localMetaRow(label: String, value: String, isWillUseLocal: Bool) -> some View {
         VStack(alignment: .leading, spacing: 1) {
             HStack(spacing: 4) {
@@ -618,15 +643,19 @@ public struct LocalTrackComparisonColumn: View {
 
 /// Right Column: Online Verified Track (Green for online upgrades, Orange for using local metadata).
 public struct OnlineTrackComparisonColumn: View {
+    // Diff
     public let diff: MetadataDiff
+    // Preserve features
     public let preserveFeatures: Bool
     @Environment(\.appTheme) private var appTheme
 
+    // Initialize with configured properties
     public init(diff: MetadataDiff, preserveFeatures: Bool) {
         self.diff = diff
         self.preserveFeatures = preserveFeatures
     }
 
+    // Main view layout structure
     public var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("ONLINE METADATA")
@@ -692,6 +721,7 @@ public struct OnlineTrackComparisonColumn: View {
                     )
                 }
 
+                // Flag indicating if album online
                 let isAlbumOnline = !diff.effectiveOnlineAlbum.isEmpty && diff.albumChanged
                 onlineMetaRow(
                     label: "ALBUM",
@@ -728,6 +758,7 @@ public struct OnlineTrackComparisonColumn: View {
                 }
 
                 if let t = diff.onlineMetadata.trackNumber, t > 0 && diff.trackNumberChanged {
+                    // Total str
                     let totalStr = diff.onlineMetadata.totalTracks.map { " of \($0)" } ?? ""
                     onlineMetaRow(
                         label: "TRACK #",
@@ -735,6 +766,7 @@ public struct OnlineTrackComparisonColumn: View {
                         isOnlineUpgrade: true
                     )
                 } else if let localT = diff.localTrack.trackNumber, localT > 0 {
+                    // Total str
                     let totalStr = diff.localTrack.totalTracks.map { " of \($0)" } ?? ""
                     onlineMetaRow(
                         label: "TRACK #",
@@ -756,6 +788,7 @@ public struct OnlineTrackComparisonColumn: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
+    // Online meta row
     private func onlineMetaRow(
         label: String,
         value: String,
@@ -782,6 +815,7 @@ public struct OnlineTrackComparisonColumn: View {
 
 /// Empty state view when all tracks have complete metadata.
 private struct ComparisonEmptyStateView: View {
+    // Body
     var body: some View {
         VStack(spacing: 12) {
             Text("NO PENDING ENRICHMENTS")

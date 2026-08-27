@@ -1,26 +1,23 @@
-//
-//  SecurityScopedBookmark.swift
-//  MusicPlayer
-//
-//  Created by Principal Apple Software Engineer on 8/24/26.
-//
-
 import Foundation
 import os
 
 /// Concurrency-safe manager for creating, resolving, and retaining access to security-scoped URLs on iOS & macOS.
 public final class SecurityScopedBookmark: @unchecked Sendable {
+    // User defaults key
     private let userDefaultsKey: String = "linkedMusicDirectoryBookmark"
+    // File path location
     private var activeSecurityScopedURL: URL?
     private let lock = NSLock()
 
     public static let shared = SecurityScopedBookmark()
 
+    // Initialize with configured properties
     private init() {}
 
     /// Returns the currently active linked directory URL, if any.
     public var currentFolderURL: URL? {
         lock.lock()
+        // Cleanup upon exiting scope
         defer { lock.unlock() }
         return activeSecurityScopedURL
     }
@@ -28,23 +25,29 @@ public final class SecurityScopedBookmark: @unchecked Sendable {
     /// Saves security-scoped bookmark data for a chosen folder URL.
     public func saveBookmark(for url: URL) -> Bool {
         lock.lock()
+        // Cleanup upon exiting scope
         defer { lock.unlock() }
         return saveBookmarkLocked(for: url)
     }
 
+    // Save bookmark locked
     private func saveBookmarkLocked(for url: URL) -> Bool {
         // Ensure we stop accessing any previous directory
         stopAccessingActiveURLLocked()
 
+        // Started accessing
         let startedAccessing = url.startAccessingSecurityScopedResource()
 
         do {
             #if os(macOS)
+            // Options
             let options: URL.BookmarkCreationOptions = .withSecurityScope
             #else
+            // Options
             let options: URL.BookmarkCreationOptions = []
             #endif
 
+            // Bookmark data
             let bookmarkData = try url.bookmarkData(
                 options: options,
                 includingResourceValuesForKeys: nil,
@@ -67,6 +70,7 @@ public final class SecurityScopedBookmark: @unchecked Sendable {
     /// Resolves the persisted bookmark data and starts accessing the directory if not already active.
     public func resolveAndAccessBookmark() -> URL? {
         lock.lock()
+        // Cleanup upon exiting scope
         defer { lock.unlock() }
 
         // If we already have an active URL that exists on disk, reuse it without leaking startAccessing tokens
@@ -79,18 +83,23 @@ public final class SecurityScopedBookmark: @unchecked Sendable {
             }
         }
 
+        // Ensure preconditions are met before proceeding
         guard let bookmarkData = UserDefaults.standard.data(forKey: userDefaultsKey) else {
             return nil
         }
 
+        // Flag indicating if stale
         var isStale = false
         do {
             #if os(macOS)
+            // Resolution options
             let resolutionOptions: URL.BookmarkResolutionOptions = .withSecurityScope
             #else
+            // Resolution options
             let resolutionOptions: URL.BookmarkResolutionOptions = .withoutUI
             #endif
 
+            // File system location for resolved url
             let resolvedURL = try URL(
                 resolvingBookmarkData: bookmarkData,
                 options: resolutionOptions,
@@ -116,6 +125,7 @@ public final class SecurityScopedBookmark: @unchecked Sendable {
     /// Dynamically resolves a track's file URL into a valid, reachable URL on the current file system.
     /// Handles sandbox container UUID shifts and relocated linked folders across launches.
     public func resolveAccessibleURL(for fileURL: URL) -> URL {
+        // Fm
         let fm = FileManager.default
 
         // 1. Ensure security-scoped root directory is actively accessed
@@ -131,6 +141,7 @@ public final class SecurityScopedBookmark: @unchecked Sendable {
             return fileURL
         }
 
+        // File name
         let fileName = fileURL.lastPathComponent
 
         // Case A: Direct child of folder
@@ -141,12 +152,16 @@ public final class SecurityScopedBookmark: @unchecked Sendable {
 
         // Case B: Subpath relative to folder name using path components
         let folderComponents = folderURL.pathComponents
+        // File components
         let fileComponents = fileURL.pathComponents
 
         if let folderName = folderComponents.last,
+           // Index in file
            let indexInFile = fileComponents.firstIndex(of: folderName),
            indexInFile + 1 < fileComponents.count {
+            // Sub components
             let subComponents = fileComponents[(indexInFile + 1)...]
+            // Candidate
             var candidate = folderURL
             for comp in subComponents {
                 candidate.appendPathComponent(comp)
@@ -158,9 +173,12 @@ public final class SecurityScopedBookmark: @unchecked Sendable {
 
         // Case C: Subpath matching original string pattern
         let folderName = folderURL.lastPathComponent
+        // File system location for original path
         let originalPath = fileURL.path
         if let range = originalPath.range(of: "/\(folderName)/") {
+            // Relative subpath
             let relativeSubpath = String(originalPath[range.upperBound...])
+            // Candidate
             let candidate = folderURL.appendingPathComponent(relativeSubpath)
             if fm.fileExists(atPath: candidate.path) {
                 return candidate
@@ -170,6 +188,7 @@ public final class SecurityScopedBookmark: @unchecked Sendable {
         // Case D: Shallow search in immediate subdirectories of the linked folder
         if let subdirs = try? fm.contentsOfDirectory(at: folderURL, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles]) {
             for dir in subdirs {
+                // Candidate
                 let candidate = dir.appendingPathComponent(fileName)
                 if fm.fileExists(atPath: candidate.path) {
                     return candidate
@@ -177,6 +196,7 @@ public final class SecurityScopedBookmark: @unchecked Sendable {
                 // Check 1 level deeper (e.g. Artist/Album/Song.mp3)
                 if let deepDirs = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles]) {
                     for deepDir in deepDirs {
+                        // Deep candidate
                         let deepCandidate = deepDir.appendingPathComponent(fileName)
                         if fm.fileExists(atPath: deepCandidate.path) {
                             return deepCandidate
@@ -191,8 +211,11 @@ public final class SecurityScopedBookmark: @unchecked Sendable {
 
     /// Executes a synchronous operation with guaranteed security-scoped resource access, properly closing access on exit.
     public func withSecurityScopedAccess<T>(_ operation: () throws -> T) rethrows -> T {
+        // File system location for root url
         let rootURL = resolveAndAccessBookmark()
+        // Did start
         let didStart = rootURL?.startAccessingSecurityScopedResource() ?? false
+        // Cleanup upon exiting scope
         defer {
             if didStart, let root = rootURL {
                 root.stopAccessingSecurityScopedResource()
@@ -203,8 +226,11 @@ public final class SecurityScopedBookmark: @unchecked Sendable {
 
     /// Executes an asynchronous operation with guaranteed security-scoped resource access, properly closing access on exit.
     public func withSecurityScopedAccessAsync<T>(_ operation: () async throws -> T) async rethrows -> T {
+        // File system location for root url
         let rootURL = resolveAndAccessBookmark()
+        // Did start
         let didStart = rootURL?.startAccessingSecurityScopedResource() ?? false
+        // Cleanup upon exiting scope
         defer {
             if didStart, let root = rootURL {
                 root.stopAccessingSecurityScopedResource()
@@ -216,10 +242,12 @@ public final class SecurityScopedBookmark: @unchecked Sendable {
     /// Releases security scoped access if currently active.
     public func stopAccessingActiveURL() {
         lock.lock()
+        // Cleanup upon exiting scope
         defer { lock.unlock() }
         stopAccessingActiveURLLocked()
     }
 
+    // Stop accessing active url locked
     private func stopAccessingActiveURLLocked() {
         if let active = activeSecurityScopedURL {
             active.stopAccessingSecurityScopedResource()
@@ -231,6 +259,7 @@ public final class SecurityScopedBookmark: @unchecked Sendable {
     /// Clears the saved bookmark from UserDefaults.
     public func clearSavedBookmark() {
         lock.lock()
+        // Cleanup upon exiting scope
         defer { lock.unlock() }
 
         stopAccessingActiveURLLocked()

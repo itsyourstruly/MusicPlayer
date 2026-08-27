@@ -1,10 +1,3 @@
-//
-//  PlaybackProgressBar.swift
-//  MusicPlayer
-//
-//  Created by Principal Apple Software Engineer on 8/24/26.
-//
-
 import SwiftUI
 
 /// Scrubber display style.
@@ -28,6 +21,7 @@ public struct PlaybackProgressBar: View {
     @GestureState private var isDragging: Bool = false
     @State private var dragProgress: Double? = nil
 
+    // Initialize with configured properties
     public init(
         playerService: AudioPlayerService,
         foregroundColor: Color = Color.primary,
@@ -54,6 +48,7 @@ public struct PlaybackProgressBar: View {
         return playerService.currentTime
     }
 
+    // Main view layout structure
     public var body: some View {
         switch style {
         case .compact:
@@ -82,6 +77,7 @@ public struct PlaybackProgressBar: View {
                             width: max(0, min(geometry.size.width * effectiveProgress, geometry.size.width)),
                             height: 4
                         )
+                        // Smooth UI transition animation
                         .animation(isDragging ? nil : .linear(duration: 0.22), value: effectiveProgress)
 
                     // Scrubber thumb
@@ -89,10 +85,12 @@ public struct PlaybackProgressBar: View {
                         .fill(foregroundColor)
                         .frame(width: 14, height: 14)
                         .offset(x: max(0, min(geometry.size.width * effectiveProgress - 7, geometry.size.width - 14)))
+                        // Smooth UI transition animation
                         .animation(isDragging ? nil : .linear(duration: 0.22), value: effectiveProgress)
                 }
                 .frame(height: 20)
                 .contentShape(Rectangle())
+                // Interactive drag and touch gesture handling
                 .gesture(scrubGesture(width: geometry.size.width))
             }
             .frame(height: 20)
@@ -106,6 +104,7 @@ public struct PlaybackProgressBar: View {
                 dragProgress = nil
             }
         }
+        // Triggered when view disappears
         .onDisappear {
             // Safety net: clear any stale seeking state if the view disappears mid-drag
             if playerService.isSeeking {
@@ -120,6 +119,7 @@ public struct PlaybackProgressBar: View {
     private var fullscreenScrubber: some View {
         VStack(spacing: 10) {
             GeometryReader { geometry in
+                // Track height
                 let trackHeight: CGFloat = isDragging ? 14 : 5
 
                 ZStack(alignment: .leading) {
@@ -142,18 +142,21 @@ public struct PlaybackProgressBar: View {
                 .animation(.interactiveSpring(response: 0.28, dampingFraction: 0.72), value: isDragging)
                 .frame(height: 28)
                 .contentShape(Rectangle())
+                // Interactive drag and touch gesture handling
                 .gesture(scrubGesture(width: geometry.size.width))
             }
             .frame(height: 28)
 
             timestampRow(large: true)
         }
+        // React to state changes
         .onChange(of: isDragging) { _, dragging in
             playerService.isSeeking = dragging
             if !dragging {
                 dragProgress = nil
             }
         }
+        // Triggered when view disappears
         .onDisappear {
             if playerService.isSeeking {
                 playerService.isSeeking = false
@@ -174,6 +177,7 @@ public struct PlaybackProgressBar: View {
                 dragProgress = max(0, min(value.location.x / width, 1.0))
             }
             .onEnded { value in
+                // Progress
                 let progress = max(0, min(value.location.x / width, 1.0))
                 playerService.seek(to: progress * playerService.duration)
                 // dragProgress and isSeeking are cleared by onChange(of: isDragging)

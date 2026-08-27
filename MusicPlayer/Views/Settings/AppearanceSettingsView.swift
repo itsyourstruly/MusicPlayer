@@ -1,10 +1,3 @@
-//
-//  AppearanceSettingsView.swift
-//  MusicPlayer
-//
-//  Created by Principal Apple Software Engineer on 8/24/26.
-//
-
 import SwiftUI
 
 /// Detailed appearance configuration view for selecting overall app themes,
@@ -12,10 +5,12 @@ import SwiftUI
 public struct AppearanceSettingsView: View {
     @Bindable var libraryStore: LibraryStore
 
+    // Initialize with configured properties
     public init(libraryStore: LibraryStore) {
         self.libraryStore = libraryStore
     }
 
+    // Main view layout structure
     public var body: some View {
         List {
             // MARK: - Overall App Themes (8 Distinct Themes)

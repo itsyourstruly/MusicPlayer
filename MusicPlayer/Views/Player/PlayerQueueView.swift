@@ -7,6 +7,7 @@ public struct PlayerQueueView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.appTheme) private var appTheme
 
+    // Initialize with configured properties
     public init(playerService: AudioPlayerService) {
         self.playerService = playerService
     }
@@ -16,20 +17,26 @@ public struct PlayerQueueView: View {
     }
 
     private var pastTracks: [Track] {
+        // Ensure preconditions are met before proceeding
         guard !playerService.queue.isEmpty, currentIdx > 0 else { return [] }
+        // End
         let end = min(currentIdx, playerService.queue.count)
         return Array(playerService.queue[0..<end])
     }
 
     private var upcomingTracks: [(index: Int, track: Track)] {
+        // Ensure preconditions are met before proceeding
         guard !playerService.queue.isEmpty else { return [] }
+        // Start
         let start = min(currentIdx + 1, playerService.queue.count)
+        // Ensure preconditions are met before proceeding
         guard start < playerService.queue.count else { return [] }
         return Array(playerService.queue[start..<playerService.queue.count].enumerated()).map {
             (index: start + $0.offset, track: $0.element)
         }
     }
 
+    // Main view layout structure
     public var body: some View {
         NavigationStack {
             ScrollViewReader { proxy in
@@ -175,6 +182,7 @@ public struct PlayerQueueView: View {
                     .listStyle(.plain)
                     .scrollContentBackground(.hidden)
                     .background(appTheme.backgroundColor.ignoresSafeArea())
+                    // Triggered when view appears
                     .onAppear {
                         // Scroll to Now Playing on appearance so it starts at the top
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
@@ -202,6 +210,7 @@ public struct PlayerQueueView: View {
         .presentationDragIndicator(.visible)
     }
 
+    // Now playing row
     private func nowPlayingRow(track: Track) -> some View {
         Button(action: {
             playerService.togglePlayPause()
@@ -225,6 +234,7 @@ public struct PlayerQueueView: View {
                         .clipShape(RoundedRectangle(cornerRadius: 2.5, style: .continuous))
                         .offset(x: 2, y: 2)
                         .contentTransition(.opacity)
+                        // Smooth UI transition animation
                         .animation(.easeInOut(duration: 0.22), value: playerService.playbackStatus.isPlaying)
                 }
 
@@ -254,6 +264,7 @@ public struct PlayerQueueView: View {
         .buttonStyle(.plain)
     }
 
+    // Past track row
     private func pastTrackRow(track: Track, queueIndex: Int) -> some View {
         Button(action: {
             playerService.play(track: track, inQueue: playerService.queue, startIndex: queueIndex)
@@ -293,6 +304,7 @@ public struct PlayerQueueView: View {
         .buttonStyle(.plain)
     }
 
+    // Play next track row
     private func playNextTrackRow(track: Track, index: Int) -> some View {
         Button(action: {
             playerService.playFromPlayNext(at: index)
@@ -351,6 +363,7 @@ public struct PlayerQueueView: View {
         .buttonStyle(.plain)
     }
 
+    // Upcoming track row
     private func upcomingTrackRow(track: Track, queueIndex: Int) -> some View {
         Button(action: {
             playerService.play(track: track, inQueue: playerService.queue, startIndex: queueIndex)
@@ -409,21 +422,29 @@ public struct PlayerQueueView: View {
         .buttonStyle(.plain)
     }
 
+    // Handle move upcoming
     private func handleMoveUpcoming(source: IndexSet, destination: Int) {
+        // Start
         let start = (playerService.currentIndex ?? 0) + 1
+        // Adjusted source
         var adjustedSource = IndexSet()
         for idx in source {
             adjustedSource.insert(start + idx)
         }
+        // Adjusted destination
         let adjustedDestination = start + destination
         withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
             playerService.moveQueueItem(fromOffsets: adjustedSource, toOffset: adjustedDestination)
         }
     }
 
+    // Clear upcoming
     private func clearUpcoming() {
+        // Ensure preconditions are met before proceeding
         guard !playerService.queue.isEmpty, let current = playerService.currentTrack else { return }
+        // Current idx
         let currentIdx = playerService.currentIndex ?? 0
+        // Preserved
         let preserved = Array(playerService.queue[0...min(currentIdx, playerService.queue.count - 1)])
         playerService.play(track: current, inQueue: preserved, startIndex: currentIdx)
     }

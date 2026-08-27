@@ -1,10 +1,3 @@
-//
-//  MiniPlayerView.swift
-//  MusicPlayer
-//
-//  Created by Principal Apple Software Engineer on 8/24/26.
-//
-
 import SwiftUI
 
 /// Flat, dynamic album-colored miniplayer with pure text prominent controls,
@@ -19,6 +12,7 @@ public struct MiniPlayerView: View {
     )
     @State private var dragOffset: CGSize = .zero
 
+    // Initialize with configured properties
     public init(
         playerService: AudioPlayerService,
         onExpand: @escaping () -> Void
@@ -27,6 +21,7 @@ public struct MiniPlayerView: View {
         self.onExpand = onExpand
     }
 
+    // Main view layout structure
     public var body: some View {
         if let track = playerService.currentTrack {
             HStack(spacing: 12) {
@@ -92,13 +87,16 @@ public struct MiniPlayerView: View {
                 HapticFeedback.lightImpact()
                 onExpand()
             }
+            // Interactive drag and touch gesture handling
             .gesture(
                 DragGesture(minimumDistance: 15)
                     .onChanged { value in
                         dragOffset = value.translation
                     }
                     .onEnded { value in
+                        // H
                         let h = value.translation.height
+                        // W
                         let w = value.translation.width
 
                         // Swipe Up -> Expand Full Screen
@@ -135,7 +133,9 @@ public struct MiniPlayerView: View {
                         }
                     }
             )
+            // Async lifecycle task
             .task(id: track.artworkKey) {
+                // New palette
                 let newPalette = await ArtworkColorExtractor.shared.extractPrimaryColor(
                     for: track.artworkKey,
                     fallback: Color.appSecondaryBackground

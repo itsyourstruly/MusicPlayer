@@ -6,16 +6,19 @@ public struct ArtistsListView: View {
     @Bindable var playerService: AudioPlayerService
     @Environment(\.appTheme) private var appTheme
 
+    // Columns
     private let columns = [
         GridItem(.flexible(), spacing: 10),
         GridItem(.flexible(), spacing: 10)
     ]
 
+    // Initialize with configured properties
     public init(libraryStore: LibraryStore, playerService: AudioPlayerService) {
         self.libraryStore = libraryStore
         self.playerService = playerService
     }
 
+    // Main view layout structure
     public var body: some View {
         VStack(spacing: 10) {
             // Sort Selector Bar (NAME, MOST) with enlarged hit target and reverse blue toggle

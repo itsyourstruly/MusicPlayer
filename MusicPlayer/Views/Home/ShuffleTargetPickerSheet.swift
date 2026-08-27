@@ -1,10 +1,3 @@
-//
-//  ShuffleTargetPickerSheet.swift
-//  MusicPlayer
-//
-//  Created by Principal Apple Software Engineer on 8/26/26.
-//
-
 import SwiftUI
 
 /// Sheet allowing the user to select an Artist, Album, or Playlist to customize the Home Shuffle button target.
@@ -18,6 +11,7 @@ public struct ShuffleTargetPickerSheet: View {
     @State private var selectedTargetForConfirmation: ShuffleTarget? = nil
     @State private var showConfirmationAlert: Bool = false
 
+    // Initialize with configured properties
     public init(libraryStore: LibraryStore) {
         self.libraryStore = libraryStore
     }
@@ -27,6 +21,7 @@ public struct ShuffleTargetPickerSheet: View {
     }
 
     private var filteredArtists: [Artist] {
+        // Ensure preconditions are met before proceeding
         guard !cleanQuery.isEmpty else { return libraryStore.artists }
         return libraryStore.artists.filter {
             FuzzyMatcher.scoreArtist(normalizedName: $0.normalizedName, cleanQuery: cleanQuery) > 0
@@ -34,6 +29,7 @@ public struct ShuffleTargetPickerSheet: View {
     }
 
     private var filteredAlbums: [Album] {
+        // Ensure preconditions are met before proceeding
         guard !cleanQuery.isEmpty else { return libraryStore.albums }
         return libraryStore.albums.filter {
             FuzzyMatcher.scoreAlbum(normalizedTitle: $0.normalizedTitle, normalizedArtist: $0.normalizedArtist, cleanQuery: cleanQuery) > 0
@@ -41,12 +37,14 @@ public struct ShuffleTargetPickerSheet: View {
     }
 
     private var filteredPlaylists: [Playlist] {
+        // Ensure preconditions are met before proceeding
         guard !cleanQuery.isEmpty else { return libraryStore.playlists }
         return libraryStore.playlists.filter {
             FuzzyMatcher.evaluateScore(cleanText: $0.normalizedName, cleanQuery: cleanQuery) > 0
         }
     }
 
+    // Main view layout structure
     public var body: some View {
         NavigationStack {
             ScrollView(.vertical, showsIndicators: true) {
@@ -156,6 +154,7 @@ public struct ShuffleTargetPickerSheet: View {
         }
     }
 
+    // Artist row
     private func artistRow(artist: Artist) -> some View {
         Button(action: {
             selectedTargetForConfirmation = .artist(name: artist.name)
@@ -186,6 +185,7 @@ public struct ShuffleTargetPickerSheet: View {
         .buttonStyle(.plain)
     }
 
+    // Album row
     private func albumRow(album: Album) -> some View {
         Button(action: {
             selectedTargetForConfirmation = .album(title: album.title, artist: album.artist)
@@ -218,6 +218,7 @@ public struct ShuffleTargetPickerSheet: View {
         .buttonStyle(.plain)
     }
 
+    // Playlist row
     private func playlistRow(playlist: Playlist) -> some View {
         Button(action: {
             selectedTargetForConfirmation = .playlist(id: playlist.id, name: playlist.name)

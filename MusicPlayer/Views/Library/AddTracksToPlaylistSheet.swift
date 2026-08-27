@@ -2,6 +2,7 @@ import SwiftUI
 
 /// Modal sheet for searching all library tracks and quickly adding/removing them from a playlist.
 public struct AddTracksToPlaylistSheet: View {
+    // Unique identifier for playlist id
     public let playlistID: UUID
     @Bindable var libraryStore: LibraryStore
     @Environment(\.dismiss) private var dismiss
@@ -9,6 +10,7 @@ public struct AddTracksToPlaylistSheet: View {
 
     @State private var searchQuery: String = ""
 
+    // Initialize with configured properties
     public init(playlistID: UUID, libraryStore: LibraryStore) {
         self.playlistID = playlistID
         self.libraryStore = libraryStore
@@ -19,10 +21,14 @@ public struct AddTracksToPlaylistSheet: View {
     }
 
     private var filteredTracks: [Track] {
+        // Clean query
         let cleanQuery = FuzzyMatcher.normalize(searchQuery)
+        // Ensure preconditions are met before proceeding
         guard !cleanQuery.isEmpty else { return libraryStore.tracks }
 
+        // Scored
         let scored: [(Track, Int)] = libraryStore.tracks.compactMap { track in
+            // Score
             let score = FuzzyMatcher.scoreTrack(
                 normalizedTitle: track.normalizedTitle,
                 normalizedArtist: track.normalizedArtist,
@@ -35,6 +41,7 @@ public struct AddTracksToPlaylistSheet: View {
         return scored.sorted { $0.1 > $1.1 }.map { $0.0 }
     }
 
+    // Main view layout structure
     public var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
@@ -76,6 +83,7 @@ public struct AddTracksToPlaylistSheet: View {
                 } else {
                     List {
                         ForEach(filteredTracks) { track in
+                            // Flag indicating if added
                             let isAdded = currentPlaylist?.trackIDs.contains(track.id) ?? false
                             HStack(spacing: 12) {
                                 AlbumArtworkView(

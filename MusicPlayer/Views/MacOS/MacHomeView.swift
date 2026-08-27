@@ -1,24 +1,25 @@
-//
-//  MacHomeView.swift
-//  MusicPlayer
-//
-//  Created by Principal Apple Software Engineer on 8/26/26.
-//
-
 import SwiftUI
 
 /// Desktop-tailored Home dashboard with minimalist quick actions, pinned items, and library metrics.
 public struct MacHomeView: View {
+    // Library store
     public let libraryStore: LibraryStore
+    // Player service
     public let playerService: AudioPlayerService
+    // On navigate to playlist
     public let onNavigateToPlaylist: (Playlist) -> Void
+    // On navigate to album
     public let onNavigateToAlbum: (Album) -> Void
+    // On navigate to search
     public let onNavigateToSearch: () -> Void
+    // On navigate to discovery
     public let onNavigateToDiscovery: () -> Void
+    // On open settings
     public let onOpenSettings: () -> Void
 
     @Environment(\.appTheme) private var appTheme
 
+    // Initialize with configured properties
     public init(
         libraryStore: LibraryStore,
         playerService: AudioPlayerService,
@@ -37,6 +38,7 @@ public struct MacHomeView: View {
         self.onOpenSettings = onOpenSettings
     }
 
+    // Main view layout structure
     public var body: some View {
         ScrollView(.vertical, showsIndicators: true) {
             LazyVStack(alignment: .leading, spacing: 24) {
@@ -116,6 +118,7 @@ public struct MacHomeView: View {
                 subtitle: "\(libraryStore.tracks.count) tracks",
                 isAccent: true
             ) {
+                // All
                 var all = libraryStore.tracks
                 all.shuffle()
                 if let first = all.first {
@@ -154,6 +157,7 @@ public struct MacHomeView: View {
         }
     }
 
+    // Quick action button
     private func quickActionButton(
         title: String,
         subtitle: String,
@@ -236,9 +240,11 @@ public struct MacHomeView: View {
         }
     }
 
+    // Pinned item card
     private func pinnedItemCard(item: PinnedItem) -> some View {
         Button(action: {
             switch item {
+            // Album or release title
             case .album(let album):
                 onNavigateToAlbum(album)
             case .playlist(let playlist):
@@ -309,6 +315,7 @@ public struct MacHomeView: View {
         }
     }
 
+    // Stat card
     private func statCard(title: String, value: String) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(title)

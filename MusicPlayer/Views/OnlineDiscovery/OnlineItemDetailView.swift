@@ -1,10 +1,3 @@
-//
-//  OnlineItemDetailView.swift
-//  MusicPlayer
-//
-//  Created by Principal Apple Software Engineer on 8/25/26.
-//
-
 import SwiftUI
 import AVFoundation
 
@@ -14,25 +7,31 @@ import AVFoundation
 public final class OnlineAudioPreviewManager {
     public static let shared = OnlineAudioPreviewManager()
 
+    // Controls is playing
     public var isPlaying: Bool = false
+    // Unique identifier
     public var currentTrackID: String? = nil
     public var progress: Double = 0.0
 
     private var player: AVPlayer? = nil
     private var timeObserver: Any? = nil
 
+    // Initialize with configured properties
     private init() {}
 
+    // Toggle preview
     public func togglePreview(track: OnlineTrackItem) {
         if currentTrackID == track.id && isPlaying {
             pause()
             return
         }
 
+        // Ensure preconditions are met before proceeding
         guard let previewURL = track.previewURL else { return }
         play(url: previewURL, trackID: track.id)
     }
 
+    // Play
     public func play(url: URL, trackID: String) {
         stop()
 
@@ -40,6 +39,7 @@ public final class OnlineAudioPreviewManager {
         isPlaying = true
         progress = 0.0
 
+        // Player item
         let playerItem = AVPlayerItem(url: url)
         player = AVPlayer(playerItem: playerItem)
 
@@ -48,6 +48,7 @@ public final class OnlineAudioPreviewManager {
             forInterval: CMTime(seconds: 0.1, preferredTimescale: 600),
             queue: .main
         ) { [weak self] time in
+            // Ensure preconditions are met before proceeding
             guard let self = self, let duration = self.player?.currentItem?.duration.seconds, duration > 0 else { return }
             self.progress = min(1.0, time.seconds / duration)
         }
@@ -63,11 +64,13 @@ public final class OnlineAudioPreviewManager {
         player?.play()
     }
 
+    // Pause
     public func pause() {
         player?.pause()
         isPlaying = false
     }
 
+    // Stop
     public func stop() {
         if let observer = timeObserver {
             player?.removeTimeObserver(observer)
@@ -83,22 +86,29 @@ public final class OnlineAudioPreviewManager {
 
 // MARK: - Artist Detail View (Matches Library ArtistDetailView Layout)
 
+// OnlineArtistDetailView representation
 public struct OnlineArtistDetailView: View {
+    // Primary artist name
     let artist: OnlineArtistItem
     @State private var detailedArtist: OnlineArtistItem? = nil
     @State private var isLoading: Bool = true
     @State private var previewManager = OnlineAudioPreviewManager.shared
     @Environment(\.appTheme) private var appTheme
 
+    // Initialize with configured properties
     public init(artist: OnlineArtistItem) {
         self.artist = artist
     }
 
     private var ownAlbums: [OnlineAlbumItem] {
+        // Ensure preconditions are met before proceeding
         guard let list = detailedArtist?.albums else { return artist.albums }
+        // Albums
         let albums = list.filter { ($0.trackCount ?? 1) > 2 }
         return albums.sorted { a, b in
+            // Y a
             let yA = a.releaseYear ?? 0
+            // Y b
             let yB = b.releaseYear ?? 0
             if yA != yB { return yA > yB }
             return a.title < b.title
@@ -106,10 +116,14 @@ public struct OnlineArtistDetailView: View {
     }
 
     private var ownSingles: [OnlineAlbumItem] {
+        // Ensure preconditions are met before proceeding
         guard let list = detailedArtist?.albums else { return [] }
+        // Singles
         let singles = list.filter { ($0.trackCount ?? 1) <= 2 }
         return singles.sorted { a, b in
+            // Y a
             let yA = a.releaseYear ?? 0
+            // Y b
             let yB = b.releaseYear ?? 0
             if yA != yB { return yA > yB }
             return a.title < b.title
@@ -120,6 +134,7 @@ public struct OnlineArtistDetailView: View {
         detailedArtist?.featuredAlbums ?? artist.featuredAlbums
     }
 
+    // Main view layout structure
     public var body: some View {
         ScrollView(.vertical, showsIndicators: false) {
             VStack(alignment: .leading, spacing: 20) {
@@ -247,10 +262,12 @@ public struct OnlineArtistDetailView: View {
         .background(appTheme.backgroundColor.ignoresSafeArea())
         .navigationTitle(artist.name)
         .navigationBarTitleDisplayMode(.inline)
+        // Async lifecycle task
         .task {
             self.detailedArtist = await OnlineDiscoveryService.shared.fetchArtistDetails(artist: artist)
             self.isLoading = false
         }
+        // Triggered when view disappears
         .onDisappear {
             previewManager.stop()
         }
@@ -266,8 +283,11 @@ public struct OnlineArtistDetailView: View {
                 .font(.system(size: 24, weight: .bold))
                 .foregroundStyle(Color.primary)
 
+            // Album count
             let albumCount = ownAlbums.count
+            // Single count
             let singleCount = ownSingles.count
+            // Feat count
             let featCount = featuredAlbums.count
             Text("\(albumCount) ALBUMS · \(singleCount) SINGLES · \(featCount) FEATURED")
                 .font(.system(size: 13, design: .monospaced))
@@ -275,6 +295,7 @@ public struct OnlineArtistDetailView: View {
         }
     }
 
+    // Album card
     private func albumCard(album: OnlineAlbumItem) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             AsyncImage(url: album.artworkURL) { phase in
@@ -309,7 +330,9 @@ public struct OnlineArtistDetailView: View {
 
 // MARK: - Album Detail View (Matches Library AlbumDetailView Layout)
 
+// OnlineAlbumDetailView representation
 public struct OnlineAlbumDetailView: View {
+    // Album title
     let album: OnlineAlbumItem
     @State private var detailedAlbum: OnlineAlbumItem? = nil
     @State private var isLoading: Bool = true
@@ -322,6 +345,7 @@ public struct OnlineAlbumDetailView: View {
     @State private var isPreparingEnrichment: Bool = false
     @State private var showNoLocalTracksAlert: Bool = false
 
+    // Initialize with configured properties
     public init(album: OnlineAlbumItem) {
         self.album = album
     }
@@ -334,6 +358,7 @@ public struct OnlineAlbumDetailView: View {
         currentAlbum.tracklist.reduce(0) { $0 + $1.duration }
     }
 
+    // Main view layout structure
     public var body: some View {
         ScrollView(.vertical, showsIndicators: false) {
             VStack(alignment: .leading, spacing: 20) {
@@ -368,6 +393,7 @@ public struct OnlineAlbumDetailView: View {
                         if let label = currentAlbum.recordLabel, !label.isEmpty {
                             specRow(label: "RECORD LABEL", value: label)
                         }
+                        // Musical genre classification
                         if let genre = currentAlbum.genre, !genre.isEmpty {
                             specRow(label: "GENRE", value: genre)
                         }
@@ -435,6 +461,7 @@ public struct OnlineAlbumDetailView: View {
                 .buttonStyle(.plain)
             }
         }
+        // Modal presentation sheet
         .sheet(isPresented: $showingEnrichmentSheet) {
             if let store = libraryStore {
                 MetadataComparisonListView(libraryStore: store, customDiffs: albumDiffs)
@@ -445,19 +472,24 @@ public struct OnlineAlbumDetailView: View {
         } message: {
             Text("No local audio files for \"\(currentAlbum.title)\" by \"\(currentAlbum.artistName)\" were found in your library.")
         }
+        // Async lifecycle task
         .task {
             self.detailedAlbum = await OnlineDiscoveryService.shared.fetchAlbumDetails(album: album)
             self.isLoading = false
         }
+        // Triggered when view disappears
         .onDisappear {
             previewManager.stop()
         }
     }
 
+    // Prepare enrichment
     private func prepareEnrichment() {
+        // Ensure preconditions are met before proceeding
         guard let store = libraryStore else { return }
         isPreparingEnrichment = true
         Task {
+            // Diffs
             let diffs = await store.checkMetadataForOnlineAlbum(title: currentAlbum.title, artist: currentAlbum.artistName)
             await MainActor.run {
                 self.isPreparingEnrichment = false
@@ -507,6 +539,7 @@ public struct OnlineAlbumDetailView: View {
                 .buttonStyle(.plain)
 
                 VStack(alignment: .leading, spacing: 2) {
+                    // Count
                     let count = currentAlbum.trackCount ?? (currentAlbum.tracklist.isEmpty ? nil : currentAlbum.tracklist.count)
                     if let count = count {
                         Text("\(count) TRACKS")
@@ -526,6 +559,7 @@ public struct OnlineAlbumDetailView: View {
         }
     }
 
+    // Track row
     private func trackRow(track: OnlineTrackItem) -> some View {
         HStack(spacing: 12) {
             // Track artwork thumbnail
@@ -583,6 +617,7 @@ public struct OnlineAlbumDetailView: View {
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 
+    // Spec row
     private func specRow(label: String, value: String) -> some View {
         HStack(alignment: .top) {
             Text(label)
@@ -599,16 +634,20 @@ public struct OnlineAlbumDetailView: View {
 
 // MARK: - Track Detail View
 
+// OnlineTrackDetailView representation
 public struct OnlineTrackDetailView: View {
+    // Track
     let track: OnlineTrackItem
     @State private var detailedTrack: OnlineTrackItem? = nil
     @State private var previewManager = OnlineAudioPreviewManager.shared
     @Environment(\.appTheme) private var appTheme
 
+    // Initialize with configured properties
     public init(track: OnlineTrackItem) {
         self.track = track
     }
 
+    // Main view layout structure
     public var body: some View {
         ScrollView(.vertical, showsIndicators: false) {
             VStack(alignment: .leading, spacing: 20) {
@@ -728,6 +767,7 @@ public struct OnlineTrackDetailView: View {
                             specRow(label: "GENRE", value: g)
                         }
                         if let t = (detailedTrack?.trackNumber ?? track.trackNumber), t > 0 {
+                            // Total
                             let total = (detailedTrack?.totalTracks ?? track.totalTracks).map { " of \($0)" } ?? ""
                             specRow(label: "TRACK NUMBER", value: "\(t)\(total)")
                         }
@@ -748,14 +788,17 @@ public struct OnlineTrackDetailView: View {
         .background(appTheme.backgroundColor.ignoresSafeArea())
         .navigationTitle(track.title)
         .navigationBarTitleDisplayMode(.inline)
+        // Async lifecycle task
         .task {
             self.detailedTrack = await OnlineDiscoveryService.shared.fetchTrackDetails(track: track)
         }
+        // Triggered when view disappears
         .onDisappear {
             previewManager.stop()
         }
     }
 
+    // Spec row
     private func specRow(label: String, value: String) -> some View {
         HStack(alignment: .top) {
             Text(label)

@@ -5,12 +5,14 @@ public struct HomeView: View {
     @Bindable var libraryStore: LibraryStore
     @Bindable var playerService: AudioPlayerService
     public let onNavigateToPlaylist: (Playlist) -> Void
+    // On open settings
     public let onOpenSettings: () -> Void
 
     @State private var isStatsExpanded: Bool = false
     @State private var selectedAlbumForNavigation: Album? = nil
     @State private var showingShuffleTargetPicker: Bool = false
 
+    // Initialize with configured properties
     public init(
         libraryStore: LibraryStore,
         playerService: AudioPlayerService,
@@ -23,6 +25,7 @@ public struct HomeView: View {
         self.onOpenSettings = onOpenSettings
     }
 
+    // Main view layout structure
     public var body: some View {
         ScrollView(.vertical, showsIndicators: false) {
             VStack(alignment: .leading, spacing: 24) {
@@ -55,6 +58,7 @@ public struct HomeView: View {
         .background(libraryStore.settings.appTheme.backgroundColor.ignoresSafeArea())
         .navigationTitle("HOME")
         .navigationBarTitleDisplayMode(.large)
+        // Modal presentation sheet
         .sheet(isPresented: $showingShuffleTargetPicker) {
             ShuffleTargetPickerSheet(libraryStore: libraryStore)
         }
@@ -94,10 +98,13 @@ public struct HomeView: View {
         case .all:
             return libraryStore.tracks
         case .artist(let name):
+            // Unique identifier for artist track i ds
             let artistTrackIDs = Set(libraryStore.findArtist(name: name)?.tracks.map { $0.id } ?? [])
             return libraryStore.tracks.filter { artistTrackIDs.contains($0.id) || $0.artist.localizedCaseInsensitiveContains(name) }
+        // Display title of the song
         case .album(let title, let artist):
             return libraryStore.findAlbum(title: title, artist: artist)?.tracks ?? []
+        // Unique track identifier
         case .playlist(let id, _):
             return libraryStore.tracks(forPlaylistID: id)
         }
@@ -109,6 +116,7 @@ public struct HomeView: View {
             return "SHUFFLE ALL"
         case .artist(let name):
             return "SHUFFLE \(name.uppercased())"
+        // Display title of the song
         case .album(let title, _):
             return "SHUFFLE \(title.uppercased())"
         case .playlist(_, let name):
@@ -117,6 +125,7 @@ public struct HomeView: View {
     }
 
     private var shuffleButtonSubtitle: String {
+        // Count
         let count = customShuffleTracks.count
         switch libraryStore.settings.customShuffleTarget {
         case .all:
@@ -134,7 +143,9 @@ public struct HomeView: View {
         HStack(spacing: 12) {
             // Shuffle All button (with long-press context menu to SET custom target)
             Button(action: {
+                // Pool
                 var pool = customShuffleTracks
+                // Ensure preconditions are met before proceeding
                 guard !pool.isEmpty else { return }
                 pool.shuffle()
                 if let first = pool.first {
@@ -237,6 +248,7 @@ public struct HomeView: View {
         }
     }
 
+    // Stat row
     private func statRow(label: String, value: String) -> some View {
         HStack {
             Text(label)

@@ -4,6 +4,7 @@ import UniformTypeIdentifiers
 
 /// Playlist detail view providing album-style header with tap-to-edit cover and name, track sequencing, and playback.
 public struct PlaylistDetailView: View {
+    // Unique identifier for playlist id
     public let playlistID: UUID
     @Bindable var libraryStore: LibraryStore
     @Bindable var playerService: AudioPlayerService
@@ -23,6 +24,7 @@ public struct PlaylistDetailView: View {
     @State private var selectedArtistForNavigation: Artist? = nil
     @State private var selectedAlbumForNavigation: Album? = nil
 
+    // Initialize with configured properties
     public init(
         playlistID: UUID,
         libraryStore: LibraryStore,
@@ -38,7 +40,9 @@ public struct PlaylistDetailView: View {
     }
 
     private var playlistTracks: [Track] {
+        // Ensure preconditions are met before proceeding
         guard let pl = currentPlaylist else { return [] }
+        // Raw
         let raw = libraryStore.tracks(for: pl)
         switch selectedSortCriteria {
         case .custom:
@@ -51,7 +55,9 @@ public struct PlaylistDetailView: View {
             return raw.sorted { $0.album.localizedCaseInsensitiveCompare($1.album) == .orderedAscending }
         case .favorite:
             return raw.sorted {
+                // P 1
                 let p1 = libraryStore.playCount(for: $0.id)
+                // P 2
                 let p2 = libraryStore.playCount(for: $1.id)
                 if p1 != p2 { return p1 > p2 }
                 return $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending
@@ -74,9 +80,13 @@ public struct PlaylistDetailView: View {
     }
 
     private var displayedTracks: [Track] {
+        // Clean query
         let cleanQuery = FuzzyMatcher.normalize(searchQuery)
+        // Ensure preconditions are met before proceeding
         guard !cleanQuery.isEmpty else { return playlistTracks }
+        // Scored
         let scored: [(Track, Int)] = playlistTracks.compactMap { track in
+            // Score
             let score = FuzzyMatcher.scoreTrack(
                 normalizedTitle: track.normalizedTitle,
                 normalizedArtist: track.normalizedArtist,
@@ -89,6 +99,7 @@ public struct PlaylistDetailView: View {
         return scored.sorted { $0.1 > $1.1 }.map { $0.0 }
     }
 
+    // Main view layout structure
     public var body: some View {
         if let playlist = currentPlaylist {
             VStack(spacing: 0) {
@@ -141,6 +152,7 @@ public struct PlaylistDetailView: View {
                             .disabled(playlistTracks.isEmpty)
 
                             Button(action: {
+                                // Shuffled
                                 var shuffled = playlistTracks
                                 shuffled.shuffle()
                                 if let first = shuffled.first {
@@ -323,6 +335,7 @@ public struct PlaylistDetailView: View {
                                                 isTapToPlayNextEnabled: libraryStore.settings.tapToPlayNext,
                                                 isSwipeDisabled: isEditMode,
                                                 onPlay: {
+                                                    // Original index
                                                     let originalIndex = playlistTracks.firstIndex(where: { $0.id == track.id }) ?? index
                                                     playerService.play(track: track, inQueue: playlistTracks, startIndex: originalIndex)
                                                 },
@@ -359,6 +372,7 @@ public struct PlaylistDetailView: View {
                                                     .foregroundStyle(draggingTrackID == track.id ? Color.blue : .secondary)
                                                     .frame(width: 44, height: 44)
                                                     .contentShape(Rectangle())
+                                                    // Interactive drag and touch gesture handling
                                                     .gesture(
                                                         DragGesture(coordinateSpace: .global)
                                                             .onChanged { gesture in
@@ -380,6 +394,7 @@ public struct PlaylistDetailView: View {
                                         )
                                         .zIndex(draggingTrackID == track.id ? 10 : 1)
                                         .onDrag {
+                                            // Ensure preconditions are met before proceeding
                                             guard isEditMode && selectedSortCriteria == .custom else {
                                                 return NSItemProvider()
                                             }
@@ -427,9 +442,11 @@ public struct PlaylistDetailView: View {
                     }
                 }
             }
+            // Modal presentation sheet
             .sheet(isPresented: $showingAddTracksSheet) {
                 AddTracksToPlaylistSheet(playlistID: playlist.id, libraryStore: libraryStore)
             }
+            // Modal presentation sheet
             .sheet(isPresented: $showingEditSheet) {
                 editPlaylistSheet(for: playlist)
             }
@@ -453,6 +470,7 @@ public struct PlaylistDetailView: View {
         }
     }
 
+    // Handle drag changed
     private func handleDragChanged(for track: Track, at currentIndex: Int, translationY: CGFloat) {
         if draggingTrackID != track.id {
             draggingTrackID = track.id
@@ -460,12 +478,15 @@ public struct PlaylistDetailView: View {
             HapticFeedback.lightImpact()
         }
 
+        // Delta
         let delta = translationY - accumulatedDragY
+        // Step threshold
         let stepThreshold: CGFloat = 36.0
 
         if delta > stepThreshold {
             // Dragging down
             if currentIndex < displayedTracks.count - 1 {
+                // Target track
                 let targetTrack = displayedTracks[currentIndex + 1]
                 accumulatedDragY += 46.0
                 HapticFeedback.lightImpact()
@@ -476,6 +497,7 @@ public struct PlaylistDetailView: View {
         } else if delta < -stepThreshold {
             // Dragging up
             if currentIndex > 0 {
+                // Target track
                 let targetTrack = displayedTracks[currentIndex - 1]
                 accumulatedDragY -= 46.0
                 HapticFeedback.lightImpact()
@@ -486,6 +508,7 @@ public struct PlaylistDetailView: View {
         }
     }
 
+    // Handle drag ended
     private func handleDragEnded() {
         draggingTrackID = nil
         accumulatedDragY = 0
@@ -493,6 +516,7 @@ public struct PlaylistDetailView: View {
         libraryStore.savePlaylists()
     }
 
+    // Sort playlist
     private func sortPlaylist(by criteria: PlaylistTrackSortCriteria) {
         HapticFeedback.selectionChanged()
         withAnimation(.spring(response: 0.28, dampingFraction: 0.8)) {
@@ -500,6 +524,7 @@ public struct PlaylistDetailView: View {
         }
     }
 
+    // Toggle search
     private func toggleSearch() {
         if isSearching {
             isSearchFocused = false
@@ -515,6 +540,7 @@ public struct PlaylistDetailView: View {
         }
     }
 
+    // Header view
     private func headerView(for playlist: Playlist) -> some View {
         HStack(alignment: .top, spacing: 16) {
             Button(action: { showingEditSheet = true }) {
@@ -562,6 +588,7 @@ public struct PlaylistDetailView: View {
                         .font(.system(size: 12, design: .monospaced))
                         .foregroundStyle(.secondary)
 
+                    // Total dur
                     let totalDur = playlistTracks.reduce(0) { $0 + $1.duration }
                     Text(TimeFormatting.formatSummaryDuration(seconds: totalDur))
                         .font(.system(size: 12, weight: .semibold, design: .monospaced))
@@ -573,6 +600,7 @@ public struct PlaylistDetailView: View {
         }
     }
 
+    // Edit playlist sheet
     private func editPlaylistSheet(for playlist: Playlist) -> some View {
         EditPlaylistModalView(playlist: playlist, libraryStore: libraryStore)
     }
@@ -580,6 +608,7 @@ public struct PlaylistDetailView: View {
 
 /// Modal view to edit playlist name, description, and cover artwork
 struct EditPlaylistModalView: View {
+    // Playlist
     let playlist: Playlist
     @Bindable var libraryStore: LibraryStore
     @Environment(\.dismiss) private var dismiss
@@ -591,6 +620,7 @@ struct EditPlaylistModalView: View {
     @State private var showingFileImporter: Bool = false
     @State private var isProcessingImage: Bool = false
 
+    // Initialize with configured properties
     init(playlist: Playlist, libraryStore: LibraryStore) {
         self.playlist = playlist
         self.libraryStore = libraryStore
@@ -600,9 +630,13 @@ struct EditPlaylistModalView: View {
     }
 
     private var availableArtworkKeys: [String] {
+        // Pl tracks
         let plTracks = libraryStore.tracks(for: playlist)
+        // Pl keys
         let plKeys = plTracks.compactMap { $0.artworkKey }
+        // All keys
         let allKeys = libraryStore.tracks.compactMap { $0.artworkKey }
+        // Unique
         var unique: [String] = []
         for k in plKeys + allKeys {
             if !unique.contains(k) {
@@ -612,6 +646,7 @@ struct EditPlaylistModalView: View {
         return unique
     }
 
+    // Body
     var body: some View {
         NavigationStack {
             Form {
@@ -747,11 +782,14 @@ struct EditPlaylistModalView: View {
                     .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
             }
+            // React to state changes
             .onChange(of: selectedPhotoItem) { _, newItem in
+                // Ensure preconditions are met before proceeding
                 guard let newItem = newItem else { return }
                 Task {
                     isProcessingImage = true
                     if let data = try? await newItem.loadTransferable(type: Data.self) {
+                        // Custom key
                         let customKey = "custom_playlist_\(playlist.id.uuidString)_\(UUID().uuidString)"
                         await ArtworkCacheService.shared.saveArtwork(data: data, key: customKey)
                         await MainActor.run {
@@ -772,10 +810,13 @@ struct EditPlaylistModalView: View {
             ) { result in
                 switch result {
                 case .success(let urls):
+                    // Ensure preconditions are met before proceeding
                     guard let url = urls.first else { return }
                     if url.startAccessingSecurityScopedResource() {
+                        // Cleanup upon exiting scope
                         defer { url.stopAccessingSecurityScopedResource() }
                         if let data = try? Data(contentsOf: url) {
+                            // Custom key
                             let customKey = "custom_playlist_\(playlist.id.uuidString)_\(UUID().uuidString)"
                             Task {
                                 isProcessingImage = true
@@ -795,6 +836,7 @@ struct EditPlaylistModalView: View {
         .presentationDetents([.medium, .large])
     }
 
+    // Save and dismiss
     private func saveAndDismiss() {
         libraryStore.updatePlaylist(
             id: playlist.id,
@@ -808,12 +850,16 @@ struct EditPlaylistModalView: View {
 
 /// Drop delegate providing native long-press drag-and-drop playlist track reordering.
 struct PlaylistDropDelegate: DropDelegate {
+    // Item
     let item: Track
+    // Unique identifier for playlist id
     let playlistID: UUID
     @Binding var draggedTrack: Track?
     let libraryStore: LibraryStore
 
+    // Drop entered
     func dropEntered(info: DropInfo) {
+        // Ensure preconditions are met before proceeding
         guard let draggedTrack = draggedTrack,
               draggedTrack.id != item.id else { return }
 
@@ -823,10 +869,12 @@ struct PlaylistDropDelegate: DropDelegate {
         }
     }
 
+    // Drop updated
     func dropUpdated(info: DropInfo) -> DropProposal? {
         DropProposal(operation: .move)
     }
 
+    // Perform drop
     func performDrop(info: DropInfo) -> Bool {
         draggedTrack = nil
         return true

@@ -1,28 +1,31 @@
-//
-//  BackgroundMetadataScanner.swift
-//  MusicPlayer
-//
-//  Created by Principal Apple Software Engineer on 8/25/26.
-//
-
 import Foundation
 import os
 
 /// Lightweight data structure representing scan progress and live category tallies.
 public struct MetadataScanProgress: Sendable {
+    // Progress
     public let progress: Double
+    // Scanned count
     public let scannedCount: Int
+    // Total count
     public let totalCount: Int
+    // Status text
     public let statusText: String
+    // Enrichment diffs
     public let enrichmentDiffs: [MetadataDiff]
+    // Verified good diffs
     public let verifiedGoodDiffs: [MetadataDiff]
+    // Unique identifier for unmatched track i ds
     public let unmatchedTrackIDs: Set<UUID>
 }
 
 /// Final scan payload delivered off the background queue.
 public struct MetadataScanResult: Sendable {
+    // Enrichment diffs
     public let enrichmentDiffs: [MetadataDiff]
+    // Verified good diffs
     public let verifiedGoodDiffs: [MetadataDiff]
+    // Unique identifier for unmatched track i ds
     public let unmatchedTrackIDs: Set<UUID>
 }
 
@@ -32,8 +35,10 @@ public actor BackgroundMetadataScanner {
     public static let shared = BackgroundMetadataScanner()
 
     private var activeTask: Task<Void, Never>? = nil
+    // Controls is running
     private var isRunning: Bool = false
 
+    // Initialize with configured properties
     private init() {}
 
     /// Checks if a background scan is currently in progress.
@@ -64,6 +69,7 @@ public actor BackgroundMetadataScanner {
     ) {
         cancel()
 
+        // Ensure preconditions are met before proceeding
         guard !tracks.isEmpty else {
             onComplete(MetadataScanResult(enrichmentDiffs: [], verifiedGoodDiffs: [], unmatchedTrackIDs: []))
             return
@@ -72,18 +78,24 @@ public actor BackgroundMetadataScanner {
         isRunning = true
 
         activeTask = Task.detached(priority: .userInitiated) { [weak self] in
+            // Ensure preconditions are met before proceeding
             guard let self = self else { return }
 
+            // Scan start time
             let scanStartTime = Date()
 
             if forceRecheck {
                 await MusicMetadataService.shared.clearCache()
             }
 
+            // Unique identifier for existing diff i ds
             let existingDiffIDs = existingDiffs.map { $0.localTrack.id }
+            // Unique identifier for existing good i ds
             let existingGoodIDs = existingGood.map { $0.localTrack.id }
+            // Unique identifier for processed i ds
             let processedIDs = Set(existingDiffIDs + existingGoodIDs).union(existingUnmatched)
 
+            // Tracks to scan
             let tracksToScan: [Track]
             if forceRecheck {
                 tracksToScan = tracks
@@ -91,6 +103,7 @@ public actor BackgroundMetadataScanner {
                 tracksToScan = tracks.filter { !processedIDs.contains($0.id) }
             }
 
+            // Ensure preconditions are met before proceeding
             guard !tracksToScan.isEmpty else {
                 AppLogger.metadata.info("[Background Scanner] All \(tracks.count) tracks are already processed and up to date.")
                 await self.finish(
@@ -102,21 +115,30 @@ public actor BackgroundMetadataScanner {
                 return
             }
 
+            // Current diffs
             var currentDiffs = forceRecheck ? [MetadataDiff]() : existingDiffs
+            // Current good
             var currentGood = forceRecheck ? [MetadataDiff]() : existingGood
+            // Current unmatched
             var currentUnmatched = forceRecheck ? Set<UUID>() : existingUnmatched
 
+            // Total
             let total = tracksToScan.count
+            // Scanned count
             var scannedCount = 0
+            // Last progress report time
             var lastProgressReportTime = Date.distantPast
 
             // Helper to report progress safely without overwhelming main actor
             func emitProgress(statusMessage: String, force: Bool = false) {
+                // Now
                 let now = Date()
                 if force || now.timeIntervalSince(lastProgressReportTime) >= 0.08 || scannedCount >= total {
                     lastProgressReportTime = now
+                    // Progress
                     let progress = total > 0 ? min(1.0, Double(scannedCount) / Double(total)) : 1.0
 
+                    // Progress payload
                     let progressPayload = MetadataScanProgress(
                         progress: progress,
                         scannedCount: scannedCount,
@@ -134,11 +156,14 @@ public actor BackgroundMetadataScanner {
 
             // MARK: - STAGE 0: Instant Completeness Pre-Check (Zero Network Cost)
             var tracksNeedingOnlineCheck: [Track] = []
+            // Pre checked good count
             var preCheckedGoodCount = 0
 
             for track in tracksToScan {
                 if MetadataSanitizer.isFullyTagged(track: track) {
+                    // Synth
                     let synth = MetadataSanitizer.synthesizeVerifiedMetadata(for: track)
+                    // Diff
                     let diff = MetadataDiff(localTrack: track, onlineMetadata: synth, preserveLocalTitleAndArtist: true)
                     currentGood.removeAll { $0.id == track.id }
                     currentDiffs.removeAll { $0.id == track.id }
@@ -154,8 +179,10 @@ public actor BackgroundMetadataScanner {
             AppLogger.metadata.info("[Stage 0: Instant Pre-Check] Verified \(preCheckedGoodCount) tracks locally with zero network requests. \(tracksNeedingOnlineCheck.count) tracks require online lookup.")
             emitProgress(statusMessage: "Verified \(preCheckedGoodCount) complete tracks locally...")
 
+            // Ensure preconditions are met before proceeding
             guard !tracksNeedingOnlineCheck.isEmpty && !Task.isCancelled else {
                 emitProgress(statusMessage: "Library analysis complete.", force: true)
+                // Elapsed seconds
                 let elapsedSeconds = Date().timeIntervalSince(scanStartTime)
                 AppLogger.metadata.info("[Pipeline Completed] Completed in \(String(format: "%.2fs", elapsedSeconds)). Enriched: \(currentDiffs.count), Verified Good: \(currentGood.count), Unmatched: \(currentUnmatched.count).")
                 await self.persistScanState(diffs: currentDiffs, good: currentGood, unmatched: currentUnmatched, storageURL: storageDirectoryURL)
@@ -165,6 +192,7 @@ public actor BackgroundMetadataScanner {
 
             // Pre-calculate signatures for tracks needing online lookup
             let trackSignatures: [(track: Track, signature: TrackSignature)] = tracksNeedingOnlineCheck.map {
+                // Sig
                 let sig = MetadataSanitizer.sanitize(track: $0)
                 AppLogger.metadata.debug("[Signature Extracted] \"\($0.title)\" -> Core: \"\(sig.coreTitle)\", Artist: \"\(sig.primaryArtist)\", Album: \"\(sig.standardAlbum)\"")
                 return ($0, sig)
@@ -172,11 +200,14 @@ public actor BackgroundMetadataScanner {
 
             // MARK: - STAGE 1: Artist-First Concurrent Batch Matching (1 Request = Up to 200 Discography Songs)
             var artistGroups: [String: (artist: String, entries: [(track: Track, signature: TrackSignature)])] = [:]
+            // Unknown artist entries
             var unknownArtistEntries: [(track: Track, signature: TrackSignature)] = []
 
             for entry in trackSignatures {
+                // Sig
                 let sig = entry.signature
                 if !MetadataSanitizer.isUnknownArtist(sig.primaryArtist) {
+                    // Key
                     let key = sig.primaryArtist.lowercased()
                     if var existing = artistGroups[key] {
                         existing.entries.append(entry)
@@ -191,13 +222,19 @@ public actor BackgroundMetadataScanner {
 
             print("[Metadata Scanner Stage 1] Grouped \(artistGroups.count) distinct artists covering \(trackSignatures.count - unknownArtistEntries.count) tracks.")
             AppLogger.metadata.info("[Stage 1: Artist-First Batch] Grouped \(artistGroups.count) distinct artists covering \(trackSignatures.count - unknownArtistEntries.count) tracks.")
+            // Remaining for fallback
             var remainingForFallback: [(track: Track, signature: TrackSignature)] = unknownArtistEntries
+            // Stage 1 matched count
             var stage1MatchedCount = 0
 
+            // Artist group list
             let artistGroupList = Array(artistGroups.values)
+            // Max artist workers
             let maxArtistWorkers = min(2, max(1, artistGroupList.count))
+            // Artist group index
             var artistGroupIndex = 0
 
+            // Fetch artist with retry
             func fetchArtistWithRetry(artist: String) async -> [OnlineTrackMetadata]? {
                 for attempt in 1...3 {
                     if Task.isCancelled { return nil }
@@ -207,6 +244,7 @@ public actor BackgroundMetadataScanner {
                     if attempt < 3 && !Task.isCancelled {
                         print("[Stage 1 Retry] Retrying artist \"\(artist)\" (attempt \(attempt + 1) of 3)...")
                         emitProgress(statusMessage: "Retrying search for \"\(artist)\" (attempt \(attempt + 1) of 3)...", force: true)
+                        // Sleep ns
                         let sleepNs = UInt64(Double(attempt) * 1.5 * 1_000_000_000)
                         try? await Task.sleep(nanoseconds: sleepNs)
                     }
@@ -216,9 +254,11 @@ public actor BackgroundMetadataScanner {
 
             await withTaskGroup(of: ([(track: Track, signature: TrackSignature)], [OnlineTrackMetadata]?).self) { group in
                 while artistGroupIndex < artistGroupList.count && artistGroupIndex < maxArtistWorkers {
+                    // Artist entry
                     let artistEntry = artistGroupList[artistGroupIndex]
                     artistGroupIndex += 1
                     group.addTask {
+                        // Artist songs
                         let artistSongs = await fetchArtistWithRetry(artist: artistEntry.artist)
                         return (artistEntry.entries, artistSongs)
                     }
@@ -230,6 +270,7 @@ public actor BackgroundMetadataScanner {
                         break
                     }
 
+                    // Available songs
                     let availableSongs = artistSongs ?? []
                     for entry in entries {
                         if let best = DisambiguationMatcher.bestMatch(for: entry.signature, in: availableSongs) {
@@ -237,6 +278,7 @@ public actor BackgroundMetadataScanner {
                             stage1MatchedCount += 1
                             currentUnmatched.remove(entry.track.id)
 
+                            // Diff
                             let diff = MetadataDiff(
                                 localTrack: entry.track,
                                 onlineMetadata: best,
@@ -262,9 +304,11 @@ public actor BackgroundMetadataScanner {
                     emitProgress(statusMessage: "Analyzed \(scannedCount) of \(total) tracks")
 
                     if artistGroupIndex < artistGroupList.count && !Task.isCancelled {
+                        // Next artist entry
                         let nextArtistEntry = artistGroupList[artistGroupIndex]
                         artistGroupIndex += 1
                         group.addTask {
+                            // Next artist songs
                             let nextArtistSongs = await fetchArtistWithRetry(artist: nextArtistEntry.artist)
                             return (nextArtistEntry.entries, nextArtistSongs)
                         }
@@ -277,8 +321,10 @@ public actor BackgroundMetadataScanner {
 
             // MARK: - STAGE 2: Multi-Track Album Batch Matching (1 Request = Complete Album Cuts)
             var remainingForStage3: [(track: Track, signature: TrackSignature)] = []
+            // Stage 2 matched count
             var stage2MatchedCount = 0
 
+            // Fetch album with retry
             func fetchAlbumWithRetry(album: String, artist: String) async -> [OnlineTrackMetadata]? {
                 for attempt in 1...3 {
                     if Task.isCancelled { return nil }
@@ -288,6 +334,7 @@ public actor BackgroundMetadataScanner {
                     if attempt < 3 && !Task.isCancelled {
                         print("[Stage 2 Retry] Retrying album \"\(album)\" (attempt \(attempt + 1) of 3)...")
                         emitProgress(statusMessage: "Retrying search for \"\(album)\" (attempt \(attempt + 1) of 3)...", force: true)
+                        // Sleep ns
                         let sleepNs = UInt64(Double(attempt) * 1.5 * 1_000_000_000)
                         try? await Task.sleep(nanoseconds: sleepNs)
                     }
@@ -296,11 +343,14 @@ public actor BackgroundMetadataScanner {
             }
 
             if !remainingForFallback.isEmpty && !Task.isCancelled {
+                // Album groups
                 var albumGroups: [String: (artist: String, album: String, entries: [(track: Track, signature: TrackSignature)])] = [:]
 
                 for entry in remainingForFallback {
+                    // Sig
                     let sig = entry.signature
                     if !MetadataSanitizer.isUnknownAlbum(sig.standardAlbum) && !MetadataSanitizer.isUnknownArtist(sig.primaryArtist) {
+                        // Group key
                         let groupKey = "\(sig.primaryArtist.lowercased())__\(sig.standardAlbum.lowercased())"
                         if var existing = albumGroups[groupKey] {
                             existing.entries.append(entry)
@@ -315,15 +365,20 @@ public actor BackgroundMetadataScanner {
 
                 AppLogger.metadata.info("[Stage 2: Album Batch] Grouped \(albumGroups.count) distinct albums covering \(remainingForFallback.count - remainingForStage3.count) tracks.")
 
+                // Album group list
                 let albumGroupList = Array(albumGroups.values)
+                // Max album workers
                 let maxAlbumWorkers = min(2, max(1, albumGroupList.count))
+                // Album group index
                 var albumGroupIndex = 0
 
                 await withTaskGroup(of: ([(track: Track, signature: TrackSignature)], [OnlineTrackMetadata]?).self) { group in
                     while albumGroupIndex < albumGroupList.count && albumGroupIndex < maxAlbumWorkers {
+                        // Album entry
                         let albumEntry = albumGroupList[albumGroupIndex]
                         albumGroupIndex += 1
                         group.addTask {
+                            // Album songs
                             let albumSongs = await fetchAlbumWithRetry(album: albumEntry.album, artist: albumEntry.artist)
                             return (albumEntry.entries, albumSongs)
                         }
@@ -335,6 +390,7 @@ public actor BackgroundMetadataScanner {
                             break
                         }
 
+                        // Available songs
                         let availableSongs = albumSongs ?? []
                         for entry in entries {
                             if let best = DisambiguationMatcher.bestMatch(for: entry.signature, in: availableSongs) {
@@ -342,6 +398,7 @@ public actor BackgroundMetadataScanner {
                                 stage2MatchedCount += 1
                                 currentUnmatched.remove(entry.track.id)
 
+                                // Diff
                                 let diff = MetadataDiff(
                                     localTrack: entry.track,
                                     onlineMetadata: best,
@@ -365,9 +422,11 @@ public actor BackgroundMetadataScanner {
                         emitProgress(statusMessage: "Analyzed \(scannedCount) of \(total) tracks")
 
                         if albumGroupIndex < albumGroupList.count && !Task.isCancelled {
+                            // Next album entry
                             let nextAlbumEntry = albumGroupList[albumGroupIndex]
                             albumGroupIndex += 1
                             group.addTask {
+                                // Next album songs
                                 let nextAlbumSongs = await fetchAlbumWithRetry(album: nextAlbumEntry.album, artist: nextAlbumEntry.artist)
                                 return (nextAlbumEntry.entries, nextAlbumSongs)
                             }
@@ -384,15 +443,20 @@ public actor BackgroundMetadataScanner {
                 print("[Metadata Scanner Stage 3] Querying \(remainingForStage3.count) remaining loose tracks across worker pool...")
                 AppLogger.metadata.info("[Stage 3: Individual Fallback] Querying \(remainingForStage3.count) remaining loose tracks across worker pool...")
 
+                // Max workers
                 let maxWorkers = 2
+                // Track index
                 var trackIndex = 0
+                // Fallback count
                 let fallbackCount = remainingForStage3.count
 
                 await withTaskGroup(of: (Track, OnlineTrackMetadata?).self) { group in
                     while trackIndex < fallbackCount && trackIndex < maxWorkers {
+                        // Entry
                         let entry = remainingForStage3[trackIndex]
                         trackIndex += 1
                         group.addTask {
+                            // Match
                             let match = await MusicMetadataService.shared.findExactMatch(for: entry.track)
                             return (entry.track, match)
                         }
@@ -408,6 +472,7 @@ public actor BackgroundMetadataScanner {
                         currentUnmatched.remove(track.id)
 
                         if let match = match {
+                            // Diff
                             let diff = MetadataDiff(
                                 localTrack: track,
                                 onlineMetadata: match,
@@ -433,9 +498,11 @@ public actor BackgroundMetadataScanner {
                         emitProgress(statusMessage: "Analyzing \"\(track.title)\" (\(scannedCount)/\(total))...")
 
                         if trackIndex < fallbackCount && !Task.isCancelled {
+                            // Next entry
                             let nextEntry = remainingForStage3[trackIndex]
                             trackIndex += 1
                             group.addTask {
+                                // Next match
                                 let nextMatch = await MusicMetadataService.shared.findExactMatch(for: nextEntry.track)
                                 return (nextEntry.track, nextMatch)
                             }
@@ -446,7 +513,9 @@ public actor BackgroundMetadataScanner {
 
             emitProgress(statusMessage: "Library analysis complete.", force: true)
 
+            // Elapsed seconds
             let elapsedSeconds = Date().timeIntervalSince(scanStartTime)
+            // Formatted time
             let formattedTime = String(format: "%.2fs", elapsedSeconds)
             print("[Metadata Pipeline Completed] Scanned \(scannedCount)/\(total) tracks in \(formattedTime). Enriched: \(currentDiffs.count), Verified Good: \(currentGood.count), Unmatched: \(currentUnmatched.count).")
             AppLogger.metadata.info("[Pipeline Completed] Scanned \(scannedCount)/\(total) tracks in \(formattedTime). Enriched: \(currentDiffs.count), Verified Good: \(currentGood.count), Unmatched: \(currentUnmatched.count).")
@@ -468,6 +537,7 @@ public actor BackgroundMetadataScanner {
         }
     }
 
+    // Finish
     private func finish(
         diffs: [MetadataDiff],
         good: [MetadataDiff],
@@ -476,6 +546,7 @@ public actor BackgroundMetadataScanner {
     ) {
         isRunning = false
         activeTask = nil
+        // Payload
         let payload = MetadataScanResult(
             enrichmentDiffs: diffs,
             verifiedGoodDiffs: good,
@@ -484,23 +555,30 @@ public actor BackgroundMetadataScanner {
         onComplete(payload)
     }
 
+    // Persist scan state
     private func persistScanState(
         diffs: [MetadataDiff],
         good: [MetadataDiff],
         unmatched: Set<UUID>,
         storageURL: URL
     ) {
+        // File system location for enrichment file url
         let enrichmentFileURL = storageURL.appendingPathComponent("enrichment_diffs.json")
+        // File system location for verified good file url
         let verifiedGoodFileURL = storageURL.appendingPathComponent("verified_good_diffs.json")
+        // File system location for unmatched file url
         let unmatchedFileURL = storageURL.appendingPathComponent("unmatched_tracks.json")
 
         do {
+            // Diff data
             let diffData = try JSONEncoder().encode(diffs)
             try diffData.write(to: enrichmentFileURL, options: .atomic)
 
+            // Good data
             let goodData = try JSONEncoder().encode(good)
             try goodData.write(to: verifiedGoodFileURL, options: .atomic)
 
+            // Unmatched data
             let unmatchedData = try JSONEncoder().encode(Array(unmatched))
             try unmatchedData.write(to: unmatchedFileURL, options: .atomic)
             AppLogger.storage.info("[Persistence] Saved \(diffs.count) enrichment diffs, \(good.count) verified good, \(unmatched.count) unmatched to disk.")

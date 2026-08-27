@@ -1,16 +1,12 @@
-//
-//  PlaybackState.swift
-//  MusicPlayer
-//
-//  Created by Principal Apple Software Engineer on 8/24/26.
-//
-
 import Foundation
 
 /// Defines repeat behavior for the playback queue.
 public enum RepeatMode: String, Codable, Sendable, CaseIterable {
+    // Off option
     case off
+    // All option
     case all
+    // One option
     case one
 
     /// Typographic badge/button label.
@@ -34,7 +30,9 @@ public enum RepeatMode: String, Codable, Sendable, CaseIterable {
 
 /// Defines shuffle behavior for the playback queue.
 public enum ShuffleMode: String, Codable, Sendable {
+    // Off option
     case off
+    // On option
     case on
 
     /// Typographic badge/button label.
@@ -53,11 +51,16 @@ public enum ShuffleMode: String, Codable, Sendable {
 
 /// Current state of the audio player engine.
 public enum PlaybackStatus: String, Sendable {
+    // Stopped option
     case stopped
+    // Playing option
     case playing
+    // Paused option
     case paused
+    // Buffering option
     case buffering
 
+    // Controls is playing
     public var isPlaying: Bool {
         self == .playing
     }
@@ -74,13 +77,19 @@ public enum PlaybackStatus: String, Sendable {
 
 /// Primary library category navigation sections.
 public enum LibraryCategory: String, CaseIterable, Identifiable, Codable, Sendable {
+    // Artists option
     case artists
+    // Albums option
     case albums
+    // Playlists option
     case playlists
+    // Tracks option
     case tracks
 
+    // Unique track identifier
     public var id: String { rawValue }
 
+    // Display title of the song
     public var title: String {
         switch self {
         case .artists: return "ARTISTS"
@@ -92,16 +101,22 @@ public enum LibraryCategory: String, CaseIterable, Identifiable, Codable, Sendab
 
     /// The next category in the carousel order.
     public var next: LibraryCategory {
+        // All
         let all = Self.allCases
+        // Ensure preconditions are met before proceeding
         guard let idx = all.firstIndex(of: self) else { return self }
+        // Next idx
         let nextIdx = (idx + 1) % all.count
         return all[nextIdx]
     }
 
     /// The previous category in the carousel order.
     public var previous: LibraryCategory {
+        // All
         let all = Self.allCases
+        // Ensure preconditions are met before proceeding
         guard let idx = all.firstIndex(of: self) else { return self }
+        // Prev idx
         let prevIdx = (idx - 1 + all.count) % all.count
         return all[prevIdx]
     }
@@ -109,12 +124,18 @@ public enum LibraryCategory: String, CaseIterable, Identifiable, Codable, Sendab
 
 /// Track sorting criteria for the all-tracks library view.
 public enum TrackSortOption: String, CaseIterable, Identifiable, Sendable {
+    // Title option
     case title
+    // Artist option
     case artist
+    // Album option
     case album
+    // Duration option
     case duration
+    // Plays option
     case plays
 
+    // Unique track identifier
     public var id: String { rawValue }
 
     public var label: String {
@@ -130,9 +151,12 @@ public enum TrackSortOption: String, CaseIterable, Identifiable, Sendable {
 
 /// Artist sorting criteria for the artists library view.
 public enum ArtistSortOption: String, CaseIterable, Identifiable, Sendable {
+    // Name option
     case name
+    // Most option
     case most
 
+    // Unique track identifier
     public var id: String { rawValue }
 
     public var label: String {
@@ -145,11 +169,16 @@ public enum ArtistSortOption: String, CaseIterable, Identifiable, Sendable {
 
 /// Album sorting criteria for the albums library view.
 public enum AlbumSortOption: String, CaseIterable, Identifiable, Sendable {
+    // Title option
     case title
+    // Most option
     case most
+    // Artist option
     case artist
+    // Duration option
     case duration
 
+    // Unique track identifier
     public var id: String { rawValue }
 
     public var label: String {
@@ -164,9 +193,12 @@ public enum AlbumSortOption: String, CaseIterable, Identifiable, Sendable {
 
 /// Playlist sorting criteria for the playlists library view.
 public enum PlaylistSortOption: String, CaseIterable, Identifiable, Sendable {
+    // Name option
     case name
+    // Most option
     case most
 
+    // Unique track identifier
     public var id: String { rawValue }
 
     public var label: String {
@@ -179,14 +211,22 @@ public enum PlaylistSortOption: String, CaseIterable, Identifiable, Sendable {
 
 /// Sorting criteria for tracks within a playlist in edit mode.
 public enum PlaylistTrackSortCriteria: String, CaseIterable, Identifiable, Sendable {
+    // Custom option
     case custom
+    // Name option
     case name
+    // Artist option
     case artist
+    // Album option
     case album
+    // Favorite option
     case favorite
+    // Newest option
     case newest
+    // Oldest option
     case oldest
 
+    // Unique track identifier
     public var id: String { rawValue }
 
     public var label: String {

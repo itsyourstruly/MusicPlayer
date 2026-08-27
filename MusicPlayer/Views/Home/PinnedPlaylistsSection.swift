@@ -6,14 +6,17 @@ public struct PinnedSection: View {
     @Bindable var libraryStore: LibraryStore
     @Bindable var playerService: AudioPlayerService
     public let onSelectPlaylist: (Playlist) -> Void
+    // On select album
     public let onSelectAlbum: (Album) -> Void
 
     @State private var draggedItem: PinnedItem? = nil
 
+    // Columns
     private let columns = [
         GridItem(.adaptive(minimum: 140), spacing: 14)
     ]
 
+    // Initialize with configured properties
     public init(
         libraryStore: LibraryStore,
         playerService: AudioPlayerService,
@@ -26,6 +29,7 @@ public struct PinnedSection: View {
         self.onSelectAlbum = onSelectAlbum
     }
 
+    // Main view layout structure
     public var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
@@ -125,6 +129,7 @@ public struct PinnedSection: View {
                 Divider()
 
                 Button(action: {
+                    // Tracks
                     let tracks = libraryStore.tracks(for: playlist)
                     if let first = tracks.first {
                         playerService.play(track: first, inQueue: tracks)
@@ -134,6 +139,7 @@ public struct PinnedSection: View {
                 }
 
                 Button(action: {
+                    // Tracks
                     let tracks = libraryStore.tracks(for: playlist)
                     playerService.playNext(tracks: tracks)
                 }) {
@@ -141,6 +147,7 @@ public struct PinnedSection: View {
                 }
 
                 Button(action: {
+                    // Tracks
                     let tracks = libraryStore.tracks(for: playlist)
                     playerService.appendToQueue(tracks: tracks)
                 }) {
@@ -148,6 +155,7 @@ public struct PinnedSection: View {
                 }
             }
 
+        // Album or release title
         case .album(let album):
             Button(action: {
                 onSelectAlbum(album)
@@ -193,11 +201,14 @@ public struct PinnedSection: View {
 
 /// Drop delegate providing native long-press drag-and-drop reordering for pinned items on Home.
 struct PinnedItemsDropDelegate: DropDelegate {
+    // Item
     let item: PinnedItem
     @Binding var draggedItem: PinnedItem?
     let libraryStore: LibraryStore
 
+    // Drop entered
     func dropEntered(info: DropInfo) {
+        // Ensure preconditions are met before proceeding
         guard let draggedItem = draggedItem,
               draggedItem.id != item.id else { return }
 
@@ -207,10 +218,12 @@ struct PinnedItemsDropDelegate: DropDelegate {
         }
     }
 
+    // Drop updated
     func dropUpdated(info: DropInfo) -> DropProposal? {
         DropProposal(operation: .move)
     }
 
+    // Perform drop
     func performDrop(info: DropInfo) -> Bool {
         draggedItem = nil
         return true

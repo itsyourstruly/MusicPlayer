@@ -1,10 +1,3 @@
-//
-//  UnmatchedTracksListView.swift
-//  MusicPlayer
-//
-//  Created by Principal Apple Software Engineer on 8/25/26.
-//
-
 import SwiftUI
 
 /// Dedicated manager sheet for inspecting and re-checking tracks that had no exact online matches
@@ -19,11 +12,13 @@ public struct UnmatchedTracksListView: View {
     @State private var trackStatusMessages: [UUID: String] = [:]
     @State private var searchText: String = ""
 
+    // Initialize with configured properties
     public init(libraryStore: LibraryStore) {
         self.libraryStore = libraryStore
     }
 
     private var filteredTracks: [Track] {
+        // Query
         let query = FuzzyMatcher.normalize(searchText)
         if query.isEmpty { return libraryStore.unmatchedTracks }
         return libraryStore.unmatchedTracks.filter { track in
@@ -31,6 +26,7 @@ public struct UnmatchedTracksListView: View {
         }
     }
 
+    // Main view layout structure
     public var body: some View {
         NavigationStack {
             Group {
@@ -105,6 +101,7 @@ public struct UnmatchedTracksListView: View {
                     .font(.system(size: 13, weight: .bold, design: .monospaced))
                 }
             }
+            // Modal presentation sheet
             .sheet(item: $selectedTrackForManualSearch) { track in
                 OnlineMetadataMatchSheet(track: track, libraryStore: libraryStore)
                     .tint(appTheme.accentColor)
@@ -140,11 +137,13 @@ public struct UnmatchedTracksListView: View {
 
     // MARK: - Handlers
 
+    // Recheck track
     private func recheckTrack(_ track: Track) {
         checkingTrackIDs.insert(track.id)
         trackStatusMessages[track.id] = "Checking online database..."
 
         Task {
+            // Matched
             let matched = await libraryStore.recheckUnmatchedTrack(track)
             checkingTrackIDs.remove(track.id)
             if matched {
@@ -176,12 +175,16 @@ public struct UnmatchedTracksListView: View {
 
 /// Summary header card for unmatched / ignored tracks.
 private struct UnmatchedHeaderCardView: View {
+    // Count
     let count: Int
+    // Flag indicating if scanning
     let isScanning: Bool
+    // On recheck all
     let onRecheckAll: () -> Void
 
     @Environment(\.appTheme) private var appTheme
 
+    // Body
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .top) {
@@ -229,14 +232,20 @@ private struct UnmatchedHeaderCardView: View {
 
 /// An individual card for an unmatched track with artwork preview, metadata, and re-check actions.
 private struct UnmatchedTrackCardView: View {
+    // Track
     let track: Track
+    // Flag indicating if checking
     let isChecking: Bool
+    // Status message
     let statusMessage: String?
+    // On recheck
     let onRecheck: () -> Void
+    // On manual search
     let onManualSearch: () -> Void
 
     @Environment(\.appTheme) private var appTheme
 
+    // Body
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 12) {

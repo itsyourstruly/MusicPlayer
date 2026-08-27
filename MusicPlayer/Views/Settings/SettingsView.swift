@@ -1,10 +1,3 @@
-//
-//  SettingsView.swift
-//  MusicPlayer
-//
-//  Created by Principal Apple Software Engineer on 8/24/26.
-//
-
 import SwiftUI
 import UniformTypeIdentifiers
 import os
@@ -23,11 +16,13 @@ public struct SettingsView: View {
     @State private var showingUnmatchedTracks: Bool = false
     @State private var artworkCacheSizeBytes: Int64 = 0
 
+    // Initialize with configured properties
     public init(libraryStore: LibraryStore, playerService: AudioPlayerService? = nil) {
         self.libraryStore = libraryStore
         self.playerService = playerService
     }
 
+    // Main view layout structure
     public var body: some View {
         NavigationStack {
             List {
@@ -141,6 +136,7 @@ public struct SettingsView: View {
                                 }
                             }
                             .tint(Color.blue)
+                            // React to state changes
                             .onChange(of: libraryStore.settings.autoHideDuplicates) { _, _ in
                                 libraryStore.saveSettings()
                             }
@@ -291,6 +287,7 @@ public struct SettingsView: View {
             ) { result in
                 switch result {
                 case .success(let urls):
+                    // File path location
                     if let selectedURL = urls.first {
                         Task {
                             await libraryStore.linkAndScanFolder(url: selectedURL)
@@ -312,37 +309,45 @@ public struct SettingsView: View {
             } message: {
                 Text("This will remove indexed tracks and playlists from the app. Your audio files on disk will not be modified or deleted.")
             }
+            // Modal presentation sheet
             .sheet(isPresented: $showingDuplicateResolver) {
                 DuplicateResolverView(libraryStore: libraryStore)
                     .tint(libraryStore.settings.appTheme.accentColor)
                     .environment(\.appTheme, libraryStore.settings.appTheme)
             }
+            // Modal presentation sheet
             .sheet(isPresented: $showingMetadataComparison) {
                 MetadataComparisonListView(libraryStore: libraryStore)
                     .tint(libraryStore.settings.appTheme.accentColor)
                     .environment(\.appTheme, libraryStore.settings.appTheme)
             }
+            // Modal presentation sheet
             .sheet(isPresented: $showingVerifiedGoodTracks) {
                 VerifiedGoodTracksListView(libraryStore: libraryStore)
                     .tint(libraryStore.settings.appTheme.accentColor)
                     .environment(\.appTheme, libraryStore.settings.appTheme)
             }
+            // Modal presentation sheet
             .sheet(isPresented: $showingUnmatchedTracks) {
                 UnmatchedTracksListView(libraryStore: libraryStore)
                     .tint(libraryStore.settings.appTheme.accentColor)
                     .environment(\.appTheme, libraryStore.settings.appTheme)
             }
+            // Async lifecycle task
             .task {
                 await refreshCacheSize()
             }
         }
     }
 
+    // Refresh cache size
     private func refreshCacheSize() async {
+        // Size
         let size = await ArtworkCacheService.shared.calculateDiskSize()
         self.artworkCacheSizeBytes = size
     }
 
+    // Clear artwork cache
     private func clearArtworkCache() {
         Task {
             await ArtworkCacheService.shared.clearCache()
@@ -353,11 +358,16 @@ public struct SettingsView: View {
 
 /// Isolated subview for the TRACK INFO section to prevent full-settings view invalidation during background operations.
 private struct TrackInfoSectionView: View {
+    // Library store
     let libraryStore: LibraryStore
+    // On show enrich
     let onShowEnrich: () -> Void
+    // On show verified good
     let onShowVerifiedGood: () -> Void
+    // On show unmatched
     let onShowUnmatched: () -> Void
 
+    // Body
     var body: some View {
         Section("TRACK INFO") {
             VStack(alignment: .leading, spacing: 12) {

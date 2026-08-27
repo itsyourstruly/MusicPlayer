@@ -3,21 +3,28 @@ import SwiftUI
 /// Clean, high-contrast typographic button style with tactile press animation.
 /// Strictly avoids icons/emojis in favor of crisp typography and semantic colors.
 public struct TypographicButtonStyle: ButtonStyle {
+    // Defines Variant cases
     public enum Variant {
+        // Primary option
         case primary
+        // Secondary option
         case secondary
+        // Subtle option
         case subtle
+        // Destructive option
         case destructive
     }
 
     public var variant: Variant = .primary
     public var size: ControlSize = .regular
 
+    // Initialize with configured properties
     public init(variant: Variant = .primary, size: ControlSize = .regular) {
         self.variant = variant
         self.size = size
     }
 
+    // Make body
     public func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(fontForSize)
@@ -32,6 +39,7 @@ public struct TypographicButtonStyle: ButtonStyle {
                     .stroke(borderColor, lineWidth: 1.0)
             )
             .scaleEffect(configuration.isPressed ? 0.96 : 1.0)
+            // Smooth UI transition animation
             .animation(.easeOut(duration: 0.15), value: configuration.isPressed)
     }
 
@@ -83,6 +91,7 @@ public struct TypographicButtonStyle: ButtonStyle {
         }
     }
 
+    // Background color
     private func backgroundColor(isPressed: Bool) -> Color {
         switch variant {
         case .primary:

@@ -1,16 +1,17 @@
-//
-//  Album.swift
-//  MusicPlayer
-//
-//  Created by Principal Apple Software Engineer on 8/24/26.
-//
-
 import Foundation
+
+// MARK: - Album
 
 /// Grouped album representation containing sorted tracks and discography metadata.
 public struct Album: Identifiable, Codable, Sendable, Hashable {
+
+    // MARK: - Identity
+
+    /// Stable ID derived from artist + title + year so albums with the same name by different artists don't collide.
     public var id: String {
+        // Clean artist
         let cleanArtist = artist.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        // Clean title
         let cleanTitle = title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         if let y = year, y > 0 {
             return "\(cleanArtist)_\(cleanTitle)_\(y)"
@@ -18,17 +19,31 @@ public struct Album: Identifiable, Codable, Sendable, Hashable {
         return "\(cleanArtist)_\(cleanTitle)"
     }
 
+    // MARK: - Stored Properties
+
+    // Display title
     public let title: String
+    // Primary artist name
     public let artist: String
+    // Release year
     public let year: Int?
+    // Musical genre
     public let genre: String?
+    // Artwork key
     public let artworkKey: String?
+    // Tracks
     public let tracks: [Track]
 
+    // Pre-normalized forms used by fuzzy search — computed once at init to avoid repeated lowercasing.
     public let normalizedTitle: String
+    // Normalized artist
     public let normalizedArtist: String
+    // Search tokens
     public let searchTokens: String
 
+    // MARK: - Init
+
+    // Initialize with configured properties
     public init(
         title: String,
         artist: String,
@@ -43,7 +58,9 @@ public struct Album: Identifiable, Codable, Sendable, Hashable {
         self.genre = genre
         self.artworkKey = artworkKey
 
+        // N title
         let nTitle = FuzzyMatcher.normalize(title)
+        // N artist
         let nArtist = FuzzyMatcher.normalize(artist)
         self.normalizedTitle = nTitle
         self.normalizedArtist = nArtist
@@ -51,15 +68,20 @@ public struct Album: Identifiable, Codable, Sendable, Hashable {
 
         // Sort tracks by disc number then track number, then title
         self.tracks = tracks.sorted { lhs, rhs in
+            // Lhs disc
             let lhsDisc = lhs.discNumber ?? 1
+            // Rhs disc
             let rhsDisc = rhs.discNumber ?? 1
             if lhsDisc != rhsDisc { return lhsDisc < rhsDisc }
 
+            // Lhs num
             let lhsNum = lhs.trackNumber ?? 0
+            // Rhs num
             let rhsNum = rhs.trackNumber ?? 0
             if lhsNum > 0 && rhsNum > 0 && lhsNum != rhsNum {
                 return lhsNum < rhsNum
             }
+            // Numbered tracks always sort before un-numbered ones
             if lhsNum > 0 && rhsNum == 0 { return true }
             if lhsNum == 0 && rhsNum > 0 { return false }
 
@@ -67,11 +89,17 @@ public struct Album: Identifiable, Codable, Sendable, Hashable {
         }
     }
 
+    // MARK: - Codable
+
+    // Defines CodingKeys cases
     private enum CodingKeys: String, CodingKey {
+        // Title option
         case title, artist, year, genre, artworkKey, tracks
     }
 
+    /// Custom decoder so we can recompute normalised fields after decoding stored data.
     public init(from decoder: Decoder) throws {
+        // Container
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.title = try container.decodeIfPresent(String.self, forKey: .title) ?? "Unknown Album"
         self.artist = try container.decodeIfPresent(String.self, forKey: .artist) ?? "Unknown Artist"
@@ -80,14 +108,18 @@ public struct Album: Identifiable, Codable, Sendable, Hashable {
         self.artworkKey = try container.decodeIfPresent(String.self, forKey: .artworkKey)
         self.tracks = try container.decodeIfPresent([Track].self, forKey: .tracks) ?? []
 
+        // N title
         let nTitle = FuzzyMatcher.normalize(self.title)
+        // N artist
         let nArtist = FuzzyMatcher.normalize(self.artist)
         self.normalizedTitle = nTitle
         self.normalizedArtist = nArtist
         self.searchTokens = "\(nTitle) \(nArtist)"
     }
 
+    // Encode
     public func encode(to encoder: Encoder) throws {
+        // Container
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(title, forKey: .title)
         try container.encode(artist, forKey: .artist)
@@ -97,6 +129,8 @@ public struct Album: Identifiable, Codable, Sendable, Hashable {
         try container.encode(tracks, forKey: .tracks)
     }
 
+    // MARK: - Computed Properties
+
     /// Total cumulative duration of all tracks in this album.
     public var totalDuration: TimeInterval {
         tracks.reduce(0) { $0 + $1.duration }
@@ -104,13 +138,16 @@ public struct Album: Identifiable, Codable, Sendable, Hashable {
 
     /// Human-readable track count string (e.g., `12 TRACKS` or `1 TRACK`).
     public var formattedTrackCount: String {
+        // Count
         let count = tracks.count
         return count == 1 ? "1 TRACK" : "\(count) TRACKS"
     }
 
-    /// Resolved release year: attaches the year from tracks or album metadata.
+    /// Resolved release year: prefers the most-common year across tracks, falls back to the album-level tag.
     public var resolvedYear: Int? {
+        // Track years
         let trackYears = tracks.compactMap { $0.year }.filter { $0 > 0 }
+        // Frequencies
         let frequencies = Dictionary(grouping: trackYears, by: { $0 }).mapValues { $0.count }
 
         // Find the most frequent year across tracks in the album
@@ -118,6 +155,7 @@ public struct Album: Identifiable, Codable, Sendable, Hashable {
             return mostFrequent.key
         }
 
+        // Release year
         if let year = year, year > 0 {
             return year
         }
@@ -127,6 +165,7 @@ public struct Album: Identifiable, Codable, Sendable, Hashable {
 
     /// Indicates whether this album is a standalone single or EP release.
     public var isSingle: Bool {
+        // Lower
         let lower = title.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
         if lower == "single" || lower.hasSuffix(" - single") || lower.hasSuffix(" (single)") || lower.hasSuffix(" [single]") || lower.hasSuffix(" - ep") || lower.hasSuffix(" (ep)") || lower.hasSuffix(" [ep]") {
             return true
@@ -134,11 +173,15 @@ public struct Album: Identifiable, Codable, Sendable, Hashable {
         return tracks.count <= 2
     }
 
+    // MARK: - Artist Attribution
+
     /// Determines if a given artist is a lead creator or primary collaborator on this album.
     /// Returns true for solo albums and multi-artist collaboration albums, and false for simple guest features.
     /// If an album's artist or tracks belong to a joined artist rule, it only matches if `artistName` is that joined artist.
     public func isLeadOrCollaborativeAlbum(for artistName: String, joinedArtists: [String] = []) -> Bool {
+        // Clean name
         let cleanName = artistName.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Ensure preconditions are met before proceeding
         guard !cleanName.isEmpty else { return false }
 
         // 1. Direct album artist match (e.g. Album.artist == "Pete & Bas" or "Drake")
@@ -149,13 +192,16 @@ public struct Album: Identifiable, Codable, Sendable, Hashable {
         // Check if the album itself is governed by a joined artist rule
         let albumArtistCanonical = artist.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         for joined in joinedArtists {
+            // Joined canonical
             let joinedCanonical = joined.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
             if albumArtistCanonical == joinedCanonical {
                 // This album is explicitly a joined artist album
                 return cleanName.lowercased() == joinedCanonical
             }
+            // Joined parts
             let joinedParts = ArtistParser.parseArtists(from: joined).map { $0.lowercased() }
             if joinedParts.count > 1 {
+                // Album parts
                 let albumParts = ArtistParser.parseArtists(from: artist).map { $0.lowercased() }
                 if Set(joinedParts).isSubset(of: Set(albumParts)) {
                     return cleanName.lowercased() == joinedCanonical
@@ -172,9 +218,12 @@ public struct Album: Identifiable, Codable, Sendable, Hashable {
         // 3. Track-level multi-artist collaboration analysis:
         var tracksWhereArtistIsPrimary = 0
         for track in tracks {
+            // Track artist canonical
             let trackArtistCanonical = track.artist.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            // Flag indicating if track joined under other
             var isTrackJoinedUnderOther = false
             for joined in joinedArtists {
+                // Joined canonical
                 let joinedCanonical = joined.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
                 if trackArtistCanonical == joinedCanonical {
                     if cleanName.lowercased() != joinedCanonical {
@@ -182,8 +231,10 @@ public struct Album: Identifiable, Codable, Sendable, Hashable {
                     }
                     break
                 }
+                // Joined parts
                 let joinedParts = ArtistParser.parseArtists(from: joined).map { $0.lowercased() }
                 if joinedParts.count > 1 {
+                    // Track parts
                     let trackParts = ArtistParser.parseArtists(from: track.artist).map { $0.lowercased() }
                     if Set(joinedParts).isSubset(of: Set(trackParts)) {
                         if cleanName.lowercased() != joinedCanonical {
@@ -197,6 +248,7 @@ public struct Album: Identifiable, Codable, Sendable, Hashable {
                 continue
             }
 
+            // Primary artists
             let primaryArtists = ArtistParser.parseArtists(from: track.artist)
             if primaryArtists.contains(where: { $0.localizedCaseInsensitiveCompare(cleanName) == .orderedSame }) {
                 tracksWhereArtistIsPrimary += 1
@@ -224,7 +276,9 @@ public struct Album: Identifiable, Codable, Sendable, Hashable {
 
     /// Determines if a given artist is featured as a guest on this album (via title `(feat. )` or minor track credits).
     public func isFeaturedAlbum(for artistName: String, joinedArtists: [String] = []) -> Bool {
+        // Clean name
         let cleanName = artistName.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Ensure preconditions are met before proceeding
         guard !cleanName.isEmpty else { return false }
 
         // If this is the artist's own lead or collaboration album, it is not a guest feature
@@ -234,9 +288,12 @@ public struct Album: Identifiable, Codable, Sendable, Hashable {
 
         // Check if the album is a joined artist collaboration that cleanName is part of; if so, it should NOT appear here
         for joined in joinedArtists {
+            // Joined canonical
             let joinedCanonical = joined.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            // Joined parts
             let joinedParts = ArtistParser.parseArtists(from: joined).map { $0.lowercased() }
             if joinedParts.contains(cleanName.lowercased()) {
+                // Album parts
                 let albumParts = ArtistParser.parseArtists(from: artist).map { $0.lowercased() }
                 if Set(joinedParts).isSubset(of: Set(albumParts)) || artist.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == joinedCanonical {
                     return false
@@ -249,9 +306,12 @@ public struct Album: Identifiable, Codable, Sendable, Hashable {
             // If the track is a joined artist track that cleanName is part of, skip it
             var isTrackJoined = false
             for joined in joinedArtists {
+                // Joined canonical
                 let joinedCanonical = joined.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                // Joined parts
                 let joinedParts = ArtistParser.parseArtists(from: joined).map { $0.lowercased() }
                 if joinedParts.contains(cleanName.lowercased()) {
+                    // Track parts
                     let trackParts = ArtistParser.parseArtists(from: track.artist).map { $0.lowercased() }
                     if Set(joinedParts).isSubset(of: Set(trackParts)) || track.artist.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == joinedCanonical {
                         isTrackJoined = true
@@ -266,6 +326,7 @@ public struct Album: Identifiable, Codable, Sendable, Hashable {
             if ArtistParser.isArtistFeatured(name: cleanName, inTitle: track.title) {
                 return true
             }
+            // Track artists
             let trackArtists = ArtistParser.parseArtists(from: track.artist)
             if trackArtists.contains(where: { $0.localizedCaseInsensitiveCompare(cleanName) == .orderedSame }) {
                 return true
@@ -277,10 +338,10 @@ public struct Album: Identifiable, Codable, Sendable, Hashable {
 
     /// Formatted release year string (e.g. `2024` or `UNKNOWN YEAR`).
     public var formattedYear: String {
+        // Release year
         if let year = resolvedYear, year > 0 {
             return String(year)
         }
         return "UNKNOWN YEAR"
     }
 }
-
