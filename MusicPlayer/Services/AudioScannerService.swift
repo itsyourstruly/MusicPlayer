@@ -313,8 +313,9 @@ public struct AudioScannerService: Sendable {
             modificationDate: modificationDate
         )
 
+        let deterministicID = UUID.deterministic(from: url.standardizedFileURL.path.lowercased())
         return Track(
-            id: UUID(),
+            id: deterministicID,
             title: finalTitle,
             artist: finalArtist,
             album: finalAlbum,

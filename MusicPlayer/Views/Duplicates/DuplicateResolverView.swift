@@ -397,7 +397,7 @@ private struct DuplicateClusterCardView: View {
     }
 }
 
-/// An individual candidate card displaying album cover at top, followed by full side-by-side metadata and actions.
+/// An individual candidate card displaying centered album cover at top, followed by centered metadata and actions.
 private struct CandidateComparisonCard: View {
     // Candidate
     let candidate: DuplicateCandidate
@@ -414,147 +414,83 @@ private struct CandidateComparisonCard: View {
 
     // Body
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            // Album Artwork at top
-            ZStack(alignment: .topTrailing) {
+        VStack(alignment: .center, spacing: 10) {
+            // Centered Album Artwork at top
+            VStack(spacing: 6) {
                 AlbumArtworkView(
                     artworkKey: candidate.track.artworkKey,
                     title: candidate.track.album,
                     subtitle: candidate.track.artist,
                     cornerRadius: 8
                 )
-                .frame(width: 170, height: 170)
+                .frame(width: 150, height: 150)
+                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
 
-                // Status Badge Overlay
-                VStack(alignment: .trailing, spacing: 4) {
-                    if candidate.isRecommended {
-                        Text("BEST QUALITY")
-                            .font(.system(size: 8, weight: .black, design: .monospaced))
-                            .foregroundStyle(Color.green)
-                            .padding(.horizontal, 5)
-                            .padding(.vertical, 3)
-                            .background(Color.green.opacity(0.18))
-                            .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
-                    }
-
-                    if isPrimary {
-                        Text("KEEPING")
-                            .font(.system(size: 8, weight: .bold, design: .monospaced))
-                            .foregroundStyle(Color.appInvertedBackground)
-                            .padding(.horizontal, 5)
-                            .padding(.vertical, 3)
-                            .background(appTheme.accentColor)
-                            .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
-                    }
+                // Sub-Artwork Status Label
+                if isPrimary {
+                    Text("KEEPING THIS VERSION")
+                        .font(.system(size: 9, weight: .bold, design: .monospaced))
+                        .foregroundStyle(Color.blue)
+                } else {
+                    Text("REDUNDANT DUPLICATE")
+                        .font(.system(size: 9, weight: .bold, design: .monospaced))
+                        .foregroundStyle(Color.secondary)
                 }
-                .padding(6)
             }
-            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
 
-            // Codec & Quality Summary
-            HStack {
-                Text(candidate.formatBadge)
-                    .font(.system(size: 11, weight: .bold, design: .monospaced))
-                    .foregroundStyle(isPrimary ? appTheme.accentColor : Color.primary)
-
-                Spacer()
+            // Centered Metadata & Quality Summary
+            VStack(alignment: .center, spacing: 5) {
+                centeredRow(label: "TITLE", value: candidate.track.title)
+                centeredRow(label: "ARTIST", value: candidate.track.artist)
+                centeredRow(label: "ALBUM", value: candidate.track.album.isEmpty ? "—" : candidate.track.album)
+                centeredRow(label: "FORMAT", value: candidate.formatBadge)
+                centeredRow(label: "SAMPLE RATE", value: candidate.sampleRateString)
 
                 if let size = candidate.track.fileInfo?.fileSizeBytes {
-                    Text(ByteFormatting.formatFileSize(bytes: size))
-                        .font(.system(size: 10, design: .monospaced))
-                        .foregroundStyle(.secondary)
+                    centeredRow(label: "SIZE", value: ByteFormatting.formatFileSize(bytes: size))
                 }
             }
+            .frame(width: 170)
 
-            // Detailed Metadata Specs List
-            VStack(alignment: .leading, spacing: 4) {
-                metaRow(label: "SAMPLE RATE", value: candidate.sampleRateString)
-                metaRow(label: "DURATION", value: TimeFormatting.format(seconds: candidate.track.duration))
-
-                if let y = candidate.track.year, y > 0 {
-                    metaRow(label: "YEAR", value: String(y))
+            // Centered Selection & Deletion Actions
+            VStack(spacing: 8) {
+                if isPrimary {
+                    Text("PRIMARY SELECTION")
+                        .font(.system(size: 11, weight: .bold, design: .monospaced))
+                        .foregroundStyle(Color.blue)
+                        .padding(.vertical, 4)
                 } else {
-                    metaRow(label: "YEAR", value: "MISSING")
-                }
-
-                if let g = candidate.track.genre, !g.isEmpty {
-                    metaRow(label: "GENRE", value: g)
-                } else {
-                    metaRow(label: "GENRE", value: "MISSING")
-                }
-
-                if let t = candidate.track.trackNumber, t > 0 {
-                    metaRow(label: "TRACK #", value: String(t))
-                }
-
-                metaRow(label: "ARTWORK", value: candidate.hasArtwork ? "EMBEDDED" : "NONE")
-            }
-            .padding(8)
-            .background(appTheme.backgroundColor.opacity(0.6))
-            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-
-            // File Name Preview
-            Text(candidate.track.url.lastPathComponent)
-                .font(.system(size: 9, design: .monospaced))
-                .foregroundStyle(.secondary.opacity(0.8))
-                .lineLimit(1)
-                .frame(width: 170, alignment: .leading)
-
-            // Selection & Deletion Actions
-            if isPrimary {
-                Button(action: onSelect) {
-                    Text("CURRENT SELECTION")
-                        .font(.system(size: 10, weight: .bold, design: .monospaced))
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(TypographicButtonStyle(variant: .primary, size: .small))
-                .disabled(isDeleting)
-            } else {
-                VStack(spacing: 6) {
                     Button(action: onSelect) {
-                        Text("SELECT TO KEEP")
-                            .font(.system(size: 10, weight: .bold, design: .monospaced))
-                            .frame(maxWidth: .infinity)
+                        Text("SELECT AS PRIMARY")
+                            .font(.system(size: 11, weight: .bold, design: .monospaced))
+                            .foregroundStyle(Color.blue)
                     }
-                    .buttonStyle(TypographicButtonStyle(variant: .secondary, size: .small))
+                    .buttonStyle(.plain)
                     .disabled(isDeleting)
 
                     Button(action: onDelete) {
-                        Text("DELETE FILE")
-                            .font(.system(size: 10, weight: .bold, design: .monospaced))
-                            .frame(maxWidth: .infinity)
+                        Text("DELETE FROM DISK")
+                            .font(.system(size: 11, weight: .bold, design: .monospaced))
+                            .foregroundStyle(Color.red)
                     }
-                    .buttonStyle(TypographicButtonStyle(variant: .destructive, size: .small))
+                    .buttonStyle(.plain)
                     .disabled(isDeleting)
                 }
             }
+            .padding(.top, 4)
         }
-        .frame(width: 170)
-        .padding(10)
-        .background(
-            isPrimary
-                ? appTheme.secondaryBackgroundColor
-                : appTheme.backgroundColor.opacity(0.4)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(isPrimary ? appTheme.accentColor : appTheme.separatorColor.opacity(0.5), lineWidth: isPrimary ? 1.5 : 1)
-        )
+        .padding(12)
     }
 
-    // Meta row
-    private func metaRow(label: String, value: String) -> some View {
-        HStack(alignment: .top) {
+    private func centeredRow(label: String, value: String) -> some View {
+        HStack(spacing: 6) {
             Text(label)
                 .font(.system(size: 9, weight: .bold, design: .monospaced))
                 .foregroundStyle(.secondary)
 
-            Spacer()
-
             Text(value)
-                .font(.system(size: 9, weight: value == "MISSING" || value == "NONE" ? .regular : .bold, design: .monospaced))
-                .foregroundStyle(value == "MISSING" || value == "NONE" ? .secondary : Color.primary)
+                .font(.system(size: 11, weight: .bold, design: .monospaced))
+                .foregroundStyle(isPrimary ? Color.primary : Color.secondary)
                 .lineLimit(1)
         }
     }

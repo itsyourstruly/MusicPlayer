@@ -154,16 +154,52 @@ public actor BackgroundMetadataScanner {
 
             AppLogger.metadata.info("[Pipeline Initialized] Total library tracks to evaluate: \(total). Force recheck: \(forceRecheck).")
 
-            // MARK: - STAGE 0: Instant Completeness Pre-Check (Zero Network Cost)
+            // MARK: - STAGE 0: Instant Completeness & Persistent Cache Pre-Check (Zero Network Cost)
             var tracksNeedingOnlineCheck: [Track] = []
-            // Pre checked good count
             var preCheckedGoodCount = 0
+            var preCheckedCachedCount = 0
+
+            // Load persistent downloaded metadata cache from disk if available
+            let cacheFileURL = storageDirectoryURL.appendingPathComponent("downloaded_metadata_cache.json")
+            let persistentCache: PersistentDownloadedMetadataCache? = {
+                if let data = try? Data(contentsOf: cacheFileURL),
+                   let loaded = try? JSONDecoder().decode(PersistentDownloadedMetadataCache.self, from: data) {
+                    return loaded
+                }
+                return nil
+            }()
 
             for track in tracksToScan {
-                if MetadataSanitizer.isFullyTagged(track: track) {
-                    // Synth
+                // 1. Check if we already have downloaded online metadata in persistent cache
+                let path = track.url.standardizedFileURL.path
+                let normName = track.url.lastPathComponent.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                let size = track.fileInfo?.fileSizeBytes ?? 0
+                let fileSig = "\(normName)__\(size)"
+                let normArtist = FuzzyMatcher.normalize(track.artist)
+                let normTitle = FuzzyMatcher.normalize(track.title)
+                let durInt = Int(track.duration.rounded())
+                let trackSig = "\(normArtist)__\(normTitle)__\(durInt)"
+
+                let cachedRecord = persistentCache?.recordsByFilePath[path]
+                    ?? persistentCache?.recordsByFileSignature[fileSig]
+                    ?? (!trackSig.isEmpty ? persistentCache?.recordsBySignature[trackSig] : nil)
+
+                if let record = cachedRecord {
+                    let currentTrack = (track.artworkKey == nil && record.cachedArtworkKey != nil) ? track.withArtworkKey(record.cachedArtworkKey) : track
+                    let diff = MetadataDiff(localTrack: currentTrack, onlineMetadata: record.onlineMetadata, preserveLocalTitleAndArtist: true)
+                    if record.wasApplied || diff.fieldsEnrichedCount == 0 {
+                        currentGood.removeAll { $0.id == track.id }
+                        currentGood.append(diff)
+                    } else {
+                        currentDiffs.removeAll { $0.id == track.id }
+                        currentDiffs.append(diff)
+                    }
+                    currentUnmatched.remove(track.id)
+                    scannedCount += 1
+                    preCheckedCachedCount += 1
+                } else if MetadataSanitizer.isFullyTagged(track: track) {
+                    // 2. Synthesize complete tags for fully-tagged songs
                     let synth = MetadataSanitizer.synthesizeVerifiedMetadata(for: track)
-                    // Diff
                     let diff = MetadataDiff(localTrack: track, onlineMetadata: synth, preserveLocalTitleAndArtist: true)
                     currentGood.removeAll { $0.id == track.id }
                     currentDiffs.removeAll { $0.id == track.id }
@@ -176,8 +212,8 @@ public actor BackgroundMetadataScanner {
                 }
             }
 
-            AppLogger.metadata.info("[Stage 0: Instant Pre-Check] Verified \(preCheckedGoodCount) tracks locally with zero network requests. \(tracksNeedingOnlineCheck.count) tracks require online lookup.")
-            emitProgress(statusMessage: "Verified \(preCheckedGoodCount) complete tracks locally...")
+            AppLogger.metadata.info("[Stage 0: Instant Pre-Check] Resolved \(preCheckedCachedCount) from persistent cache, \(preCheckedGoodCount) complete tracks locally. \(tracksNeedingOnlineCheck.count) tracks require online lookup.")
+            emitProgress(statusMessage: "Checked cache (\(preCheckedCachedCount) cached, \(preCheckedGoodCount) complete)...")
 
             // Ensure preconditions are met before proceeding
             guard !tracksNeedingOnlineCheck.isEmpty && !Task.isCancelled else {
@@ -568,6 +604,8 @@ public actor BackgroundMetadataScanner {
         let verifiedGoodFileURL = storageURL.appendingPathComponent("verified_good_diffs.json")
         // File system location for unmatched file url
         let unmatchedFileURL = storageURL.appendingPathComponent("unmatched_tracks.json")
+        // File system location for downloaded metadata cache
+        let cacheFileURL = storageURL.appendingPathComponent("downloaded_metadata_cache.json")
 
         do {
             // Diff data
@@ -581,7 +619,51 @@ public actor BackgroundMetadataScanner {
             // Unmatched data
             let unmatchedData = try JSONEncoder().encode(Array(unmatched))
             try unmatchedData.write(to: unmatchedFileURL, options: .atomic)
-            AppLogger.storage.info("[Persistence] Saved \(diffs.count) enrichment diffs, \(good.count) verified good, \(unmatched.count) unmatched to disk.")
+
+            // Update persistent downloaded metadata cache with all verified and enriched online matches
+            var persistentCache: PersistentDownloadedMetadataCache = {
+                if let data = try? Data(contentsOf: cacheFileURL),
+                   let loaded = try? JSONDecoder().decode(PersistentDownloadedMetadataCache.self, from: data) {
+                    return loaded
+                }
+                return PersistentDownloadedMetadataCache()
+            }()
+
+            for item in (diffs + good) {
+                let track = item.localTrack
+                let path = track.url.standardizedFileURL.path
+                let normName = track.url.lastPathComponent.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                let size = track.fileInfo?.fileSizeBytes ?? 0
+                let fileSig = "\(normName)__\(size)"
+                let normArtist = FuzzyMatcher.normalize(track.artist)
+                let normTitle = FuzzyMatcher.normalize(track.title)
+                let durInt = Int(track.duration.rounded())
+                let trackSig = "\(normArtist)__\(normTitle)__\(durInt)"
+
+                let record = CachedTrackMetadataRecord(
+                    onlineMetadata: item.onlineMetadata,
+                    localTrackSignature: trackSig,
+                    filePath: path,
+                    fileName: track.url.lastPathComponent,
+                    fileSizeBytes: size,
+                    cachedArtworkKey: track.artworkKey,
+                    downloadedAt: Date(),
+                    wasApplied: item.fieldsEnrichedCount == 0
+                )
+
+                persistentCache.recordsByFilePath[path] = record
+                if !fileSig.isEmpty {
+                    persistentCache.recordsByFileSignature[fileSig] = record
+                }
+                if !trackSig.isEmpty {
+                    persistentCache.recordsBySignature[trackSig] = record
+                }
+            }
+
+            let cacheData = try JSONEncoder().encode(persistentCache)
+            try cacheData.write(to: cacheFileURL, options: .atomic)
+
+            AppLogger.storage.info("[Persistence] Saved \(diffs.count) enrichment diffs, \(good.count) verified good, \(unmatched.count) unmatched, \(persistentCache.recordsByFilePath.count) cached records to disk.")
         } catch {
             AppLogger.storage.error("[Persistence Failed] Background scanner failed to persist state: \(error.localizedDescription)")
         }

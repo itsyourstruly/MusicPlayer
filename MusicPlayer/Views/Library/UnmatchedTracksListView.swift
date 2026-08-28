@@ -18,7 +18,6 @@ public struct UnmatchedTracksListView: View {
     }
 
     private var filteredTracks: [Track] {
-        // Query
         let query = FuzzyMatcher.normalize(searchText)
         if query.isEmpty { return libraryStore.unmatchedTracks }
         return libraryStore.unmatchedTracks.filter { track in
@@ -34,11 +33,9 @@ public struct UnmatchedTracksListView: View {
                     emptyUnmatchedView
                 } else {
                     ScrollView(.vertical, showsIndicators: true) {
-                        LazyVStack(spacing: 16) {
-                            // Pinned Search Bar at the Top
+                        LazyVStack(spacing: 20) {
                             searchBar
 
-                            // Header Summary & Global Re-check
                             UnmatchedHeaderCardView(
                                 count: libraryStore.unmatchedTracks.count,
                                 isScanning: libraryStore.isBackgroundCheckingMetadata,
@@ -69,7 +66,6 @@ public struct UnmatchedTracksListView: View {
                                 }
                                 .padding(.vertical, 32)
                             } else {
-                                // Unmatched Track Cards
                                 ForEach(filteredTracks) { track in
                                     UnmatchedTrackCardView(
                                         track: track,
@@ -82,6 +78,9 @@ public struct UnmatchedTracksListView: View {
                                             selectedTrackForManualSearch = track
                                         }
                                     )
+
+                                    Divider()
+                                        .overlay(appTheme.separatorColor.opacity(0.35))
                                 }
                             }
                         }
@@ -101,7 +100,6 @@ public struct UnmatchedTracksListView: View {
                     .font(.system(size: 13, weight: .bold, design: .monospaced))
                 }
             }
-            // Modal presentation sheet
             .sheet(item: $selectedTrackForManualSearch) { track in
                 OnlineMetadataMatchSheet(track: track, libraryStore: libraryStore)
                     .tint(appTheme.accentColor)
@@ -123,19 +121,18 @@ public struct UnmatchedTracksListView: View {
                 }
                 .font(.system(size: 10, weight: .bold, design: .monospaced))
                 .foregroundStyle(.secondary)
+                .buttonStyle(.plain)
             }
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
-        .background(appTheme.secondaryBackgroundColor)
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(appTheme.separatorColor.opacity(0.6), lineWidth: 1)
+            Rectangle()
+                .frame(height: 1)
+                .foregroundStyle(appTheme.separatorColor.opacity(0.6)),
+            alignment: .bottom
         )
     }
-
-    // MARK: - Handlers
 
     // Recheck track
     private func recheckTrack(_ track: Track) {
@@ -143,7 +140,6 @@ public struct UnmatchedTracksListView: View {
         trackStatusMessages[track.id] = "Checking online database..."
 
         Task {
-            // Matched
             let matched = await libraryStore.recheckUnmatchedTrack(track)
             checkingTrackIDs.remove(track.id)
             if matched {
@@ -161,7 +157,7 @@ public struct UnmatchedTracksListView: View {
                 .font(.system(size: 14, weight: .bold, design: .monospaced))
                 .foregroundStyle(Color.primary)
 
-            Text("All tracks in your linked directory have verified matches or complete metadata.")
+            Text("All tracks in your music library were successfully recognized or verified.")
                 .font(.system(size: 12))
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -171,20 +167,14 @@ public struct UnmatchedTracksListView: View {
     }
 }
 
-// MARK: - Subviews
-
-/// Summary header card for unmatched / ignored tracks.
+/// Summary header card for Unmatched Tracks sheet.
 private struct UnmatchedHeaderCardView: View {
-    // Count
     let count: Int
-    // Flag indicating if scanning
     let isScanning: Bool
-    // On recheck all
     let onRecheckAll: () -> Void
 
     @Environment(\.appTheme) private var appTheme
 
-    // Body
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .top) {
@@ -202,134 +192,118 @@ private struct UnmatchedHeaderCardView: View {
 
                 Text("STRICT FILTER")
                     .font(.system(size: 9, weight: .bold, design: .monospaced))
-                    .foregroundStyle(appTheme.accentColor)
-                    .padding(.horizontal, 5)
-                    .padding(.vertical, 2)
-                    .background(appTheme.accentColor.opacity(0.12))
-                    .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
+                    .foregroundStyle(Color.blue)
             }
 
-            Text("These tracks had no exact match in the Apple Music catalog during background analysis and were ignored to prevent incorrect tag assignments.")
-                .font(.system(size: 11))
+            Text("THESE TRACKS HAD NO EXACT MATCH IN THE APPLE MUSIC CATALOG DURING BACKGROUND ANALYSIS AND WERE IGNORED TO PREVENT INCORRECT TAG ASSIGNMENTS.")
+                .font(.system(size: 11, design: .monospaced))
                 .foregroundStyle(.secondary)
-
-            Divider()
-                .overlay(appTheme.separatorColor)
-
-            Button(action: onRecheckAll) {
-                Text(isScanning ? "CHECKING DATABASE..." : "RE-CHECK ALL (\(count) TRACKS)")
-                    .font(.system(size: 12, weight: .bold, design: .monospaced))
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(TypographicButtonStyle(variant: .primary, size: .regular))
-            .disabled(isScanning)
-        }
-        .padding(14)
-        .background(appTheme.secondaryBackgroundColor)
-        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-    }
-}
-
-/// An individual card for an unmatched track with artwork preview, metadata, and re-check actions.
-private struct UnmatchedTrackCardView: View {
-    // Track
-    let track: Track
-    // Flag indicating if checking
-    let isChecking: Bool
-    // Status message
-    let statusMessage: String?
-    // On recheck
-    let onRecheck: () -> Void
-    // On manual search
-    let onManualSearch: () -> Void
-
-    @Environment(\.appTheme) private var appTheme
-
-    // Body
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 12) {
-                // Album artwork thumbnail
-                AlbumArtworkView(
-                    artworkKey: track.artworkKey,
-                    title: track.album,
-                    subtitle: track.artist,
-                    cornerRadius: 6
-                )
-                .frame(width: 52, height: 52)
-                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-
-                // Metadata specs
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(track.title)
-                        .font(.system(size: 14, weight: .bold))
-                        .foregroundStyle(Color.primary)
-                        .lineLimit(1)
-
-                    Text(track.artist)
-                        .font(.system(size: 12))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-
-                    HStack(spacing: 6) {
-                        Text(track.album)
-                            .font(.system(size: 10, design: .monospaced))
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-
-                        if let info = track.fileInfo {
-                            Text("• .\(info.fileExtension)")
-                                .font(.system(size: 10, design: .monospaced))
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                }
-
-                Spacer()
-
-                Text("IGNORED")
-                    .font(.system(size: 8, weight: .bold, design: .monospaced))
-                    .foregroundStyle(Color.secondary)
-                    .padding(.horizontal, 5)
-                    .padding(.vertical, 2)
-                    .background(appTheme.backgroundColor.opacity(0.8))
-                    .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
-            }
-
-            if let msg = statusMessage {
-                Text(msg)
-                    .font(.system(size: 10, weight: .bold, design: .monospaced))
-                    .foregroundStyle(appTheme.accentColor)
-                    .padding(.vertical, 2)
-            }
 
             Divider()
                 .overlay(appTheme.separatorColor.opacity(0.5))
 
-            // Action Buttons
-            HStack(spacing: 10) {
+            Button(action: onRecheckAll) {
+                Text(isScanning ? "CHECKING DATABASE..." : "RE-CHECK ALL (\(count) TRACKS)")
+                    .font(.system(size: 13, weight: .bold, design: .monospaced))
+                    .foregroundStyle(isScanning ? Color.secondary : Color.blue)
+            }
+            .buttonStyle(.plain)
+            .disabled(isScanning)
+        }
+        .padding(.vertical, 8)
+    }
+}
+
+/// Centered card for an unmatched track with artwork on top, sub-artwork status, and centered metadata.
+private struct UnmatchedTrackCardView: View {
+    let track: Track
+    let isChecking: Bool
+    let statusMessage: String?
+    let onRecheck: () -> Void
+    let onManualSearch: () -> Void
+
+    @Environment(\.appTheme) private var appTheme
+
+    var body: some View {
+        VStack(alignment: .center, spacing: 12) {
+            // Centered Album Artwork
+            VStack(spacing: 6) {
+                AlbumArtworkView(
+                    artworkKey: track.artworkKey,
+                    title: track.album,
+                    subtitle: track.artist,
+                    cornerRadius: 8
+                )
+                .frame(width: 150, height: 150)
+                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+
+                // Sub-Artwork Status Label
+                Text("ORIGINAL LOCAL METADATA")
+                    .font(.system(size: 9, weight: .bold, design: .monospaced))
+                    .foregroundStyle(Color.secondary)
+            }
+
+            // Centered Metadata Rows
+            VStack(alignment: .center, spacing: 6) {
+                centeredRow(label: "TITLE", value: track.title)
+                centeredRow(label: "ARTIST", value: track.artist)
+                centeredRow(label: "ALBUM", value: track.album.isEmpty ? "—" : track.album)
+                centeredRow(label: "YEAR", value: track.year.map { String($0) } ?? "—")
+
+                if let g = track.genre, !g.isEmpty && g != "Unknown Genre" && g != "—" {
+                    centeredRow(label: "GENRE", value: g)
+                }
+
+                if let info = track.fileInfo {
+                    centeredRow(label: "CODEC", value: info.formatDescription)
+                }
+            }
+            .frame(maxWidth: .infinity)
+
+            if let msg = statusMessage {
+                Text(msg.uppercased())
+                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+                    .foregroundStyle(Color.blue)
+                    .padding(.vertical, 2)
+            }
+
+            // Centered Action Buttons
+            HStack(spacing: 24) {
+                Spacer()
+
                 Button(action: onRecheck) {
                     Text(isChecking ? "CHECKING..." : "RE-CHECK")
-                        .font(.system(size: 10, weight: .bold, design: .monospaced))
-                        .frame(maxWidth: .infinity)
+                        .font(.system(size: 12, weight: .bold, design: .monospaced))
+                        .foregroundStyle(isChecking ? Color.secondary : Color.blue)
                 }
-                .buttonStyle(TypographicButtonStyle(variant: .secondary, size: .small))
+                .buttonStyle(.plain)
                 .disabled(isChecking)
 
                 Button(action: onManualSearch) {
                     Text("CUSTOM SEARCH")
-                        .font(.system(size: 10, weight: .bold, design: .monospaced))
-                        .frame(maxWidth: .infinity)
+                        .font(.system(size: 12, weight: .bold, design: .monospaced))
+                        .foregroundStyle(Color.primary)
                 }
-                .buttonStyle(TypographicButtonStyle(variant: .subtle, size: .small))
+                .buttonStyle(.plain)
+
+                Spacer()
             }
+            .padding(.top, 4)
         }
-        .padding(12)
-        .background(appTheme.secondaryBackgroundColor.opacity(0.6))
-        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .stroke(appTheme.separatorColor, lineWidth: 1)
-        )
+        .padding(.vertical, 8)
+    }
+
+    private func centeredRow(label: String, value: String) -> some View {
+        HStack(spacing: 6) {
+            Text(label)
+                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                .foregroundStyle(.secondary)
+
+            Text(value)
+                .font(.system(size: 13, weight: .bold, design: .monospaced))
+                .foregroundStyle(Color.primary)
+                .lineLimit(1)
+        }
+        .padding(.vertical, 1)
     }
 }

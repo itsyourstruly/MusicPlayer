@@ -1149,7 +1149,7 @@ private struct MorphingPlayerCard: View, Animatable {
 
             Spacer(minLength: 12)
 
-            // 5. Bottom Action Bar (QUEUE on left, AirPlay on right)
+            // 5. Bottom Action Bar (QUEUE on left, Audio Route on right)
             HStack(spacing: 24) {
                 Button(action: onOpenQueue) {
                     HStack(spacing: 6) {
@@ -1166,10 +1166,10 @@ private struct MorphingPlayerCard: View, Animatable {
 
                 Spacer()
 
-                ZStack {
-                    AirPlayButtonView()
-                        .frame(width: 36, height: 36)
-                }
+                AirPlayButtonView(
+                    routeName: playerService.currentAudioRouteName,
+                    foregroundColor: Color.white
+                )
             }
             .padding(.horizontal, 28)
             .padding(.bottom, max(bottomSafeArea, 16) + 12)

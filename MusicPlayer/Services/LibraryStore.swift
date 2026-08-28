@@ -3,6 +3,86 @@ import Observation
 import SwiftUI
 import os
 
+/// Persistent cache record for a downloaded online track metadata result and artwork.
+public struct CachedTrackMetadataRecord: Codable, Sendable {
+    public let onlineMetadata: OnlineTrackMetadata
+    public let localTrackSignature: String
+    public let filePath: String
+    public let fileName: String
+    public let fileSizeBytes: Int64
+    public let cachedArtworkKey: String?
+    public let downloadedAt: Date
+    public var wasApplied: Bool
+
+    // Applied snapshot fields to perfectly restore tracks after rescan or unlink
+    public var appliedTitle: String?
+    public var appliedArtist: String?
+    public var appliedAlbum: String?
+    public var appliedAlbumArtist: String?
+    public var appliedGenre: String?
+    public var appliedYear: Int?
+    public var appliedTrackNumber: Int?
+    public var appliedOriginalTrackNumber: Int?
+    public var appliedDeluxeTrackNumber: Int?
+    public var appliedTotalTracks: Int?
+    public var appliedDiscNumber: Int?
+
+    public init(
+        onlineMetadata: OnlineTrackMetadata,
+        localTrackSignature: String,
+        filePath: String,
+        fileName: String,
+        fileSizeBytes: Int64,
+        cachedArtworkKey: String?,
+        downloadedAt: Date = Date(),
+        wasApplied: Bool = false,
+        appliedTitle: String? = nil,
+        appliedArtist: String? = nil,
+        appliedAlbum: String? = nil,
+        appliedAlbumArtist: String? = nil,
+        appliedGenre: String? = nil,
+        appliedYear: Int? = nil,
+        appliedTrackNumber: Int? = nil,
+        appliedOriginalTrackNumber: Int? = nil,
+        appliedDeluxeTrackNumber: Int? = nil,
+        appliedTotalTracks: Int? = nil,
+        appliedDiscNumber: Int? = nil
+    ) {
+        self.onlineMetadata = onlineMetadata
+        self.localTrackSignature = localTrackSignature
+        self.filePath = filePath
+        self.fileName = fileName
+        self.fileSizeBytes = fileSizeBytes
+        self.cachedArtworkKey = cachedArtworkKey
+        self.downloadedAt = downloadedAt
+        self.wasApplied = wasApplied
+        self.appliedTitle = appliedTitle
+        self.appliedArtist = appliedArtist
+        self.appliedAlbum = appliedAlbum
+        self.appliedAlbumArtist = appliedAlbumArtist
+        self.appliedGenre = appliedGenre
+        self.appliedYear = appliedYear
+        self.appliedTrackNumber = appliedTrackNumber
+        self.appliedOriginalTrackNumber = appliedOriginalTrackNumber
+        self.appliedDeluxeTrackNumber = appliedDeluxeTrackNumber
+        self.appliedTotalTracks = appliedTotalTracks
+        self.appliedDiscNumber = appliedDiscNumber
+    }
+}
+
+/// Multi-index container for persistently cached downloaded metadata that survives unlinking, rescanning, and restarts.
+public struct PersistentDownloadedMetadataCache: Codable, Sendable {
+    public var recordsByFilePath: [String: CachedTrackMetadataRecord] = [:]
+    public var recordsBySignature: [String: CachedTrackMetadataRecord] = [:]
+    public var recordsByFileSignature: [String: CachedTrackMetadataRecord] = [:]
+
+    public init() {}
+
+    public var totalRecordsCount: Int {
+        recordsByFilePath.count
+    }
+}
+
 /// Unified `@Observable` central library state and data persistence store.
 /// Manages tracks, albums, artists, playlists, user preferences, and background scanning.
 @Observable
@@ -37,6 +117,8 @@ public final class LibraryStore {
     public private(set) var verifiedGoodDiffs: [MetadataDiff] = []
     // Tracks that could not be automatically matched online
     public private(set) var unmatchedTrackIDs: Set<UUID> = []
+    // Persistent multi-index downloaded metadata cache
+    public private(set) var downloadedMetadataCache = PersistentDownloadedMetadataCache()
     // Controls is background checking metadata
     public private(set) var isBackgroundCheckingMetadata: Bool = false
     public private(set) var backgroundCheckProgress: Double = 0.0
@@ -415,6 +497,7 @@ public final class LibraryStore {
     }
 
     /// Unlinks the music folder and clears scanned library data.
+    /// Preserves downloaded metadata cache and artwork cache so re-linking immediately restores all metadata.
     public func unlinkDirectory() {
         SecurityScopedBookmark.shared.clearSavedBookmark()
         settings.linkedFolderName = nil
@@ -427,9 +510,8 @@ public final class LibraryStore {
         saveSettings()
         saveLibrary()
         saveDuplicates()
-        Task {
-            await ArtworkCacheService.shared.clearCache()
-        }
+        // NOTE: downloadedMetadataCache and ArtworkCacheService are intentionally kept intact on disk!
+        AppLogger.library.info("Unlinked directory while safely preserving downloaded metadata and artwork cache.")
     }
 
     // Rescan directory
@@ -451,15 +533,22 @@ public final class LibraryStore {
         self.tracks = scannedTracks
         rebuildAlbumsAndArtists()
 
+        // Automatically reattach persistently cached downloaded metadata and artwork
+        let reattached = reattachCachedMetadataToTracks()
+        if reattached > 0 {
+            rebuildAlbumsAndArtists()
+        }
+
         self.settings.lastScanDate = Date()
         self.settings.totalScannedFiles = scannedTracks.count
         self.isScanning = false
         self.scanProgress = 1.0
-        self.scanStatusText = "Scan complete. Indexed \(scannedTracks.count) tracks."
+        self.scanStatusText = "Scan complete. Indexed \(scannedTracks.count) tracks (reattached \(reattached) cached)."
 
         saveLibrary()
         saveSettings()
-        AppLogger.library.info("Library updated with \(scannedTracks.count) tracks.")
+        saveEnrichmentCache()
+        AppLogger.library.info("Library updated with \(scannedTracks.count) tracks. Reattached \(reattached) cached metadata records.")
     }
 
     // MARK: - Playlist Operations
@@ -1480,10 +1569,24 @@ public final class LibraryStore {
         self.verifiedGoodDiffs.append(diff)
         self.saveEnrichmentCache()
 
+        // Permanently record in downloaded metadata cache
+        self.cacheDownloadedMetadata(
+            track: updatedTrack,
+            onlineMetadata: onlineMetadata,
+            artworkKey: finalArtworkKey,
+            wasApplied: true
+        )
+
         rebuildAlbumsAndArtists()
         await recalculateDuplicates()
         saveLibrary()
         return true
+    }
+
+    /// Dismisses a pending metadata enrichment diff, keeping the local track as-is.
+    public func dismissEnrichmentDiff(diffID: UUID) {
+        self.enrichmentDiffs.removeAll { $0.id == diffID }
+        self.saveEnrichmentCache()
     }
 
     /// High-performance batch enrichment engine with parallel artwork deduplication, single-pass in-memory updates, and single-transaction disk save.
@@ -1731,6 +1834,14 @@ public final class LibraryStore {
             processedTrackIDs.insert(diff.localTrack.id)
             enrichedCount += 1
             fileTaggingQueue.append((url: existingTrack.url, track: updatedTrack, artData: artData))
+
+            // Permanently cache downloaded online metadata and applied state
+            self.cacheDownloadedMetadata(
+                track: updatedTrack,
+                onlineMetadata: onlineMetadata,
+                artworkKey: finalArtworkKey,
+                wasApplied: true
+            )
 
             // Updated diff
             let updatedDiff = MetadataDiff(
@@ -2009,6 +2120,7 @@ public final class LibraryStore {
                 verifiedGoodDiffs.append(diff)
             }
             saveEnrichmentCache()
+            cacheDownloadedMetadata(track: track, onlineMetadata: match, wasApplied: false)
             return true
         } else {
             unmatchedTrackIDs.insert(track.id)
@@ -2046,6 +2158,7 @@ public final class LibraryStore {
                 verifiedGoodDiffs.append(diff)
             }
             saveEnrichmentCache()
+            cacheDownloadedMetadata(track: track, onlineMetadata: match, wasApplied: false)
             return true
         } else {
             unmatchedTrackIDs.insert(track.id)
@@ -2137,6 +2250,188 @@ public final class LibraryStore {
     private var verifiedGoodFileURL: URL { storageDirectoryURL.appendingPathComponent("verified_good_diffs.json") }
     // File path location
     private var unmatchedFileURL: URL { storageDirectoryURL.appendingPathComponent("unmatched_tracks.json") }
+    // File path location for persistent downloaded metadata cache
+    private var downloadedMetadataCacheFileURL: URL { storageDirectoryURL.appendingPathComponent("downloaded_metadata_cache.json") }
+
+    // Save downloaded metadata cache
+    public func saveDownloadedMetadataCache() {
+        do {
+            let data = try JSONEncoder().encode(downloadedMetadataCache)
+            try data.write(to: downloadedMetadataCacheFileURL, options: .atomic)
+        } catch {
+            AppLogger.storage.error("Failed to save downloaded metadata cache: \(error.localizedDescription)")
+        }
+    }
+
+    // Load downloaded metadata cache
+    public func loadDownloadedMetadataCache() {
+        if let data = try? Data(contentsOf: downloadedMetadataCacheFileURL),
+           let loaded = try? JSONDecoder().decode(PersistentDownloadedMetadataCache.self, from: data) {
+            self.downloadedMetadataCache = loaded
+            AppLogger.storage.info("Loaded \(loaded.recordsByFilePath.count) downloaded metadata records from cache.")
+        }
+    }
+
+    // Manually clear downloaded metadata cache
+    public func clearDownloadedMetadataCache() {
+        self.downloadedMetadataCache = PersistentDownloadedMetadataCache()
+        try? fileManager.removeItem(at: downloadedMetadataCacheFileURL)
+        Task {
+            await ArtworkCacheService.shared.clearCache()
+        }
+        AppLogger.storage.info("Manually cleared downloaded metadata and artwork cache.")
+    }
+
+    /// Stores a downloaded online track metadata record across multiple lookup indices.
+    public func cacheDownloadedMetadata(
+        track: Track,
+        onlineMetadata: OnlineTrackMetadata,
+        artworkKey: String? = nil,
+        wasApplied: Bool = false
+    ) {
+        let sig = computeTrackSignature(artist: track.artist, title: track.title, duration: track.duration)
+        let fileSig = computeFileSignature(fileName: track.url.lastPathComponent, size: track.fileInfo?.fileSizeBytes ?? 0)
+        let path = track.url.standardizedFileURL.path
+
+        let record = CachedTrackMetadataRecord(
+            onlineMetadata: onlineMetadata,
+            localTrackSignature: sig,
+            filePath: path,
+            fileName: track.url.lastPathComponent,
+            fileSizeBytes: track.fileInfo?.fileSizeBytes ?? 0,
+            cachedArtworkKey: artworkKey ?? track.artworkKey,
+            downloadedAt: Date(),
+            wasApplied: wasApplied,
+            appliedTitle: wasApplied ? track.title : nil,
+            appliedArtist: wasApplied ? track.artist : nil,
+            appliedAlbum: wasApplied ? track.album : nil,
+            appliedAlbumArtist: wasApplied ? track.albumArtist : nil,
+            appliedGenre: wasApplied ? track.genre : nil,
+            appliedYear: wasApplied ? track.year : nil,
+            appliedTrackNumber: wasApplied ? track.trackNumber : nil,
+            appliedOriginalTrackNumber: wasApplied ? track.originalTrackNumber : nil,
+            appliedDeluxeTrackNumber: wasApplied ? track.deluxeTrackNumber : nil,
+            appliedTotalTracks: wasApplied ? track.totalTracks : nil,
+            appliedDiscNumber: wasApplied ? track.discNumber : nil
+        )
+
+        downloadedMetadataCache.recordsByFilePath[path] = record
+        if !sig.isEmpty {
+            downloadedMetadataCache.recordsBySignature[sig] = record
+        }
+        if !fileSig.isEmpty {
+            downloadedMetadataCache.recordsByFileSignature[fileSig] = record
+        }
+
+        saveDownloadedMetadataCache()
+    }
+
+    /// Queries the persistent cache using multi-index fallback: path -> file signature -> acoustic signature.
+    public func lookupCachedMetadata(for track: Track) -> CachedTrackMetadataRecord? {
+        let path = track.url.standardizedFileURL.path
+        if let record = downloadedMetadataCache.recordsByFilePath[path] {
+            return record
+        }
+        let fileSig = computeFileSignature(fileName: track.url.lastPathComponent, size: track.fileInfo?.fileSizeBytes ?? 0)
+        if !fileSig.isEmpty, let record = downloadedMetadataCache.recordsByFileSignature[fileSig] {
+            return record
+        }
+        let sig = computeTrackSignature(artist: track.artist, title: track.title, duration: track.duration)
+        if !sig.isEmpty, let record = downloadedMetadataCache.recordsBySignature[sig] {
+            return record
+        }
+        return nil
+    }
+
+    public func computeTrackSignature(artist: String, title: String, duration: TimeInterval) -> String {
+        let normArtist = FuzzyMatcher.normalize(artist)
+        let normTitle = FuzzyMatcher.normalize(title)
+        guard !normArtist.isEmpty || !normTitle.isEmpty else { return "" }
+        let durInt = Int(duration.rounded())
+        return "\(normArtist)__\(normTitle)__\(durInt)"
+    }
+
+    public func computeFileSignature(fileName: String, size: Int64) -> String {
+        let normName = fileName.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !normName.isEmpty else { return "" }
+        return "\(normName)__\(size)"
+    }
+
+    /// Intelligently matches all local tracks with cached downloaded metadata, re-attaching artwork and diffs.
+    @discardableResult
+    public func reattachCachedMetadataToTracks() -> Int {
+        var reattachedCount = 0
+        var updatedTracks = self.tracks
+        var newDiffs: [MetadataDiff] = []
+        var newVerified: [MetadataDiff] = []
+
+        for (idx, track) in tracks.enumerated() {
+            if let record = lookupCachedMetadata(for: track) {
+                reattachedCount += 1
+                var currentTrack = track
+
+                if record.wasApplied {
+                    // Restore fully applied metadata and artwork
+                    currentTrack = Track(
+                        id: track.id,
+                        title: record.appliedTitle ?? track.title,
+                        artist: record.appliedArtist ?? track.artist,
+                        album: record.appliedAlbum ?? track.album,
+                        albumArtist: record.appliedAlbumArtist ?? track.albumArtist,
+                        genre: record.appliedGenre ?? track.genre,
+                        year: record.appliedYear ?? track.year,
+                        trackNumber: record.appliedTrackNumber ?? track.trackNumber,
+                        originalTrackNumber: record.appliedOriginalTrackNumber ?? track.originalTrackNumber,
+                        deluxeTrackNumber: record.appliedDeluxeTrackNumber ?? track.deluxeTrackNumber,
+                        totalTracks: record.appliedTotalTracks ?? track.totalTracks,
+                        discNumber: record.appliedDiscNumber ?? track.discNumber,
+                        duration: track.duration,
+                        url: track.url,
+                        artworkKey: record.cachedArtworkKey ?? track.artworkKey,
+                        dateAdded: track.dateAdded,
+                        fileInfo: track.fileInfo,
+                        lyrics: track.lyrics
+                    )
+                } else if track.artworkKey == nil, let artKey = record.cachedArtworkKey {
+                    currentTrack = track.withArtworkKey(artKey)
+                }
+
+                updatedTracks[idx] = currentTrack
+
+                // Reconstruct MetadataDiff
+                let diff = MetadataDiff(
+                    localTrack: currentTrack,
+                    onlineMetadata: record.onlineMetadata,
+                    preserveLocalTitleAndArtist: true
+                )
+
+                if record.wasApplied || diff.fieldsEnrichedCount == 0 {
+                    newVerified.append(diff)
+                } else {
+                    newDiffs.append(diff)
+                }
+            }
+        }
+
+        self.tracks = updatedTracks
+
+        // Merge reattached diffs with existing without duplicating
+        var existingDiffMap = Dictionary(uniqueKeysWithValues: enrichmentDiffs.map { ($0.localTrack.id, $0) })
+        for d in newDiffs {
+            existingDiffMap[d.localTrack.id] = d
+        }
+        self.enrichmentDiffs = Array(existingDiffMap.values)
+
+        var existingGoodMap = Dictionary(uniqueKeysWithValues: verifiedGoodDiffs.map { ($0.localTrack.id, $0) })
+        for g in newVerified {
+            existingGoodMap[g.localTrack.id] = g
+        }
+        self.verifiedGoodDiffs = Array(existingGoodMap.values)
+
+        saveEnrichmentCache()
+        AppLogger.storage.info("Reattached cached metadata to \(reattachedCount) tracks.")
+        return reattachedCount
+    }
 
     // Save enrichment cache
     public func saveEnrichmentCache() {
@@ -2227,56 +2522,55 @@ public final class LibraryStore {
 
     // Load persisted state
     private func loadPersistedState() {
+        // Load Downloaded Metadata Cache first
+        loadDownloadedMetadataCache()
+
         // Load Settings
         if let data = try? Data(contentsOf: settingsFileURL),
-           // Loaded
            let loaded = try? JSONDecoder().decode(AppSettings.self, from: data) {
             self.settings = loaded
             self.selectedCategory = loaded.defaultLibraryCategory
         }
 
-        // Load Library
+        // Load Enrichment Diffs, Verified Good, & Unmatched before reattachment
+        if let data = try? Data(contentsOf: enrichmentFileURL),
+           let loadedDiffs = try? JSONDecoder().decode([MetadataDiff].self, from: data) {
+            self.enrichmentDiffs = loadedDiffs
+        }
+
+        if let data = try? Data(contentsOf: verifiedGoodFileURL),
+           let loadedGood = try? JSONDecoder().decode([MetadataDiff].self, from: data) {
+            self.verifiedGoodDiffs = loadedGood
+        }
+
+        if let data = try? Data(contentsOf: unmatchedFileURL),
+           let loadedUnmatched = try? JSONDecoder().decode([UUID].self, from: data) {
+            self.unmatchedTrackIDs = Set(loadedUnmatched)
+        }
+
+        // Load Library Tracks
         if let data = try? Data(contentsOf: libraryFileURL),
-           // Loaded tracks
            let loadedTracks = try? JSONDecoder().decode([Track].self, from: data) {
             self.tracks = loadedTracks
             rebuildAlbumsAndArtists()
         }
 
+        // Reattach cached metadata & artwork to loaded library tracks
+        if !self.tracks.isEmpty {
+            let reattached = reattachCachedMetadataToTracks()
+            if reattached > 0 {
+                rebuildAlbumsAndArtists()
+            }
+        }
+
         // Load Duplicates
         if let data = try? Data(contentsOf: duplicatesFileURL),
-           // Loaded duplicates
            let loadedDuplicates = try? JSONDecoder().decode([DuplicateGroup].self, from: data) {
             self.duplicateGroups = loadedDuplicates
         } else if !self.tracks.isEmpty {
             Task {
                 await self.recalculateDuplicates()
             }
-        }
-
-        // Load Enrichment Diffs, Verified Good, & Unmatched
-        if let data = try? Data(contentsOf: enrichmentFileURL),
-           // Loaded diffs
-           let loadedDiffs = try? JSONDecoder().decode([MetadataDiff].self, from: data) {
-            // Unique identifier for track i ds
-            let trackIDs = Set(self.tracks.map { $0.id })
-            self.enrichmentDiffs = loadedDiffs.filter { trackIDs.contains($0.localTrack.id) }
-        }
-
-        if let data = try? Data(contentsOf: verifiedGoodFileURL),
-           // Loaded good
-           let loadedGood = try? JSONDecoder().decode([MetadataDiff].self, from: data) {
-            // Unique identifier for track i ds
-            let trackIDs = Set(self.tracks.map { $0.id })
-            self.verifiedGoodDiffs = loadedGood.filter { trackIDs.contains($0.localTrack.id) }
-        }
-
-        if let data = try? Data(contentsOf: unmatchedFileURL),
-           // Loaded unmatched
-           let loadedUnmatched = try? JSONDecoder().decode([UUID].self, from: data) {
-            // Unique identifier for track i ds
-            let trackIDs = Set(self.tracks.map { $0.id })
-            self.unmatchedTrackIDs = Set(loadedUnmatched.filter { trackIDs.contains($0) })
         }
 
         // Load Playlists

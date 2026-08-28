@@ -70,7 +70,10 @@ public struct GlobalSearchView: View {
 
     // Main view layout structure
     public var body: some View {
-        ScrollView(.vertical, showsIndicators: false) {
+        ZStack(alignment: .top) {
+            libraryStore.settings.appTheme.backgroundColor
+                .ignoresSafeArea()
+
             if isOnlineMode {
                 onlineContentView
             } else {
@@ -78,9 +81,8 @@ public struct GlobalSearchView: View {
             }
         }
         .dismissKeyboardOnDrag()
-        .background(libraryStore.settings.appTheme.backgroundColor.ignoresSafeArea())
         .navigationTitle(isOnlineMode ? "SEARCH ONLINE" : "SEARCH LIBRARY")
-        .navigationBarTitleDisplayMode(.large)
+        .navigationBarTitleDisplayMode(.inline)
         .searchable(
             text: $searchQuery,
             isPresented: $isSearchPresented,
@@ -128,9 +130,11 @@ public struct GlobalSearchView: View {
             // Clean
             let clean = newQuery.trimmingCharacters(in: .whitespacesAndNewlines)
             if clean.isEmpty {
-                self.results = .empty
-                self.onlineResults = OnlineSearchResults()
-                self.isOnlineSearching = false
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    self.results = .empty
+                    self.onlineResults = OnlineSearchResults()
+                    self.isOnlineSearching = false
+                }
             } else {
                 if isOnlineMode {
                     triggerOnlineSearch(query: newQuery, immediate: false)
@@ -148,44 +152,57 @@ public struct GlobalSearchView: View {
     }
 
     private var libraryContentView: some View {
-        VStack(alignment: .leading, spacing: 24) {
+        Group {
             if trimmedQuery.isEmpty {
                 initialStateView
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                    .transition(.opacity)
             } else if !results.hasResults {
                 EmptyStateView(
                     title: "NO RESULTS FOUND",
                     message: "No tracks, albums, artists, or playlists match '\(searchQuery)'."
                 )
                 .padding(.top, 40)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                .transition(.opacity)
             } else {
-                // Tracks Section
-                if !results.tracks.isEmpty {
-                    tracksSection
-                }
+                ScrollView(.vertical, showsIndicators: false) {
+                    VStack(alignment: .leading, spacing: 24) {
+                        // Tracks Section
+                        if !results.tracks.isEmpty {
+                            tracksSection
+                                .transition(.opacity)
+                        }
 
-                // Albums Section
-                if !results.albums.isEmpty {
-                    albumsSection
-                }
+                        // Albums Section
+                        if !results.albums.isEmpty {
+                            albumsSection
+                                .transition(.opacity)
+                        }
 
-                // Artists Section
-                if !results.artists.isEmpty {
-                    artistsSection
-                }
+                        // Artists Section
+                        if !results.artists.isEmpty {
+                            artistsSection
+                                .transition(.opacity)
+                        }
 
-                // Playlists Section
-                if !results.playlists.isEmpty {
-                    playlistsSection
+                        // Playlists Section
+                        if !results.playlists.isEmpty {
+                            playlistsSection
+                                .transition(.opacity)
+                        }
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 16)
+                    .padding(.bottom, 140) // Space for player bar
                 }
+                .transition(.opacity)
             }
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 16)
-        .padding(.bottom, 140) // Space for player bar
     }
 
     private var onlineContentView: some View {
-        VStack(alignment: .leading, spacing: 24) {
+        Group {
             if isOnlineSearching {
                 VStack(spacing: 12) {
                     ProgressView()
@@ -193,8 +210,9 @@ public struct GlobalSearchView: View {
                         .font(.system(size: 11, weight: .bold, design: .monospaced))
                         .foregroundStyle(.secondary)
                 }
-                .frame(maxWidth: .infinity)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 .padding(.top, 60)
+                .transition(.opacity)
             } else if trimmedQuery.isEmpty {
                 VStack(spacing: 12) {
                     Image(systemName: "globe")
@@ -209,63 +227,71 @@ public struct GlobalSearchView: View {
                         .lineSpacing(3)
                         .frame(maxWidth: 300)
                 }
-                .frame(maxWidth: .infinity)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                .transition(.opacity)
             } else if onlineResults.isEmpty {
                 EmptyStateView(
                     title: "NO ONLINE MATCHES",
                     message: "No online tracks, albums, or artists found for '\(searchQuery)'."
                 )
                 .padding(.top, 40)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                .transition(.opacity)
             } else {
-                // Online Artists
-                if !onlineResults.artists.isEmpty {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text("ARTISTS (\(onlineResults.artists.count))")
-                            .font(.system(size: 11, weight: .bold, design: .monospaced))
-                            .foregroundStyle(.secondary)
+                ScrollView(.vertical, showsIndicators: false) {
+                    VStack(alignment: .leading, spacing: 24) {
+                        // Online Artists
+                        if !onlineResults.artists.isEmpty {
+                            VStack(alignment: .leading, spacing: 10) {
+                                Text("ARTISTS (\(onlineResults.artists.count))")
+                                    .font(.system(size: 11, weight: .bold, design: .monospaced))
+                                    .foregroundStyle(.secondary)
 
-                        LazyVGrid(columns: onlineColumns, spacing: 14) {
-                            ForEach(onlineResults.artists) { artist in
-                                OnlineArtistGridCard(artist: artist)
+                                LazyVGrid(columns: onlineColumns, spacing: 14) {
+                                    ForEach(onlineResults.artists) { artist in
+                                        OnlineArtistGridCard(artist: artist)
+                                    }
+                                }
+                            }
+                        }
+
+                        // Online Albums
+                        if !onlineResults.albums.isEmpty {
+                            VStack(alignment: .leading, spacing: 10) {
+                                Text("ALBUMS (\(onlineResults.albums.count))")
+                                    .font(.system(size: 11, weight: .bold, design: .monospaced))
+                                    .foregroundStyle(.secondary)
+
+                                LazyVGrid(columns: onlineColumns, spacing: 14) {
+                                    ForEach(onlineResults.albums) { album in
+                                        OnlineAlbumGridCard(album: album)
+                                    }
+                                }
+                            }
+                        }
+
+                        // Online Tracks
+                        if !onlineResults.tracks.isEmpty {
+                            VStack(alignment: .leading, spacing: 10) {
+                                Text("TRACKS (\(onlineResults.tracks.count))")
+                                    .font(.system(size: 11, weight: .bold, design: .monospaced))
+                                    .foregroundStyle(.secondary)
+
+                                LazyVGrid(columns: onlineColumns, spacing: 14) {
+                                    ForEach(onlineResults.tracks) { track in
+                                        OnlineTrackGridCard(track: track)
+                                    }
+                                }
                             }
                         }
                     }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 16)
+                    .padding(.bottom, 140) // Space for player bar
                 }
-
-                // Online Albums
-                if !onlineResults.albums.isEmpty {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text("ALBUMS (\(onlineResults.albums.count))")
-                            .font(.system(size: 11, weight: .bold, design: .monospaced))
-                            .foregroundStyle(.secondary)
-
-                        LazyVGrid(columns: onlineColumns, spacing: 14) {
-                            ForEach(onlineResults.albums) { album in
-                                OnlineAlbumGridCard(album: album)
-                            }
-                        }
-                    }
-                }
-
-                // Online Tracks
-                if !onlineResults.tracks.isEmpty {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text("TRACKS (\(onlineResults.tracks.count))")
-                            .font(.system(size: 11, weight: .bold, design: .monospaced))
-                            .foregroundStyle(.secondary)
-
-                        LazyVGrid(columns: onlineColumns, spacing: 14) {
-                            ForEach(onlineResults.tracks) { track in
-                                OnlineTrackGridCard(track: track)
-                            }
-                        }
-                    }
-                }
+                .transition(.opacity)
             }
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 16)
-        .padding(.bottom, 140) // Space for player bar
     }
 
     // Trigger online search
@@ -291,8 +317,10 @@ public struct GlobalSearchView: View {
             // Results
             let results = await OnlineDiscoveryService.shared.search(query: clean)
             if !Task.isCancelled {
-                self.onlineResults = results
-                self.isOnlineSearching = false
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    self.onlineResults = results
+                    self.isOnlineSearching = false
+                }
             }
         }
     }
@@ -303,7 +331,9 @@ public struct GlobalSearchView: View {
         let cleanQuery = FuzzyMatcher.normalize(query)
         // Ensure preconditions are met before proceeding
         guard !cleanQuery.isEmpty else {
-            self.results = .empty
+            withAnimation(.easeInOut(duration: 0.2)) {
+                self.results = .empty
+            }
             return
         }
 
@@ -348,12 +378,14 @@ public struct GlobalSearchView: View {
         let matchedPlaylists = scoredPlaylists.sorted { $0.1 > $1.1 }.map { $0.0 }
 
         if !Task.isCancelled {
-            self.results = SearchResults(
-                tracks: matchedTracks,
-                albums: matchedAlbums,
-                artists: matchedArtists,
-                playlists: matchedPlaylists
-            )
+            withAnimation(.easeInOut(duration: 0.2)) {
+                self.results = SearchResults(
+                    tracks: matchedTracks,
+                    albums: matchedAlbums,
+                    artists: matchedArtists,
+                    playlists: matchedPlaylists
+                )
+            }
         }
     }
 
@@ -435,7 +467,7 @@ public struct GlobalSearchView: View {
                         )
                     }
                 }
-                .transition(.opacity.combined(with: .move(edge: .top)))
+                .transition(.opacity)
             }
         }
     }
@@ -498,7 +530,7 @@ public struct GlobalSearchView: View {
                         .albumContextMenu(album: album, libraryStore: libraryStore, playerService: playerService)
                     }
                 }
-                .transition(.opacity.combined(with: .move(edge: .top)))
+                .transition(.opacity)
             }
         }
     }
@@ -551,7 +583,7 @@ public struct GlobalSearchView: View {
                         .buttonStyle(.plain)
                     }
                 }
-                .transition(.opacity.combined(with: .move(edge: .top)))
+                .transition(.opacity)
             }
         }
     }
@@ -620,7 +652,7 @@ public struct GlobalSearchView: View {
                         .buttonStyle(.plain)
                     }
                 }
-                .transition(.opacity.combined(with: .move(edge: .top)))
+                .transition(.opacity)
             }
         }
     }

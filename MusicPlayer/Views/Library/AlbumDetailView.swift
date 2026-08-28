@@ -516,15 +516,24 @@ public struct AlbumMetadataReviewSheet: View {
                                 }
                             )
 
-                            // Side-by-Side Comparison Track Cards (Identical to Settings)
+                            // Swipeable Track Cards
                             ForEach(diffs) { diff in
-                                MetadataSideBySideDiffCard(
+                                SwipeableMetadataTrackCard(
                                     diff: diff,
                                     preserveFeatures: preserveFeatures,
-                                    onApply: {
-                                        applySingle(diff: diff)
+                                    onApply: { lockedFields in
+                                        applySingleWithLocks(diff: diff, lockedFields: lockedFields)
+                                    },
+                                    onKeepLocal: {
+                                        withAnimation {
+                                            libraryStore.dismissEnrichmentDiff(diffID: diff.id)
+                                        }
+                                        HapticFeedback.notificationSuccess()
                                     }
                                 )
+
+                                Divider()
+                                    .overlay(appTheme.separatorColor.opacity(0.35))
                             }
                         }
                         .padding(.horizontal, 16)
@@ -546,13 +555,35 @@ public struct AlbumMetadataReviewSheet: View {
         }
     }
 
-    // Apply single
-    private func applySingle(diff: MetadataDiff) {
+    // Apply single with custom locks
+    private func applySingleWithLocks(diff: MetadataDiff, lockedFields: Set<MetadataField>) {
+        let local = diff.localTrack
+        let online = diff.onlineMetadata
+
+        let finalTitle = lockedFields.contains(.title) ? local.title : online.title
+        let finalArtist = lockedFields.contains(.artist) ? local.artist : online.artist
+        let finalAlbum = lockedFields.contains(.album) ? local.album : (online.album.isEmpty ? local.album : online.album)
+        let finalYear = lockedFields.contains(.year) ? local.year : (online.releaseYear ?? local.year)
+        let finalTrackNumber = lockedFields.contains(.trackNumber) ? local.trackNumber : (online.trackNumber ?? local.trackNumber)
+        let finalGenre = lockedFields.contains(.genre) ? local.genre : (online.genre ?? local.genre)
+        let finalArtworkURL = lockedFields.contains(.artwork) ? nil : online.artworkURL
+
+        let customizedOnline = OnlineTrackMetadata(
+            title: finalTitle,
+            artist: finalArtist,
+            album: finalAlbum,
+            releaseYear: finalYear,
+            genre: finalGenre,
+            trackNumber: finalTrackNumber,
+            artworkURL: finalArtworkURL,
+            isCompilation: online.isCompilation
+        )
+
         Task {
             _ = await libraryStore.applyOnlineMetadata(
-                trackID: diff.localTrack.id,
-                onlineMetadata: diff.onlineMetadata,
-                preserveLocalTitleAndArtist: preserveFeatures
+                trackID: local.id,
+                onlineMetadata: customizedOnline,
+                preserveLocalTitleAndArtist: false
             )
             HapticFeedback.notificationSuccess()
         }

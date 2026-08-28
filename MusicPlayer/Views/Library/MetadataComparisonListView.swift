@@ -1,8 +1,18 @@
 import SwiftUI
 
-/// High-performance metadata review sheet presenting side-by-side comparisons of local tracks
-/// and verified Apple Music online metadata, supporting single and batch enrichment with direct file tag writing
-/// and automatic feature preservation.
+/// Metadata field enum for interactive locking of individual attributes.
+public enum MetadataField: String, CaseIterable, Hashable, Sendable {
+    case title = "TITLE"
+    case artist = "ARTIST"
+    case album = "ALBUM"
+    case year = "YEAR"
+    case genre = "GENRE"
+    case trackNumber = "TRACK #"
+    case artwork = "ARTWORK"
+}
+
+/// High-performance metadata review sheet presenting swipeable track cards
+/// to compare online and local metadata, with interactive [KEEP LOCAL] locking.
 public struct MetadataComparisonListView: View {
     @Bindable var libraryStore: LibraryStore
     @Environment(\.dismiss) private var dismiss
@@ -30,9 +40,7 @@ public struct MetadataComparisonListView: View {
     }
 
     private var filteredDiffs: [MetadataDiff] {
-        // List
         let list = activeDiffs
-        // Query
         let query = FuzzyMatcher.normalize(searchText)
         if query.isEmpty { return list }
         return list.filter { diff in
@@ -102,7 +110,7 @@ public struct MetadataComparisonListView: View {
         .padding(24)
     }
 
-    // MARK: - Active Batch Progress View (Remains visible throughout entire enrichment process)
+    // MARK: - Active Batch Progress View
 
     private var enrichingProgressView: some View {
         VStack(spacing: 20) {
@@ -111,42 +119,32 @@ public struct MetadataComparisonListView: View {
             VStack(spacing: 8) {
                 Text("ENRICHING METADATA")
                     .font(.system(size: 14, weight: .bold, design: .monospaced))
-                    .foregroundStyle(appTheme.accentColor)
+                    .foregroundStyle(Color.blue)
 
-                Text("Applying verified tags, downloading artwork, and updating audio files.")
-                    .font(.system(size: 12))
+                Text("APPLYING VERIFIED TAGS, DOWNLOADING ARTWORK, AND UPDATING AUDIO FILES.")
+                    .font(.system(size: 11, design: .monospaced))
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
             }
 
-            VStack(spacing: 10) {
-                ProgressView(value: enrichProgress)
-                    .tint(appTheme.accentColor)
+            VStack(alignment: .leading, spacing: 6) {
+                Text(enrichStatusText.uppercased())
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
 
                 HStack {
-                    Text(enrichStatusText)
-                        .font(.system(size: 11, weight: .medium, design: .monospaced))
-                        .foregroundStyle(Color.primary)
-                        .lineLimit(1)
+                    Text("PROGRESS: \(Int(enrichProgress * 100))%")
+                        .font(.system(size: 12, weight: .bold, design: .monospaced))
+                        .foregroundStyle(Color.blue)
 
                     Spacer()
-
-                    Text("\(Int(enrichProgress * 100))%")
-                        .font(.system(size: 12, weight: .bold, design: .monospaced))
-                        .foregroundStyle(appTheme.accentColor)
                 }
             }
-            .padding(16)
-            .background(appTheme.secondaryBackgroundColor)
-            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .stroke(appTheme.separatorColor.opacity(0.6), lineWidth: 1)
-            )
             .padding(.horizontal, 24)
 
-            Text("Please keep the application open until enrichment is complete.")
-                .font(.system(size: 11, design: .monospaced))
+            Text("PLEASE KEEP THE APPLICATION OPEN UNTIL ENRICHMENT IS COMPLETE.")
+                .font(.system(size: 10, design: .monospaced))
                 .foregroundStyle(.secondary)
 
             Spacer()
@@ -158,7 +156,7 @@ public struct MetadataComparisonListView: View {
 
     private var diffListScrollView: some View {
         ScrollView(.vertical, showsIndicators: true) {
-            LazyVStack(spacing: 16) {
+            LazyVStack(spacing: 20) {
                 searchBar
 
                 EnrichHeaderCardView(
@@ -198,13 +196,19 @@ public struct MetadataComparisonListView: View {
                     .padding(.vertical, 32)
                 } else {
                     ForEach(filteredDiffs) { diff in
-                        MetadataSideBySideDiffCard(
+                        SwipeableMetadataTrackCard(
                             diff: diff,
                             preserveFeatures: preserveFeatures,
-                            onApply: {
-                                applySingleDiff(diff)
+                            onApply: { lockedFields in
+                                applyDiffWithCustomLocks(diff: diff, lockedFields: lockedFields)
+                            },
+                            onKeepLocal: {
+                                keepLocalDiff(diff)
                             }
                         )
+
+                        Divider()
+                            .overlay(appTheme.separatorColor.opacity(0.35))
                     }
                 }
             }
@@ -226,37 +230,63 @@ public struct MetadataComparisonListView: View {
                 }
                 .font(.system(size: 10, weight: .bold, design: .monospaced))
                 .foregroundStyle(.secondary)
+                .buttonStyle(.plain)
             }
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
-        .background(appTheme.secondaryBackgroundColor)
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(appTheme.separatorColor.opacity(0.6), lineWidth: 1)
+            Rectangle()
+                .frame(height: 1)
+                .foregroundStyle(appTheme.separatorColor.opacity(0.6)),
+            alignment: .bottom
         )
     }
 
     // MARK: - Actions
 
-    // Apply single diff
-    private func applySingleDiff(_ diff: MetadataDiff) {
+    private func applyDiffWithCustomLocks(diff: MetadataDiff, lockedFields: Set<MetadataField>) {
+        let local = diff.localTrack
+        let online = diff.onlineMetadata
+
+        let finalTitle = lockedFields.contains(.title) ? local.title : online.title
+        let finalArtist = lockedFields.contains(.artist) ? local.artist : online.artist
+        let finalAlbum = lockedFields.contains(.album) ? local.album : (online.album.isEmpty ? local.album : online.album)
+        let finalYear = lockedFields.contains(.year) ? local.year : (online.releaseYear ?? local.year)
+        let finalTrackNumber = lockedFields.contains(.trackNumber) ? local.trackNumber : (online.trackNumber ?? local.trackNumber)
+        let finalGenre = lockedFields.contains(.genre) ? local.genre : (online.genre ?? local.genre)
+        let finalArtworkURL = lockedFields.contains(.artwork) ? nil : online.artworkURL
+
+        let customizedOnline = OnlineTrackMetadata(
+            title: finalTitle,
+            artist: finalArtist,
+            album: finalAlbum,
+            releaseYear: finalYear,
+            genre: finalGenre,
+            trackNumber: finalTrackNumber,
+            artworkURL: finalArtworkURL,
+            isCompilation: online.isCompilation
+        )
+
         Task {
             _ = await libraryStore.applyOnlineMetadata(
-                trackID: diff.localTrack.id,
-                onlineMetadata: diff.onlineMetadata,
-                preserveLocalTitleAndArtist: preserveFeatures
+                trackID: local.id,
+                onlineMetadata: customizedOnline,
+                preserveLocalTitleAndArtist: false
             )
             HapticFeedback.notificationSuccess()
         }
     }
 
-    // Enrich all diffs
+    private func keepLocalDiff(_ diff: MetadataDiff) {
+        withAnimation(.easeInOut(duration: 0.2)) {
+            libraryStore.dismissEnrichmentDiff(diffID: diff.id)
+        }
+        HapticFeedback.notificationSuccess()
+    }
+
     private func enrichAllDiffs() {
-        // Diffs to enrich
         let diffsToEnrich = activeDiffs
-        // Ensure preconditions are met before proceeding
         guard !diffsToEnrich.isEmpty else { return }
 
         isEnrichingAll = true
@@ -265,7 +295,6 @@ public struct MetadataComparisonListView: View {
         enrichStatusText = "Preparing batch enrichment for \(diffsToEnrich.count) tracks..."
 
         Task {
-            // Count
             let count = await libraryStore.applyBatchOnlineMetadata(
                 diffs: diffsToEnrich,
                 preserveLocalTitleAndArtist: preserveFeatures,
@@ -287,23 +316,15 @@ public struct MetadataComparisonListView: View {
     }
 }
 
-// MARK: - Subviews
+// MARK: - Header Summary View
 
-/// Header summary card with batch action, feature preservation toggle, and direct disk file writing toggle.
 public struct EnrichHeaderCardView: View {
-    // Diffs count
     public let diffsCount: Int
-    // Flag indicating if background checking
     public let isBackgroundChecking: Bool
-    // Background status
     public let backgroundStatus: String
-    // Background progress
     public let backgroundProgress: Double
-    // Flag indicating if enriching
     public let isEnriching: Bool
-    // Progress
     public let progress: Double
-    // Status text
     public let statusText: String
     @Binding public var preserveFeatures: Bool
     @Binding public var writeToFile: Bool
@@ -311,7 +332,6 @@ public struct EnrichHeaderCardView: View {
 
     @Environment(\.appTheme) private var appTheme
 
-    // Initialize with configured properties
     public init(
         diffsCount: Int,
         isBackgroundChecking: Bool = false,
@@ -336,9 +356,8 @@ public struct EnrichHeaderCardView: View {
         self.onEnrichAll = onEnrichAll
     }
 
-    // Main view layout structure
     public var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 3) {
                     Text("VERIFIED ONLINE MATCHES")
@@ -352,470 +371,423 @@ public struct EnrichHeaderCardView: View {
 
                 Spacer()
 
-                Text("Apple Music / Deezer")
+                Text("APPLE MUSIC / DEEZER")
                     .font(.system(size: 10, design: .monospaced))
                     .foregroundStyle(.secondary)
             }
 
             if isBackgroundChecking {
-                VStack(alignment: .leading, spacing: 4) {
-                    ProgressView(value: backgroundProgress)
-                        .tint(Color.primary)
-                    Text(backgroundStatus)
-                        .font(.system(size: 11, design: .monospaced))
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(backgroundStatus.uppercased())
+                        .font(.system(size: 10, design: .monospaced))
                         .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    Text("METADATA CHECK: \(Int(backgroundProgress * 100))%")
+                        .font(.system(size: 11, weight: .bold, design: .monospaced))
+                        .foregroundStyle(Color.blue)
                 }
                 .padding(.vertical, 2)
             }
 
             if isEnriching {
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack {
-                        Text(statusText)
-                            .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                            .foregroundStyle(appTheme.accentColor)
-                            .lineLimit(1)
-                        Spacer()
-                        Text("\(Int(progress * 100))%")
-                            .font(.system(size: 11, weight: .bold, design: .monospaced))
-                            .foregroundStyle(appTheme.accentColor)
-                    }
-                    ProgressView(value: progress)
-                        .tint(appTheme.accentColor)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(statusText.uppercased())
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    Text("ENRICHING: \(Int(progress * 100))%")
+                        .font(.system(size: 11, weight: .bold, design: .monospaced))
+                        .foregroundStyle(Color.blue)
                 }
-                .padding(10)
-                .background(appTheme.accentColor.opacity(0.08))
-                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .padding(.vertical, 2)
             }
 
             Divider()
-                .overlay(appTheme.separatorColor)
+                .overlay(appTheme.separatorColor.opacity(0.5))
 
             // Settings & Controls
-            Toggle(isOn: $preserveFeatures) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("PRESERVE LOCAL TITLES & FEATURES")
-                        .font(.system(size: 12, weight: .bold, design: .monospaced))
-                    Text("Retains guest artists & custom titles while upgrading artwork, album & date.")
-                        .font(.system(size: 10))
-                        .foregroundStyle(.secondary)
-                }
-            }
-            .tint(Color.blue)
+            TypographicToggleRow(
+                title: "PRESERVE LOCAL TITLES & FEATURES",
+                subtitle: "RETAINS GUEST ARTISTS & CUSTOM TITLES",
+                isOn: $preserveFeatures
+            )
 
-            Toggle(isOn: $writeToFile) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("WRITE TAGS TO FILES ON DISK")
-                        .font(.system(size: 12, weight: .bold, design: .monospaced))
-                    Text("Embeds ID3v2/M4A tags directly into audio files.")
-                        .font(.system(size: 10))
-                        .foregroundStyle(.secondary)
-                }
-            }
-            .tint(Color.blue)
+            TypographicToggleRow(
+                title: "WRITE TAGS TO FILES ON DISK",
+                subtitle: "EMBEDS ID3V2/M4A TAGS DIRECTLY INTO AUDIO FILES",
+                isOn: $writeToFile
+            )
 
             Button(action: onEnrichAll) {
                 Text(isEnriching ? "ENRICHING IN PROGRESS..." : "ENRICH ALL (\(diffsCount) TRACKS)")
-                    .font(.system(size: 12, weight: .bold, design: .monospaced))
-                    .frame(maxWidth: .infinity)
+                    .font(.system(size: 13, weight: .bold, design: .monospaced))
+                    .foregroundStyle(isEnriching || diffsCount == 0 ? Color.secondary : Color.blue)
             }
-            .buttonStyle(TypographicButtonStyle(variant: .primary, size: .regular))
+            .buttonStyle(.plain)
             .disabled(isEnriching || diffsCount == 0)
+            .padding(.top, 2)
         }
-        .padding(14)
-        .background(appTheme.secondaryBackgroundColor)
-        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .padding(.vertical, 8)
     }
 }
 
-/// Side-by-side comparison card displaying Local Track on Left and Online Track on Right.
-public struct MetadataSideBySideDiffCard: View {
-    // Diff
-    public let diff: MetadataDiff
-    // Preserve features
-    public let preserveFeatures: Bool
-    // On apply
-    public let onApply: () -> Void
+// MARK: - Swipeable Metadata Track Card
 
+/// Swipeable, backgroundless track card showing Online Metadata by default,
+/// allowing horizontal swipe to Original Local Metadata, and tap-to-lock `[KEEP LOCAL]` fields.
+public struct SwipeableMetadataTrackCard: View {
+    public let diff: MetadataDiff
+    public let preserveFeatures: Bool
+    public let onApply: (Set<MetadataField>) -> Void
+    public let onKeepLocal: () -> Void
+
+    @State private var selectedPage: Int = 0 // 0 = Online, 1 = Local
+    @State private var lockedFields: Set<MetadataField> = []
     @Environment(\.appTheme) private var appTheme
 
-    // Initialize with configured properties
-    public init(diff: MetadataDiff, preserveFeatures: Bool, onApply: @escaping () -> Void) {
+    public init(
+        diff: MetadataDiff,
+        preserveFeatures: Bool,
+        onApply: @escaping (Set<MetadataField>) -> Void,
+        onKeepLocal: @escaping () -> Void
+    ) {
         self.diff = diff
         self.preserveFeatures = preserveFeatures
         self.onApply = onApply
+        self.onKeepLocal = onKeepLocal
     }
 
-    // Main view layout structure
     public var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            // Track Identity Header
-            HStack {
-                Text(diff.localTrack.title)
-                    .font(.system(size: 14, weight: .bold))
-                    .foregroundStyle(Color.primary)
-                    .lineLimit(1)
-
+        VStack(spacing: 16) {
+            // Page Indicator Tabs
+            HStack(spacing: 12) {
                 Spacer()
 
-                if diff.isExactAlbumMatch {
-                    Text("ALBUM MATCH")
-                        .font(.system(size: 8, weight: .bold, design: .monospaced))
-                        .foregroundStyle(Color.green)
-                        .padding(.horizontal, 5)
-                        .padding(.vertical, 2)
-                        .background(Color.green.opacity(0.15))
-                        .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
+                Button(action: {
+                    withAnimation(.easeInOut(duration: 0.2)) { selectedPage = 0 }
+                }) {
+                    Text("ONLINE METADATA")
+                        .font(.system(size: 11, weight: .black, design: .monospaced))
+                        .foregroundStyle(selectedPage == 0 ? Color.blue : Color.secondary.opacity(0.5))
                 }
+                .buttonStyle(.plain)
 
-                if diff.hasLocalFeatureCredit && preserveFeatures {
-                    Text("FEAT. PRESERVED")
-                        .font(.system(size: 8, weight: .bold, design: .monospaced))
-                        .foregroundStyle(Color.orange)
-                        .padding(.horizontal, 5)
-                        .padding(.vertical, 2)
-                        .background(Color.orange.opacity(0.15))
-                        .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
+                Text("•")
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(.secondary.opacity(0.3))
+
+                Button(action: {
+                    withAnimation(.easeInOut(duration: 0.2)) { selectedPage = 1 }
+                }) {
+                    Text("ORIGINAL LOCAL")
+                        .font(.system(size: 11, weight: .black, design: .monospaced))
+                        .foregroundStyle(selectedPage == 1 ? Color.orange : Color.secondary.opacity(0.5))
                 }
+                .buttonStyle(.plain)
+
+                Spacer()
             }
 
-            Divider()
-                .overlay(appTheme.separatorColor.opacity(0.4))
+            // Swipeable Card Pages
+            TabView(selection: $selectedPage) {
+                // Page 0: Online Found Metadata
+                onlinePageView
+                    .tag(0)
 
-            // Side-by-Side Comparison Container
-            HStack(alignment: .top, spacing: 10) {
-                // Left: Original Local Track
-                LocalTrackComparisonColumn(diff: diff, preserveFeatures: preserveFeatures)
-
-                // Right: Online Verified Track
-                OnlineTrackComparisonColumn(diff: diff, preserveFeatures: preserveFeatures)
+                // Page 1: Original Local Metadata
+                localPageView
+                    .tag(1)
             }
+            .tabViewStyle(.page(indexDisplayMode: .never))
+            .frame(height: 410)
 
-            // Apply Button for this track
-            Button(action: onApply) {
-                Text("APPLY ONLINE METADATA")
-                    .font(.system(size: 11, weight: .bold, design: .monospaced))
-                    .frame(maxWidth: .infinity)
+            // Dynamic Action Button
+            HStack {
+                Spacer()
+                if selectedPage == 0 {
+                    Button(action: {
+                        onApply(lockedFields)
+                    }) {
+                        Text("APPLY ONLINE METADATA")
+                            .font(.system(size: 13, weight: .bold, design: .monospaced))
+                            .foregroundStyle(Color.blue)
+                    }
+                    .buttonStyle(.plain)
+                } else {
+                    Button(action: {
+                        onKeepLocal()
+                    }) {
+                        Text("KEEP LOCAL METADATA")
+                            .font(.system(size: 13, weight: .bold, design: .monospaced))
+                            .foregroundStyle(Color.orange)
+                    }
+                    .buttonStyle(.plain)
+                }
+                Spacer()
             }
-            .buttonStyle(TypographicButtonStyle(variant: .secondary, size: .small))
-            .padding(.top, 4)
         }
-        .padding(12)
-        .background(appTheme.secondaryBackgroundColor.opacity(0.6))
-        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .stroke(appTheme.separatorColor, lineWidth: 1)
-        )
-    }
-}
-
-/// Left Column: Original Local Track with full metadata list and transfer indicators.
-public struct LocalTrackComparisonColumn: View {
-    // Diff
-    public let diff: MetadataDiff
-    // Preserve features
-    public let preserveFeatures: Bool
-    @Environment(\.appTheme) private var appTheme
-
-    // Initialize with configured properties
-    public init(diff: MetadataDiff, preserveFeatures: Bool = true) {
-        self.diff = diff
-        self.preserveFeatures = preserveFeatures
-    }
-
-    // Initialize with configured properties
-    public init(track: Track) {
-        self.diff = MetadataDiff(localTrack: track, onlineMetadata: OnlineTrackMetadata(title: track.title, artist: track.artist, album: track.album), preserveLocalTitleAndArtist: true)
-        self.preserveFeatures = true
-    }
-
-    private var track: Track { diff.localTrack }
-
-    // Main view layout structure
-    public var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("ORIGINAL METADATA")
-                .font(.system(size: 9, weight: .bold, design: .monospaced))
-                .foregroundStyle(.secondary)
-
-            // Local Artwork Preview
-            VStack(alignment: .leading, spacing: 4) {
-                AlbumArtworkView(
-                    artworkKey: track.artworkKey,
-                    title: track.album,
-                    subtitle: track.artist,
-                    cornerRadius: 6
-                )
-                .frame(width: 140, height: 140)
-
-                Text(track.artworkKey != nil ? "EMBEDDED ART" : "NO ARTWORK")
-                    .font(.system(size: 8, weight: .bold, design: .monospaced))
-                    .foregroundStyle(.secondary)
+        .padding(.vertical, 8)
+        .onAppear {
+            if preserveFeatures && diff.hasLocalFeatureCredit {
+                lockedFields.insert(.title)
+                lockedFields.insert(.artist)
             }
+        }
+    }
 
-            // Comprehensive Local Metadata List
-            VStack(alignment: .leading, spacing: 4) {
-                localMetaRow(
-                    label: "TITLE",
-                    value: track.title,
-                    isWillUseLocal: preserveFeatures
+    // MARK: - Online Page View
+    private var onlinePageView: some View {
+        VStack(alignment: .center, spacing: 10) {
+            // Album Artwork on Top
+            Button(action: {
+                toggleFieldLock(.artwork)
+            }) {
+                VStack(spacing: 6) {
+                    if lockedFields.contains(.artwork) {
+                        AlbumArtworkView(
+                            artworkKey: diff.localTrack.artworkKey,
+                            title: diff.localTrack.album,
+                            subtitle: diff.localTrack.artist,
+                            cornerRadius: 8
+                        )
+                        .frame(width: 150, height: 150)
+                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    } else {
+                        AsyncImage(url: diff.onlineMetadata.artworkURL) { phase in
+                            switch phase {
+                            case .success(let image):
+                                image
+                                    .resizable()
+                                    .aspectRatio(contentMode: .fill)
+                            default:
+                                AlbumArtworkView(
+                                    artworkKey: diff.localTrack.artworkKey,
+                                    title: diff.localTrack.album,
+                                    subtitle: diff.localTrack.artist,
+                                    cornerRadius: 8
+                                )
+                            }
+                        }
+                        .frame(width: 150, height: 150)
+                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    }
+
+                    // Sub-Artwork Status Label
+                    if lockedFields.contains(.artwork) {
+                        Text("KEEPING LOCAL ARTWORK [KEEP LOCAL]")
+                            .font(.system(size: 9, weight: .bold, design: .monospaced))
+                            .foregroundStyle(Color.orange)
+                    } else {
+                        Text("USING ONLINE METADATA")
+                            .font(.system(size: 9, weight: .bold, design: .monospaced))
+                            .foregroundStyle(Color.blue)
+                    }
+                }
+            }
+            .buttonStyle(.plain)
+
+            // Centered Metadata Rows Below
+            VStack(alignment: .center, spacing: 6) {
+                centeredMetadataRow(
+                    field: .title,
+                    onlineValue: diff.onlineMetadata.title,
+                    localValue: diff.localTrack.title,
+                    isChanged: diff.titleChanged
                 )
 
-                localMetaRow(
-                    label: "ARTIST",
-                    value: track.artist,
-                    isWillUseLocal: preserveFeatures
+                centeredMetadataRow(
+                    field: .artist,
+                    onlineValue: diff.onlineMetadata.artist,
+                    localValue: diff.localTrack.artist,
+                    isChanged: diff.artistChanged
                 )
 
-                localMetaRow(
-                    label: "ALBUM",
-                    value: track.album.isEmpty ? "—" : track.album,
-                    isWillUseLocal: diff.onlineMetadata.album.isEmpty || (!diff.albumChanged)
+                centeredMetadataRow(
+                    field: .album,
+                    onlineValue: diff.effectiveOnlineAlbum.isEmpty ? diff.localTrack.album : diff.effectiveOnlineAlbum,
+                    localValue: diff.localTrack.album,
+                    isChanged: diff.albumChanged
                 )
 
-                localMetaRow(
-                    label: "YEAR",
-                    value: track.year.map { String($0) } ?? "—",
-                    isWillUseLocal: diff.onlineMetadata.releaseYear == nil || diff.onlineMetadata.releaseYear == 0 || diff.isYearTransferredFromLocal
-                )
-
-                if let g = track.genre, !g.isEmpty && g != "Unknown Genre" && g != "—" {
-                    localMetaRow(
-                        label: "GENRE",
-                        value: g,
-                        isWillUseLocal: true
+                if let y = diff.onlineMetadata.releaseYear, y > 0 {
+                    centeredMetadataRow(
+                        field: .year,
+                        onlineValue: String(y),
+                        localValue: diff.localTrack.year.map { String($0) } ?? "—",
+                        isChanged: diff.yearChanged
+                    )
+                } else if let ly = diff.localTrack.year, ly > 0 {
+                    centeredMetadataRow(
+                        field: .year,
+                        onlineValue: String(ly),
+                        localValue: String(ly),
+                        isChanged: false
                     )
                 }
 
-                // Track num str
-                let trackNumStr: String = {
-                    if let t = track.trackNumber, t > 0 {
-                        // Total str
-                        let totalStr = track.totalTracks.map { " of \($0)" } ?? ""
-                        return "\(t)\(totalStr)"
+                if let g = diff.onlineMetadata.genre ?? diff.localTrack.genre, !g.isEmpty && g != "—" {
+                    centeredMetadataRow(
+                        field: .genre,
+                        onlineValue: g,
+                        localValue: diff.localTrack.genre ?? "—",
+                        isChanged: diff.genreChanged
+                    )
+                }
+
+                let onlineTrackNum: String = {
+                    if let t = diff.onlineMetadata.trackNumber, t > 0 {
+                        let total = diff.onlineMetadata.totalTracks.map { " of \($0)" } ?? ""
+                        return "\(t)\(total)"
+                    } else if let lt = diff.localTrack.trackNumber, lt > 0 {
+                        let total = diff.localTrack.totalTracks.map { " of \($0)" } ?? ""
+                        return "\(lt)\(total)"
                     }
                     return "—"
                 }()
-                localMetaRow(
-                    label: "TRACK #",
-                    value: trackNumStr,
-                    isWillUseLocal: diff.onlineMetadata.trackNumber == nil || diff.onlineMetadata.trackNumber == 0 || diff.isTrackNumberTransferredFromLocal
-                )
 
-                if let disc = track.discNumber, disc > 0 {
-                    localMetaRow(label: "DISC #", value: String(disc), isWillUseLocal: true)
-                }
+                let localTrackNum: String = {
+                    if let lt = diff.localTrack.trackNumber, lt > 0 {
+                        let total = diff.localTrack.totalTracks.map { " of \($0)" } ?? ""
+                        return "\(lt)\(total)"
+                    }
+                    return "—"
+                }()
 
-                if let info = track.fileInfo {
-                    localMetaRow(label: "CODEC", value: info.formatDescription, isWillUseLocal: true)
+                if onlineTrackNum != "—" || localTrackNum != "—" {
+                    centeredMetadataRow(
+                        field: .trackNumber,
+                        onlineValue: onlineTrackNum,
+                        localValue: localTrackNum,
+                        isChanged: diff.trackNumberChanged
+                    )
                 }
             }
-            .padding(6)
-            .background(appTheme.backgroundColor.opacity(0.5))
-            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+            .frame(maxWidth: .infinity)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    // Local meta row
-    private func localMetaRow(label: String, value: String, isWillUseLocal: Bool) -> some View {
-        VStack(alignment: .leading, spacing: 1) {
-            HStack(spacing: 4) {
-                Text(label)
-                    .font(.system(size: 8, weight: .bold, design: .monospaced))
+    // MARK: - Local Page View
+    private var localPageView: some View {
+        VStack(alignment: .center, spacing: 10) {
+            // Album Artwork on Top
+            VStack(spacing: 6) {
+                AlbumArtworkView(
+                    artworkKey: diff.localTrack.artworkKey,
+                    title: diff.localTrack.album,
+                    subtitle: diff.localTrack.artist,
+                    cornerRadius: 8
+                )
+                .frame(width: 150, height: 150)
+                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+
+                // Sub-Artwork Status Label
+                Text("ORIGINAL LOCAL METADATA")
+                    .font(.system(size: 9, weight: .bold, design: .monospaced))
+                    .foregroundStyle(Color.secondary)
+            }
+
+            // Centered Local Metadata Rows
+            VStack(alignment: .center, spacing: 6) {
+                centeredLocalRow(field: .title, value: diff.localTrack.title)
+                centeredLocalRow(field: .artist, value: diff.localTrack.artist)
+                centeredLocalRow(field: .album, value: diff.localTrack.album.isEmpty ? "—" : diff.localTrack.album)
+                centeredLocalRow(field: .year, value: diff.localTrack.year.map { String($0) } ?? "—")
+                if let g = diff.localTrack.genre, !g.isEmpty && g != "—" {
+                    centeredLocalRow(field: .genre, value: g)
+                }
+                let localTrackNum: String = {
+                    if let lt = diff.localTrack.trackNumber, lt > 0 {
+                        let total = diff.localTrack.totalTracks.map { " of \($0)" } ?? ""
+                        return "\(lt)\(total)"
+                    }
+                    return "—"
+                }()
+                if localTrackNum != "—" {
+                    centeredLocalRow(field: .trackNumber, value: localTrackNum)
+                }
+            }
+            .frame(maxWidth: .infinity)
+        }
+    }
+
+    // Toggle field lock
+    private func toggleFieldLock(_ field: MetadataField) {
+        HapticFeedback.selectionChanged()
+        withAnimation(.easeInOut(duration: 0.15)) {
+            if lockedFields.contains(field) {
+                lockedFields.remove(field)
+            } else {
+                lockedFields.insert(field)
+            }
+        }
+    }
+
+    // Centered Metadata Row with interactive lock toggle and Green for overwritten/new metadata
+    private func centeredMetadataRow(
+        field: MetadataField,
+        onlineValue: String,
+        localValue: String,
+        isChanged: Bool
+    ) -> some View {
+        let isLocked = lockedFields.contains(field)
+        let displayValue = isLocked ? localValue : onlineValue
+        let textColor: Color = isLocked ? Color.orange : (isChanged ? Color.green : Color.primary)
+
+        return Button(action: {
+            toggleFieldLock(field)
+        }) {
+            HStack(spacing: 6) {
+                Text(field.rawValue)
+                    .font(.system(size: 10, weight: .bold, design: .monospaced))
                     .foregroundStyle(.secondary)
 
-                if isWillUseLocal && value != "—" {
-                    Text("→")
-                        .font(.system(size: 8, weight: .bold, design: .monospaced))
+                Text(displayValue)
+                    .font(.system(size: 13, weight: .bold, design: .monospaced))
+                    .foregroundStyle(textColor)
+                    .lineLimit(1)
+
+                if isLocked {
+                    Text("[KEEP LOCAL]")
+                        .font(.system(size: 9, weight: .bold, design: .monospaced))
                         .foregroundStyle(Color.orange)
                 }
             }
-
-            Text(value)
-                .font(.system(size: 10, weight: value == "—" ? .regular : .semibold, design: .monospaced))
-                .foregroundStyle(value == "—" ? .secondary : Color.primary)
-                .lineLimit(1)
+            .padding(.vertical, 1)
+            .contentShape(Rectangle())
         }
-    }
-}
-
-/// Right Column: Online Verified Track (Green for online upgrades, Orange for using local metadata).
-public struct OnlineTrackComparisonColumn: View {
-    // Diff
-    public let diff: MetadataDiff
-    // Preserve features
-    public let preserveFeatures: Bool
-    @Environment(\.appTheme) private var appTheme
-
-    // Initialize with configured properties
-    public init(diff: MetadataDiff, preserveFeatures: Bool) {
-        self.diff = diff
-        self.preserveFeatures = preserveFeatures
+        .buttonStyle(.plain)
     }
 
-    // Main view layout structure
-    public var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("ONLINE METADATA")
-                .font(.system(size: 9, weight: .bold, design: .monospaced))
-                .foregroundStyle(appTheme.accentColor)
+    private func centeredLocalRow(field: MetadataField, value: String) -> some View {
+        let isLocked = lockedFields.contains(field)
+        return Button(action: {
+            toggleFieldLock(field)
+        }) {
+            HStack(spacing: 6) {
+                Text(field.rawValue)
+                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+                    .foregroundStyle(.secondary)
 
-            // Online Artwork Preview
-            VStack(alignment: .leading, spacing: 4) {
-                AsyncImage(url: diff.onlineMetadata.artworkURL) { phase in
-                    switch phase {
-                    case .success(let image):
-                        image
-                            .resizable()
-                            .aspectRatio(contentMode: .fill)
-                    default:
-                        RoundedRectangle(cornerRadius: 6, style: .continuous)
-                            .fill(appTheme.secondaryBackgroundColor)
-                    }
-                }
-                .frame(width: 140, height: 140)
-                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                Text(value)
+                    .font(.system(size: 13, weight: .bold, design: .monospaced))
+                    .foregroundStyle(isLocked ? Color.orange : Color.primary)
+                    .lineLimit(1)
 
-                HStack(spacing: 4) {
-                    if diff.artworkUpgraded {
-                        Text("HIGH-RES (ONLINE)")
-                            .font(.system(size: 8, weight: .bold, design: .monospaced))
-                            .foregroundStyle(Color.green)
-                    } else {
-                        Text("KEEP LOCAL ART")
-                            .font(.system(size: 8, weight: .bold, design: .monospaced))
-                            .foregroundStyle(Color.orange)
-                    }
+                if isLocked {
+                    Text("[KEEP LOCAL]")
+                        .font(.system(size: 9, weight: .bold, design: .monospaced))
+                        .foregroundStyle(Color.orange)
                 }
             }
-
-            // Online Metadata Rows
-            VStack(alignment: .leading, spacing: 4) {
-                if preserveFeatures {
-                    onlineMetaRow(
-                        label: "TITLE",
-                        value: diff.localTrack.title,
-                        isOnlineUpgrade: false
-                    )
-                } else {
-                    onlineMetaRow(
-                        label: "TITLE",
-                        value: diff.onlineMetadata.title,
-                        isOnlineUpgrade: diff.titleChanged
-                    )
-                }
-
-                if preserveFeatures {
-                    onlineMetaRow(
-                        label: "ARTIST",
-                        value: diff.localTrack.artist,
-                        isOnlineUpgrade: false
-                    )
-                } else {
-                    onlineMetaRow(
-                        label: "ARTIST",
-                        value: diff.onlineMetadata.artist,
-                        isOnlineUpgrade: diff.artistChanged
-                    )
-                }
-
-                // Flag indicating if album online
-                let isAlbumOnline = !diff.effectiveOnlineAlbum.isEmpty && diff.albumChanged
-                onlineMetaRow(
-                    label: "ALBUM",
-                    value: isAlbumOnline ? diff.effectiveOnlineAlbum : diff.localTrack.album,
-                    isOnlineUpgrade: isAlbumOnline
-                )
-
-                if let y = diff.onlineMetadata.releaseYear, y > 0 && diff.yearChanged {
-                    onlineMetaRow(
-                        label: "YEAR",
-                        value: String(y),
-                        isOnlineUpgrade: true
-                    )
-                } else if let localY = diff.localTrack.year, localY > 0 {
-                    onlineMetaRow(
-                        label: "YEAR",
-                        value: String(localY),
-                        isOnlineUpgrade: false
-                    )
-                } else {
-                    onlineMetaRow(
-                        label: "YEAR",
-                        value: "—",
-                        isOnlineUpgrade: false
-                    )
-                }
-
-                if let localG = diff.localTrack.genre, !localG.isEmpty && localG != "Unknown Genre" && localG != "—" {
-                    onlineMetaRow(
-                        label: "GENRE",
-                        value: localG,
-                        isOnlineUpgrade: false
-                    )
-                }
-
-                if let t = diff.onlineMetadata.trackNumber, t > 0 && diff.trackNumberChanged {
-                    // Total str
-                    let totalStr = diff.onlineMetadata.totalTracks.map { " of \($0)" } ?? ""
-                    onlineMetaRow(
-                        label: "TRACK #",
-                        value: "\(t)\(totalStr)",
-                        isOnlineUpgrade: true
-                    )
-                } else if let localT = diff.localTrack.trackNumber, localT > 0 {
-                    // Total str
-                    let totalStr = diff.localTrack.totalTracks.map { " of \($0)" } ?? ""
-                    onlineMetaRow(
-                        label: "TRACK #",
-                        value: "\(localT)\(totalStr)",
-                        isOnlineUpgrade: false
-                    )
-                } else {
-                    onlineMetaRow(
-                        label: "TRACK #",
-                        value: "—",
-                        isOnlineUpgrade: false
-                    )
-                }
-            }
-            .padding(6)
-            .background(appTheme.backgroundColor.opacity(0.5))
-            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+            .padding(.vertical, 1)
+            .contentShape(Rectangle())
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    // Online meta row
-    private func onlineMetaRow(
-        label: String,
-        value: String,
-        isOnlineUpgrade: Bool
-    ) -> some View {
-        VStack(alignment: .leading, spacing: 1) {
-            HStack(spacing: 4) {
-                Text(label)
-                    .font(.system(size: 8, weight: .bold, design: .monospaced))
-                    .foregroundStyle(isOnlineUpgrade ? Color.green : Color.orange)
-
-                Text(isOnlineUpgrade ? "[ONLINE UPGRADE]" : "[USE LOCAL]")
-                    .font(.system(size: 7, weight: .bold, design: .monospaced))
-                    .foregroundStyle(isOnlineUpgrade ? Color.green : Color.orange)
-            }
-
-            Text(value)
-                .font(.system(size: 10, weight: .bold, design: .monospaced))
-                .foregroundStyle(isOnlineUpgrade ? Color.green : Color.orange)
-                .lineLimit(1)
-        }
+        .buttonStyle(.plain)
     }
 }
 
 /// Empty state view when all tracks have complete metadata.
 private struct ComparisonEmptyStateView: View {
-    // Body
     var body: some View {
         VStack(spacing: 12) {
             Text("NO PENDING ENRICHMENTS")

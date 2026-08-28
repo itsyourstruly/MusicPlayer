@@ -1,4 +1,23 @@
 import Foundation
+import CryptoKit
+
+extension UUID {
+    /// Generates a deterministic, reproducible UUID from a string (such as a normalized canonical file path).
+    public static func deterministic(from string: String) -> UUID {
+        let digest = Insecure.MD5.hash(data: Data(string.utf8))
+        var bytes = Array(digest)
+        // Set version 3 (MD5-based UUID) and RFC 4122 variant
+        bytes[6] = (bytes[6] & 0x0F) | 0x30
+        bytes[8] = (bytes[8] & 0x3F) | 0x80
+        let tuple: uuid_t = (
+            bytes[0], bytes[1], bytes[2], bytes[3],
+            bytes[4], bytes[5], bytes[6], bytes[7],
+            bytes[8], bytes[9], bytes[10], bytes[11],
+            bytes[12], bytes[13], bytes[14], bytes[15]
+        )
+        return UUID(uuid: tuple)
+    }
+}
 
 /// Core immutable audio track entity containing complete metadata and playback specifications.
 public struct Track: Identifiable, Codable, Sendable, Hashable {
@@ -233,7 +252,6 @@ public struct Track: Identifiable, Codable, Sendable, Hashable {
                 let kbps = Int(info.bitRate / 1000.0)
                 return "\(fmt) • \(kbps) kbps"
             } else if info.sampleRate > 0 {
-                // Rate
                 let rate = Int(info.sampleRate / 1000.0)
                 return "\(fmt) • \(rate) kHz"
             } else {
@@ -241,5 +259,29 @@ public struct Track: Identifiable, Codable, Sendable, Hashable {
             }
         }
         return ""
+    }
+
+    /// Returns a copy of the track with an updated artworkKey.
+    public func withArtworkKey(_ key: String?) -> Track {
+        Track(
+            id: self.id,
+            title: self.title,
+            artist: self.artist,
+            album: self.album,
+            albumArtist: self.albumArtist,
+            genre: self.genre,
+            year: self.year,
+            trackNumber: self.trackNumber,
+            originalTrackNumber: self.originalTrackNumber,
+            deluxeTrackNumber: self.deluxeTrackNumber,
+            totalTracks: self.totalTracks,
+            discNumber: self.discNumber,
+            duration: self.duration,
+            url: self.url,
+            artworkKey: key,
+            dateAdded: self.dateAdded,
+            fileInfo: self.fileInfo,
+            lyrics: self.lyrics
+        )
     }
 }

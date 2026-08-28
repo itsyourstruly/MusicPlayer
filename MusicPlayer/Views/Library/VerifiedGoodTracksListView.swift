@@ -1,8 +1,7 @@
 import SwiftUI
 
 /// Double-check sheet for tracks that were verified and determined to already match online records.
-/// Displays side-by-side comparisons of local metadata and the verified online match, allowing
-/// the user to review, re-apply online tags & artwork, or rescan.
+/// Displays centered swipeable cards comparing local metadata and the verified online match.
 public struct VerifiedGoodTracksListView: View {
     @Bindable var libraryStore: LibraryStore
     @Environment(\.dismiss) private var dismiss
@@ -17,7 +16,6 @@ public struct VerifiedGoodTracksListView: View {
     }
 
     private var filteredDiffs: [MetadataDiff] {
-        // Query
         let query = FuzzyMatcher.normalize(searchText)
         if query.isEmpty { return libraryStore.verifiedGoodDiffs }
         return libraryStore.verifiedGoodDiffs.filter { diff in
@@ -36,11 +34,9 @@ public struct VerifiedGoodTracksListView: View {
                     emptyStateView
                 } else {
                     ScrollView(.vertical, showsIndicators: true) {
-                        LazyVStack(spacing: 16) {
-                            // Pinned Search Bar at the Top
+                        LazyVStack(spacing: 20) {
                             searchBar
 
-                            // Summary Header Card
                             headerCard
 
                             if !searchText.isEmpty {
@@ -64,7 +60,6 @@ public struct VerifiedGoodTracksListView: View {
                                 }
                                 .padding(.vertical, 32)
                             } else {
-                                // Verified Good Track Cards
                                 ForEach(filteredDiffs) { diff in
                                     VerifiedGoodTrackCard(
                                         diff: diff,
@@ -76,6 +71,9 @@ public struct VerifiedGoodTracksListView: View {
                                             rescanSingleTrack(diff.localTrack)
                                         }
                                     )
+
+                                    Divider()
+                                        .overlay(appTheme.separatorColor.opacity(0.35))
                                 }
                             }
                         }
@@ -100,7 +98,7 @@ public struct VerifiedGoodTracksListView: View {
 
     private var searchBar: some View {
         HStack(spacing: 8) {
-            TextField("SEARCH TRACK, ALBUM, OR ARTIST...", text: $searchText)
+            TextField("SEARCH VERIFIED TRACKS...", text: $searchText)
                 .font(.system(size: 12, weight: .medium, design: .monospaced))
                 .textFieldStyle(.plain)
                 .submitLabel(.search)
@@ -111,19 +109,18 @@ public struct VerifiedGoodTracksListView: View {
                 }
                 .font(.system(size: 10, weight: .bold, design: .monospaced))
                 .foregroundStyle(.secondary)
+                .buttonStyle(.plain)
             }
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
-        .background(appTheme.secondaryBackgroundColor)
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(appTheme.separatorColor.opacity(0.6), lineWidth: 1)
+            Rectangle()
+                .frame(height: 1)
+                .foregroundStyle(appTheme.separatorColor.opacity(0.6)),
+            alignment: .bottom
         )
     }
-
-    // MARK: - Subviews
 
     private var headerCard: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -144,16 +141,16 @@ public struct VerifiedGoodTracksListView: View {
                     libraryStore.recheckAllVerifiedGoodTracks()
                     HapticFeedback.notificationSuccess()
                 }
-                .buttonStyle(TypographicButtonStyle(variant: .secondary, size: .small))
+                .font(.system(size: 12, weight: .bold, design: .monospaced))
+                .foregroundStyle(Color.blue)
+                .buttonStyle(.plain)
             }
 
-            Text("Your local audio tags match official online records. You can review the online match, re-embed high-resolution artwork, or rescan.")
-                .font(.system(size: 11))
+            Text("YOUR LOCAL AUDIO TAGS MATCH OFFICIAL ONLINE RECORDS. YOU CAN REVIEW THE ONLINE MATCH, RE-EMBED HIGH-RESOLUTION ARTWORK, OR RESCAN.")
+                .font(.system(size: 11, design: .monospaced))
                 .foregroundStyle(.secondary)
         }
-        .padding(14)
-        .background(appTheme.secondaryBackgroundColor)
-        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .padding(.vertical, 8)
     }
 
     private var emptyStateView: some View {
@@ -173,7 +170,6 @@ public struct VerifiedGoodTracksListView: View {
 
     // MARK: - Actions
 
-    // Apply online tags
     private func applyOnlineTags(_ diff: MetadataDiff) {
         Task {
             _ = await libraryStore.applyOnlineMetadata(
@@ -185,7 +181,6 @@ public struct VerifiedGoodTracksListView: View {
         }
     }
 
-    // Rescan single track
     private func rescanSingleTrack(_ track: Track) {
         recheckingTrackID = track.id
         Task {
@@ -196,235 +191,186 @@ public struct VerifiedGoodTracksListView: View {
     }
 }
 
-/// Side-by-side card displaying local track vs verified online match with confirm badge.
+/// Centered, swipeable card displaying local track vs verified online match with sub-artwork status label.
 private struct VerifiedGoodTrackCard: View {
-    // Diff
     let diff: MetadataDiff
-    // Flag indicating if rechecking
     let isRechecking: Bool
-    // On apply online
     let onApplyOnline: () -> Void
-    // On rescan
     let onRescan: () -> Void
 
+    @State private var selectedPage: Int = 0 // 0 = Online, 1 = Local
     @Environment(\.appTheme) private var appTheme
 
-    // Body
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            // Header
-            HStack {
-                Text(diff.localTrack.title)
-                    .font(.system(size: 14, weight: .bold))
-                    .foregroundStyle(Color.primary)
-                    .lineLimit(1)
-
+        VStack(spacing: 14) {
+            // Page Indicator Tabs
+            HStack(spacing: 12) {
                 Spacer()
 
-                Text("MATCH CONFIRMED")
-                    .font(.system(size: 8, weight: .bold, design: .monospaced))
-                    .foregroundStyle(Color.green)
-                    .padding(.horizontal, 5)
-                    .padding(.vertical, 2)
-                    .background(Color.green.opacity(0.15))
-                    .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
+                Button(action: {
+                    withAnimation(.easeInOut(duration: 0.2)) { selectedPage = 0 }
+                }) {
+                    Text("ONLINE METADATA")
+                        .font(.system(size: 11, weight: .black, design: .monospaced))
+                        .foregroundStyle(selectedPage == 0 ? Color.blue : Color.secondary.opacity(0.5))
+                }
+                .buttonStyle(.plain)
+
+                Text("•")
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(.secondary.opacity(0.3))
+
+                Button(action: {
+                    withAnimation(.easeInOut(duration: 0.2)) { selectedPage = 1 }
+                }) {
+                    Text("ORIGINAL LOCAL")
+                        .font(.system(size: 11, weight: .black, design: .monospaced))
+                        .foregroundStyle(selectedPage == 1 ? Color.orange : Color.secondary.opacity(0.5))
+                }
+                .buttonStyle(.plain)
+
+                Spacer()
             }
 
-            Divider()
-                .overlay(appTheme.separatorColor.opacity(0.4))
+            // Swipeable Card Pages
+            TabView(selection: $selectedPage) {
+                // Page 0: Online Found Metadata
+                onlinePageView
+                    .tag(0)
 
-            // Side-by-Side Content
-            HStack(alignment: .top, spacing: 10) {
-                // Left: Local Track
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("LOCAL TRACK")
-                        .font(.system(size: 9, weight: .bold, design: .monospaced))
-                        .foregroundStyle(.secondary)
+                // Page 1: Original Local Metadata
+                localPageView
+                    .tag(1)
+            }
+            .tabViewStyle(.page(indexDisplayMode: .never))
+            .frame(height: 380)
 
-                    // Local Artwork
-                    VStack(alignment: .leading, spacing: 4) {
+            // Action Buttons
+            HStack(spacing: 24) {
+                Spacer()
+
+                Button(action: onApplyOnline) {
+                    Text("RE-APPLY TAGS & ART")
+                        .font(.system(size: 12, weight: .bold, design: .monospaced))
+                        .foregroundStyle(Color.blue)
+                }
+                .buttonStyle(.plain)
+
+                Button(action: onRescan) {
+                    Text(isRechecking ? "RESCANNING..." : "RESCAN")
+                        .font(.system(size: 12, weight: .bold, design: .monospaced))
+                        .foregroundStyle(isRechecking ? Color.secondary : Color.primary)
+                }
+                .buttonStyle(.plain)
+                .disabled(isRechecking)
+
+                Spacer()
+            }
+        }
+        .padding(.vertical, 8)
+    }
+
+    // MARK: - Online Page View
+    private var onlinePageView: some View {
+        VStack(alignment: .center, spacing: 10) {
+            // Album Artwork on Top
+            VStack(spacing: 6) {
+                AsyncImage(url: diff.onlineMetadata.artworkURL) { phase in
+                    switch phase {
+                    case .success(let image):
+                        image
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                    default:
                         AlbumArtworkView(
                             artworkKey: diff.localTrack.artworkKey,
                             title: diff.localTrack.album,
                             subtitle: diff.localTrack.artist,
-                            cornerRadius: 6
+                            cornerRadius: 8
                         )
-                        .frame(width: 130, height: 130)
-                        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-
-                        Text(diff.localTrack.artworkKey != nil ? "LOCAL ARTWORK" : "NO ARTWORK")
-                            .font(.system(size: 8, weight: .bold, design: .monospaced))
-                            .foregroundStyle(.secondary)
                     }
-
-                    VStack(alignment: .leading, spacing: 2) {
-                        metaItem(label: "TITLE", value: diff.localTrack.title)
-                        metaItem(label: "ARTIST", value: diff.localTrack.artist)
-                        metaItem(label: "ALBUM", value: diff.localTrack.album)
-
-                        if let y = diff.localTrack.year, y > 0 {
-                            metaItem(label: "YEAR", value: String(y))
-                        } else {
-                            metaItem(label: "YEAR", value: "MISSING", isMissing: true)
-                        }
-
-                        if let g = diff.localTrack.genre, !g.isEmpty && g != "Unknown Genre" && g != "—" {
-                            metaItem(label: "GENRE", value: g)
-                        }
-
-                        if let t = diff.localTrack.trackNumber, t > 0 {
-                            // Total str
-                            let totalStr = diff.localTrack.totalTracks.map { " of \($0)" } ?? ""
-                            metaItem(label: "TRACK #", value: "\(t)\(totalStr)")
-                        } else {
-                            metaItem(label: "TRACK #", value: "—", isMissing: true)
-                        }
-                    }
-                    .padding(6)
-                    .background(appTheme.backgroundColor.opacity(0.5))
-                    .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(width: 150, height: 150)
+                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
 
-                // Right: Online Match
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("ONLINE VERIFIED")
-                        .font(.system(size: 9, weight: .bold, design: .monospaced))
-                        .foregroundStyle(appTheme.accentColor)
-
-                    // Online Artwork
-                    VStack(alignment: .leading, spacing: 4) {
-                        AsyncImage(url: diff.onlineMetadata.artworkURL) { phase in
-                            switch phase {
-                            case .success(let image):
-                                image
-                                    .resizable()
-                                    .aspectRatio(contentMode: .fill)
-                            default:
-                                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                    .fill(appTheme.secondaryBackgroundColor)
-                            }
-                        }
-                        .frame(width: 130, height: 130)
-                        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-
-                        HStack(spacing: 4) {
-                            Text(diff.onlineMetadata.artworkURL != nil ? "HIGH-RES (1400x1400)" : "NO ONLINE ART")
-                                .font(.system(size: 8, weight: .bold, design: .monospaced))
-                                .foregroundStyle(appTheme.accentColor)
-
-                            Text("→ MATCH")
-                                .font(.system(size: 7, weight: .bold, design: .monospaced))
-                                .foregroundStyle(Color.green)
-                        }
-                    }
-
-                    VStack(alignment: .leading, spacing: 2) {
-                        onlineMetaItem(label: "TITLE", value: diff.localTrack.title, arrowBadge: "→ KEEP LOCAL", isTransferred: true)
-                        onlineMetaItem(label: "ARTIST", value: diff.localTrack.artist, arrowBadge: "→ KEEP LOCAL", isTransferred: true)
-                        onlineMetaItem(label: "ALBUM", value: diff.effectiveOnlineAlbum, arrowBadge: "→ MATCH")
-
-                        // Year
-                        if let y = diff.onlineMetadata.releaseYear, y > 0 {
-                            // Flag indicating if enriched
-                            let isEnriched = diff.localTrack.year == nil || diff.localTrack.year == 0
-                            onlineMetaItem(label: "YEAR", value: String(y), arrowBadge: isEnriched ? "→ ENRICH" : "→ MATCH")
-                        } else if diff.isYearTransferredFromLocal, let localY = diff.localTrack.year {
-                            onlineMetaItem(label: "YEAR", value: String(localY), arrowBadge: "→ KEEP LOCAL", isTransferred: true)
-                        } else {
-                            onlineMetaItem(label: "YEAR", value: "—")
-                        }
-
-                        // Genre
-                        if let localG = diff.localTrack.genre, !localG.isEmpty && localG != "Unknown Genre" && localG != "—" {
-                            onlineMetaItem(label: "GENRE", value: localG, arrowBadge: "→ KEEP LOCAL", isTransferred: true)
-                        }
-
-                        // Track Number
-                        if let t = diff.onlineMetadata.trackNumber, t > 0 {
-                            // Total str
-                            let totalStr = diff.onlineMetadata.totalTracks.map { " of \($0)" } ?? ""
-                            onlineMetaItem(label: "TRACK #", value: "\(t)\(totalStr)", arrowBadge: "→ MATCH")
-                        } else if diff.isTrackNumberTransferredFromLocal, let localT = diff.localTrack.trackNumber {
-                            // Total str
-                            let totalStr = diff.localTrack.totalTracks.map { " of \($0)" } ?? ""
-                            onlineMetaItem(label: "TRACK #", value: "\(localT)\(totalStr)", arrowBadge: "→ KEEP LOCAL", isTransferred: true)
-                        } else {
-                            onlineMetaItem(label: "TRACK #", value: "—")
-                        }
-                    }
-                    .padding(6)
-                    .background(appTheme.backgroundColor.opacity(0.5))
-                    .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
+                // Sub-Artwork Status Label
+                Text("USING ONLINE METADATA")
+                    .font(.system(size: 9, weight: .bold, design: .monospaced))
+                    .foregroundStyle(Color.blue)
             }
 
-            // Action Buttons
-            HStack(spacing: 8) {
-                Button(action: onApplyOnline) {
-                    Text("RE-APPLY TAGS & ART")
-                        .font(.system(size: 10, weight: .bold, design: .monospaced))
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(TypographicButtonStyle(variant: .secondary, size: .small))
+            // Centered Metadata Rows Below
+            VStack(alignment: .center, spacing: 6) {
+                centeredRow(label: "TITLE", value: diff.onlineMetadata.title, isGreen: diff.titleChanged)
+                centeredRow(label: "ARTIST", value: diff.onlineMetadata.artist, isGreen: diff.artistChanged)
+                centeredRow(label: "ALBUM", value: diff.onlineMetadata.album, isGreen: diff.albumChanged)
 
-                Button(action: onRescan) {
-                    Text(isRechecking ? "RESCANNING..." : "RESCAN")
-                        .font(.system(size: 10, weight: .bold, design: .monospaced))
-                        .frame(maxWidth: .infinity)
+                if let y = diff.onlineMetadata.releaseYear, y > 0 {
+                    centeredRow(label: "YEAR", value: String(y), isGreen: diff.yearChanged)
                 }
-                .buttonStyle(TypographicButtonStyle(variant: .secondary, size: .small))
-                .disabled(isRechecking)
+
+                if let g = diff.onlineMetadata.genre, !g.isEmpty && g != "—" {
+                    centeredRow(label: "GENRE", value: g, isGreen: false)
+                }
+
+                if let t = diff.onlineMetadata.trackNumber, t > 0 {
+                    let totalStr = diff.onlineMetadata.totalTracks.map { " of \($0)" } ?? ""
+                    centeredRow(label: "TRACK #", value: "\(t)\(totalStr)", isGreen: diff.trackNumberChanged)
+                }
             }
-            .padding(.top, 4)
+            .frame(maxWidth: .infinity)
         }
-        .padding(12)
-        .background(appTheme.secondaryBackgroundColor.opacity(0.6))
-        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .stroke(appTheme.separatorColor, lineWidth: 1)
-        )
     }
 
-    // Meta item
-    private func metaItem(label: String, value: String, isMissing: Bool = false) -> some View {
-        VStack(alignment: .leading, spacing: 1) {
+    // MARK: - Local Page View
+    private var localPageView: some View {
+        VStack(alignment: .center, spacing: 10) {
+            // Album Artwork on Top
+            VStack(spacing: 6) {
+                AlbumArtworkView(
+                    artworkKey: diff.localTrack.artworkKey,
+                    title: diff.localTrack.album,
+                    subtitle: diff.localTrack.artist,
+                    cornerRadius: 8
+                )
+                .frame(width: 150, height: 150)
+                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+
+                // Sub-Artwork Status Label
+                Text("ORIGINAL LOCAL METADATA")
+                    .font(.system(size: 9, weight: .bold, design: .monospaced))
+                    .foregroundStyle(Color.secondary)
+            }
+
+            // Centered Local Metadata Rows
+            VStack(alignment: .center, spacing: 6) {
+                centeredRow(label: "TITLE", value: diff.localTrack.title, isGreen: false)
+                centeredRow(label: "ARTIST", value: diff.localTrack.artist, isGreen: false)
+                centeredRow(label: "ALBUM", value: diff.localTrack.album.isEmpty ? "—" : diff.localTrack.album, isGreen: false)
+                centeredRow(label: "YEAR", value: diff.localTrack.year.map { String($0) } ?? "—", isGreen: false)
+                if let g = diff.localTrack.genre, !g.isEmpty && g != "—" {
+                    centeredRow(label: "GENRE", value: g, isGreen: false)
+                }
+                if let lt = diff.localTrack.trackNumber, lt > 0 {
+                    let totalStr = diff.localTrack.totalTracks.map { " of \($0)" } ?? ""
+                    centeredRow(label: "TRACK #", value: "\(lt)\(totalStr)", isGreen: false)
+                }
+            }
+            .frame(maxWidth: .infinity)
+        }
+    }
+
+    private func centeredRow(label: String, value: String, isGreen: Bool) -> some View {
+        HStack(spacing: 6) {
             Text(label)
-                .font(.system(size: 8, weight: .bold, design: .monospaced))
-                .foregroundStyle(.secondary)
-            Text(value)
-                .font(.system(size: 10, weight: isMissing ? .regular : .bold, design: .monospaced))
-                .foregroundStyle(isMissing ? .secondary : Color.primary)
-                .lineLimit(1)
-        }
-    }
-
-    // Online meta item
-    private func onlineMetaItem(
-        label: String,
-        value: String,
-        arrowBadge: String? = nil,
-        isTransferred: Bool = false
-    ) -> some View {
-        VStack(alignment: .leading, spacing: 1) {
-            HStack(spacing: 4) {
-                Text(label)
-                    .font(.system(size: 8, weight: .bold, design: .monospaced))
-                    .foregroundStyle(.secondary)
-
-                if let badge = arrowBadge {
-                    Text(badge)
-                        .font(.system(size: 7, weight: .bold, design: .monospaced))
-                        .foregroundStyle(isTransferred ? Color.secondary : Color.green)
-                }
-            }
-
-            Text(value)
                 .font(.system(size: 10, weight: .bold, design: .monospaced))
-                .foregroundStyle(Color.primary)
+                .foregroundStyle(.secondary)
+
+            Text(value)
+                .font(.system(size: 13, weight: .bold, design: .monospaced))
+                .foregroundStyle(isGreen ? Color.green : Color.primary)
                 .lineLimit(1)
         }
+        .padding(.vertical, 1)
     }
 }

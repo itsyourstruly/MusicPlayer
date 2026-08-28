@@ -157,7 +157,7 @@ public struct FullScreenPlayerView: View {
 
                         Spacer(minLength: 12)
 
-                        // Bottom Action Bar (QUEUE on left, AirPlay on right)
+                        // Bottom Action Bar (QUEUE on left, Audio Route on right)
                         HStack(spacing: 24) {
                             Button(action: { showingQueue = true }) {
                                 HStack(spacing: 6) {
@@ -167,15 +167,17 @@ public struct FullScreenPlayerView: View {
                                         .font(.system(size: 13, weight: .bold, design: .monospaced))
                                 }
                                 .foregroundStyle(palette.foregroundColor)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 8)
                             }
                             .buttonStyle(.plain)
 
                             Spacer()
 
-                            ZStack {
-                                AirPlayButtonView()
-                                    .frame(width: 36, height: 36)
-                            }
+                            AirPlayButtonView(
+                                routeName: playerService.currentAudioRouteName,
+                                foregroundColor: palette.foregroundColor
+                            )
                         }
                         .padding(.horizontal, 28)
                         .padding(.bottom, max(bottomInset, 20) + 4)
