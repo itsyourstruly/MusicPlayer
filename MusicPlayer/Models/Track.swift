@@ -115,7 +115,7 @@ public struct Track: Identifiable, Codable, Sendable, Hashable {
         // N album
         let nAlbum = FuzzyMatcher.normalize(album)
         // N genre
-        let nGenre = genre != nil ? FuzzyMatcher.normalize(genre!) : ""
+        let nGenre = genre.map { FuzzyMatcher.normalize($0) } ?? ""
 
         self.normalizedTitle = nTitle
         self.normalizedArtist = nArtist
@@ -173,7 +173,7 @@ public struct Track: Identifiable, Codable, Sendable, Hashable {
         // N album
         let nAlbum = FuzzyMatcher.normalize(self.album)
         // N genre
-        let nGenre = self.genre != nil ? FuzzyMatcher.normalize(self.genre!) : ""
+        let nGenre = self.genre.map { FuzzyMatcher.normalize($0) } ?? ""
 
         self.normalizedTitle = nTitle
         self.normalizedArtist = nArtist
@@ -284,4 +284,120 @@ public struct Track: Identifiable, Codable, Sendable, Hashable {
             lyrics: self.lyrics
         )
     }
+
+    /// Returns a copy of the track with an updated release year.
+    public func withYear(_ newYear: Int?) -> Track {
+        Track(
+            id: self.id,
+            title: self.title,
+            artist: self.artist,
+            album: self.album,
+            albumArtist: self.albumArtist,
+            genre: self.genre,
+            year: newYear,
+            trackNumber: self.trackNumber,
+            originalTrackNumber: self.originalTrackNumber,
+            deluxeTrackNumber: self.deluxeTrackNumber,
+            totalTracks: self.totalTracks,
+            discNumber: self.discNumber,
+            duration: self.duration,
+            url: self.url,
+            artworkKey: self.artworkKey,
+            dateAdded: self.dateAdded,
+            fileInfo: self.fileInfo,
+            lyrics: self.lyrics
+        )
+    }
+
+    // MARK: - 7 Core Tag Completeness & Classification
+
+    /// Validates if the title is present and not a generic placeholder.
+    public var hasValidTitle: Bool {
+        let t = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        if t.isEmpty { return false }
+        let lower = t.lowercased()
+        if lower == "unknown title" || lower == "untitled" || lower == "—" || lower == "-" { return false }
+        if lower.hasPrefix("track ") && lower.count <= 8 { return false }
+        return true
+    }
+
+    /// Validates if the artist is present and not a generic placeholder.
+    public var hasValidArtist: Bool {
+        let a = artist.trimmingCharacters(in: .whitespacesAndNewlines)
+        if a.isEmpty { return false }
+        let lower = a.lowercased()
+        if lower == "unknown artist" || lower == "unknown" || lower == "—" || lower == "-" { return false }
+        return true
+    }
+
+    /// Validates if the album is present and not a generic placeholder.
+    public var hasValidAlbum: Bool {
+        let al = album.trimmingCharacters(in: .whitespacesAndNewlines)
+        if al.isEmpty { return false }
+        let lower = al.lowercased()
+        if lower == "unknown album" || lower == "unknown" || lower == "—" || lower == "-" { return false }
+        return true
+    }
+
+    /// Validates if the genre is present and not a generic placeholder.
+    public var hasValidGenre: Bool {
+        guard let g = genre?.trimmingCharacters(in: .whitespacesAndNewlines), !g.isEmpty else { return false }
+        let lower = g.lowercased()
+        if lower == "unknown genre" || lower == "unknown" || lower == "other" || lower == "—" || lower == "-" { return false }
+        return true
+    }
+
+    /// Validates if the release year is present and within a valid 4-digit range.
+    public var hasValidYear: Bool {
+        guard let y = year, y >= 1900, y <= Calendar.current.component(.year, from: Date()) + 2 else { return false }
+        return true
+    }
+
+    /// Validates if the track number is present and greater than 0.
+    public var hasValidTrackNumber: Bool {
+        guard let tn = trackNumber, tn > 0 else { return false }
+        return true
+    }
+
+    /// Validates if artwork is present.
+    public var hasValidArtwork: Bool {
+        guard let ak = artworkKey?.trimmingCharacters(in: .whitespacesAndNewlines), !ak.isEmpty else { return false }
+        return true
+    }
+
+    /// Indicates if all 7 core metadata fields (Title, Artist, Album, Genre, Year, TrackNumber, Artwork) are present and valid.
+    public var isComplete7CoreTags: Bool {
+        hasValidTitle &&
+        hasValidArtist &&
+        hasValidAlbum &&
+        hasValidGenre &&
+        hasValidYear &&
+        hasValidTrackNumber &&
+        hasValidArtwork
+    }
+
+    /// Lists any missing or invalid tags out of the 7 core fields.
+    public var missingCoreTags: [String] {
+        var missing: [String] = []
+        if !hasValidTitle { missing.append("Title") }
+        if !hasValidArtist { missing.append("Artist") }
+        if !hasValidAlbum { missing.append("Album") }
+        if !hasValidGenre { missing.append("Genre") }
+        if !hasValidYear { missing.append("Year") }
+        if !hasValidTrackNumber { missing.append("Track #") }
+        if !hasValidArtwork { missing.append("Artwork") }
+        return missing
+    }
+
+    /// The tag completeness status for scanning ("Looks Good" vs "Ready to Enrich").
+    public var tagCompletenessStatus: TagCompletenessStatus {
+        isComplete7CoreTags ? .looksGood : .readyToEnrich
+    }
 }
+
+/// Category classification for local track metadata completeness.
+public enum TagCompletenessStatus: String, Sendable, Codable {
+    case looksGood = "Looks Good"
+    case readyToEnrich = "Ready to Enrich"
+}
+

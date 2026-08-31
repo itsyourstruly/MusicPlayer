@@ -27,6 +27,7 @@ public struct ParsedAudioMetadata: Sendable {
     public var channelCount: Int = 2
     public var bitRate: Double = 0
     public var formatDescription: String = ""
+    public var lyrics: String?
 
     // Initialize with configured properties
     public init() {}
@@ -36,6 +37,11 @@ public struct ParsedAudioMetadata: Sendable {
 /// Directly reads and decodes ID3v2, ISO-BMFF (M4A/MP4), Vorbis Comment (FLAC), and RIFF (WAV) tags
 /// in under 0.2ms per file with zero CoreMedia XPC roundtrips or mediaserverd contention.
 public struct FastAudioMetadataReader: Sendable {
+
+    /// Reads metadata directly from file binary headers without spawning AVURLAsset or IPC daemons.
+    public static func readMetadata(from fileURL: URL) -> ParsedAudioMetadata? {
+        readMetadata(for: fileURL)
+    }
 
     /// Reads metadata directly from file binary headers without spawning AVURLAsset or IPC daemons.
     public static func readMetadata(for fileURL: URL) -> ParsedAudioMetadata? {
@@ -227,16 +233,11 @@ public struct FastAudioMetadataReader: Sendable {
         case "TPE2", "TP2", "aART", "TSO2": // Album Artist
             if meta.albumArtist == nil { meta.albumArtist = decodeID3String(payload) }
         case "TYER", "TYE", "TDRC", "TDRL", "TDAT", "TRDA", "TIME": // Year
-            if let str = decodeID3String(payload) {
-                // Digits
-                let digits = str.filter { $0.isNumber }
-                if digits.count >= 4, let y = Int(digits.prefix(4)), y >= 1900, y <= 2099 {
-                    meta.year = y
-                }
+            if let str = decodeID3String(payload), let y = MetadataSanitizer.extract4DigitYear(from: str) {
+                meta.year = y
             }
         case "TRCK", "TRK": // Track Number
             if let str = decodeID3String(payload) {
-                // Parts
                 let parts = str.split(separator: "/")
                 if let first = parts.first, let num = Int(first.trimmingCharacters(in: .whitespaces)) {
                     meta.trackNumber = num
@@ -247,7 +248,6 @@ public struct FastAudioMetadataReader: Sendable {
             }
         case "TPOS", "TPA": // Disc Number
             if let str = decodeID3String(payload) {
-                // Parts
                 let parts = str.split(separator: "/")
                 if let first = parts.first, let num = Int(first.trimmingCharacters(in: .whitespaces)) {
                     meta.discNumber = num
@@ -259,41 +259,142 @@ public struct FastAudioMetadataReader: Sendable {
             if let str = decodeID3String(payload), let ms = Double(str.trimmingCharacters(in: .whitespacesAndNewlines)), ms > 0 {
                 meta.duration = ms / 1000.0
             }
+        case "USLT", "ULT": // Unsynchronized Lyrics
+            if meta.lyrics == nil {
+                meta.lyrics = decodeUSLTFrame(payload)
+            }
+        case "SYLT", "SLT": // Synchronized Lyrics
+            if meta.lyrics == nil {
+                meta.lyrics = decodeUSLTFrame(payload) ?? decodeID3String(payload)
+            }
+        case "COMM", "COM": // Comments (frequently used for lyrics)
+            if let (desc, text) = decodeCOMMFrame(payload) {
+                let descUpper = desc.uppercased()
+                if descUpper.contains("LYRIC") || descUpper.contains("TEXT") || descUpper.contains("WORDS") {
+                    if meta.lyrics == nil { meta.lyrics = text }
+                } else if text.count > 60 && (text.contains("\n") || text.contains("\r") || text.contains("[0")) {
+                    if meta.lyrics == nil { meta.lyrics = text }
+                }
+            }
         case "APIC", "PIC": // Attached Picture (Artwork)
             if meta.artworkData == nil {
                 meta.artworkData = extractImageData(from: payload)
             }
-        case "TXXX", "TXX": // User-defined text frame (e.g. ALBUM, ARTIST, YEAR)
+        case "TXXX", "TXX": // User-defined text frame (e.g. ALBUM, ARTIST, YEAR, LYRICS)
             if let (desc, val) = decodeTXXXFrame(payload) {
-                // Desc upper
                 let descUpper = desc.uppercased()
-                if descUpper.contains("ALBUM") && meta.album == nil {
+                if descUpper.contains("LYRIC") || descUpper.contains("UNSYNCED") || descUpper.contains("SYNCED") || descUpper.contains("WORDS") {
+                    if meta.lyrics == nil { meta.lyrics = val }
+                } else if descUpper.contains("ALBUM") && meta.album == nil {
                     meta.album = val
                 } else if descUpper.contains("ARTIST") && meta.artist == nil {
                     meta.artist = val
                 } else if (descUpper.contains("YEAR") || descUpper.contains("DATE")) && meta.year == nil {
-                    // Digits
-                    let digits = val.filter { $0.isNumber }
-                    if digits.count >= 4, let y = Int(digits.prefix(4)), y >= 1900, y <= 2099 {
+                    if let y = MetadataSanitizer.extract4DigitYear(from: val) {
                         meta.year = y
                     }
+                } else if val.count > 60 && (val.contains("\n") || val.contains("\r") || val.contains("[0")) && meta.lyrics == nil {
+                    meta.lyrics = val
                 }
             }
         default:
-            // Id upper
             let idUpper = id.uppercased()
+            if (idUpper.contains("LYR") || idUpper.contains("USLT") || idUpper.contains("SYLT")) && meta.lyrics == nil {
+                meta.lyrics = decodeUSLTFrame(payload) ?? decodeID3String(payload)
+            }
             if (idUpper.contains("ALB") || idUpper.contains("TALB")) && meta.album == nil {
                 meta.album = decodeID3String(payload)
             }
             // Fallback embedded year check across any unknown frame
-            if meta.year == nil, let str = decodeID3String(payload) {
-                // Digits
-                let digits = str.filter { $0.isNumber }
-                if digits.count >= 4, let y = Int(digits.prefix(4)), y >= 1900, y <= 2099 {
-                    meta.year = y
-                }
+            if meta.year == nil, let str = decodeID3String(payload), let y = MetadataSanitizer.extract4DigitYear(from: str) {
+                meta.year = y
+            }
+            // Large multiline text fallback for any miscellaneous tag frame
+            if meta.lyrics == nil, let str = decodeID3String(payload), str.count > 60, (str.contains("\n") || str.contains("\r") || str.contains("[0")) {
+                meta.lyrics = str
             }
         }
+    }
+
+    /// Decodes USLT (Unsynchronized lyrics/text) ID3v2 frames.
+    private static func decodeUSLTFrame(_ data: Data) -> String? {
+        guard data.count >= 5 else { return nil }
+        let encoding = data[0]
+        // Bytes 1..3 are 3-byte language code (e.g. "eng", "XXX")
+        let content = data.subdata(in: 4..<data.count)
+
+        if encoding == 1 || encoding == 2 {
+            // UTF-16: find double-null terminator for content descriptor
+            var splitIndex: Int?
+            var i = 0
+            while i + 1 < content.count {
+                if content[i] == 0 && content[i+1] == 0 {
+                    splitIndex = i
+                    break
+                }
+                i += 2
+            }
+            if let split = splitIndex {
+                let lyricsData = content.subdata(in: (split + 2)..<content.count)
+                let text = (String(data: lyricsData, encoding: .utf16) ??
+                            String(data: lyricsData, encoding: .utf16LittleEndian) ??
+                            String(data: lyricsData, encoding: .utf16BigEndian))?.trimmingCharacters(in: .whitespacesAndNewlines)
+                if let text = text, !text.isEmpty { return text }
+            }
+            return (String(data: content, encoding: .utf16) ??
+                    String(data: content, encoding: .utf16LittleEndian) ??
+                    String(data: content, encoding: .utf16BigEndian))?.trimmingCharacters(in: .whitespacesAndNewlines)
+        } else {
+            // UTF-8 or ISO-8859-1: find single-null terminator
+            if let split = content.firstIndex(of: 0) {
+                let lyricsData = content.subdata(in: (split + 1)..<content.count)
+                let enc: String.Encoding = encoding == 3 ? .utf8 : .isoLatin1
+                let text = (String(data: lyricsData, encoding: enc) ??
+                            String(data: lyricsData, encoding: .utf8) ??
+                            String(data: lyricsData, encoding: .isoLatin1))?.trimmingCharacters(in: .whitespacesAndNewlines)
+                if let text = text, !text.isEmpty { return text }
+            }
+            let enc: String.Encoding = encoding == 3 ? .utf8 : .isoLatin1
+            return (String(data: content, encoding: enc) ??
+                    String(data: content, encoding: .utf8) ??
+                    String(data: content, encoding: .isoLatin1))?.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+    }
+
+    /// Decodes COMM (Comments) ID3v2 frames.
+    private static func decodeCOMMFrame(_ data: Data) -> (description: String, text: String)? {
+        guard data.count >= 5 else { return nil }
+        let encoding = data[0]
+        let content = data.subdata(in: 4..<data.count)
+
+        if encoding == 1 || encoding == 2 {
+            var splitIndex: Int?
+            var i = 0
+            while i + 1 < content.count {
+                if content[i] == 0 && content[i+1] == 0 {
+                    splitIndex = i
+                    break
+                }
+                i += 2
+            }
+            if let split = splitIndex {
+                let descData = content.subdata(in: 0..<split)
+                let textData = content.subdata(in: (split + 2)..<content.count)
+                let desc = (String(data: descData, encoding: .utf16) ?? String(data: descData, encoding: .utf16BigEndian))?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                let text = (String(data: textData, encoding: .utf16) ?? String(data: textData, encoding: .utf16BigEndian))?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                return (desc, text)
+            }
+        } else {
+            if let split = content.firstIndex(of: 0) {
+                let descData = content.subdata(in: 0..<split)
+                let textData = content.subdata(in: (split + 1)..<content.count)
+                let enc: String.Encoding = encoding == 3 ? .utf8 : .isoLatin1
+                let desc = (String(data: descData, encoding: enc) ?? String(data: descData, encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                let text = (String(data: textData, encoding: enc) ?? String(data: textData, encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                return (desc, text)
+            }
+        }
+        return nil
     }
 
     /// Decodes user-defined TXXX text frames (description + value).
@@ -586,33 +687,32 @@ public struct FastAudioMetadataReader: Sendable {
                                 if meta.albumArtist == nil { meta.albumArtist = str }
                             } else if itemType == "©gen" || lowerType.contains("gen") {
                                 if meta.genre == nil { meta.genre = str }
+                            } else if itemType == "©lyr" || lowerType.contains("lyr") {
+                                if meta.lyrics == nil { meta.lyrics = str }
                             } else if itemType == "©day" || lowerType.contains("day") || lowerType.contains("year") || lowerType.contains("date") {
-                                // Digits
-                                let digits = str.filter { $0.isNumber }
-                                if digits.count >= 4, let y = Int(digits.prefix(4)), y >= 1900, y <= 2099 {
+                                if let y = MetadataSanitizer.extract4DigitYear(from: str) {
                                     meta.year = y
                                 }
                             }
                             // 4-digit year inspection on any custom/unknown text tag
-                            if meta.year == nil && !lowerType.contains("nam") && !lowerType.contains("alb") && !lowerType.contains("art") {
-                                // Digits
-                                let digits = str.filter { $0.isNumber }
-                                if digits.count >= 4, let y = Int(digits.prefix(4)), y >= 1900, y <= 2099 {
+                            if meta.year == nil && !lowerType.contains("nam") && !lowerType.contains("alb") && !lowerType.contains("art") && !lowerType.contains("lyr") {
+                                if let y = MetadataSanitizer.extract4DigitYear(from: str) {
                                     meta.year = y
                                 }
+                            }
+                            // Fallback large text block inspection for lyrics
+                            if meta.lyrics == nil && str.count > 60 && (str.contains("\n") || str.contains("\r") || str.contains("[0")) {
+                                meta.lyrics = str
                             }
                         }
                     } else if typeFlags == 0 {
                         // Raw binary integer/bytes
                         if itemType == "trkn" && content.count >= 6 {
-                            // Track
                             let track = Int(content[3])
-                            // Total
                             let total = Int(content[5])
                             if track > 0 { meta.trackNumber = track }
                             if total > 0 { meta.totalTracks = total }
                         } else if itemType == "disk" && content.count >= 4 {
-                            // Disc
                             let disc = Int(content[3])
                             if disc > 0 { meta.discNumber = disc }
                         } else if (itemType == "covr" || itemType.lowercased().contains("covr")) && meta.artworkData == nil {
@@ -633,19 +733,13 @@ public struct FastAudioMetadataReader: Sendable {
 
     /// Decodes ISO-BMFF freeform "----" atoms (iTunes custom tags written by Picard, Mp3tag, TagLib).
     private static func parseFreeformAtom(data: Data, meta: inout ParsedAudioMetadata) {
-        // Offset
         var offset = 0
-        // Tag key
         var tagKey: String?
-        // Tag value
         var tagValue: String?
 
         while offset + 8 <= data.count {
-            // Atom size
             let atomSize = (Int(data[offset]) << 24) | (Int(data[offset+1]) << 16) | (Int(data[offset+2]) << 8) | Int(data[offset+3])
-            // Ensure preconditions are met before proceeding
             guard atomSize >= 8, offset + atomSize <= data.count else { break }
-            // Atom type
             let atomType = String(decoding: data[offset+4..<offset+8], as: UTF8.self)
 
             if atomType == "name" && atomSize > 12 {
@@ -658,18 +752,20 @@ public struct FastAudioMetadataReader: Sendable {
         }
 
         if let key = tagKey, let val = tagValue, !val.isEmpty {
-            if (key.contains("ALBUM") || key == "ALBUMTITLE" || key == "ALBUM_TITLE") && meta.album == nil {
+            if (key.contains("LYRIC") || key.contains("UNSYNCED") || key.contains("SYNCED") || key.contains("WORDS") || key == "TEXT") && meta.lyrics == nil {
+                meta.lyrics = val
+            } else if (key.contains("ALBUM") || key == "ALBUMTITLE" || key == "ALBUM_TITLE") && meta.album == nil {
                 meta.album = val
             } else if (key.contains("ARTIST") || key == "AUTHOR" || key == "PERFORMER") && meta.artist == nil {
                 meta.artist = val
             } else if (key.contains("TITLE") || key == "NAME") && meta.title == nil {
                 meta.title = val
             } else if (key.contains("DATE") || key.contains("YEAR")) && meta.year == nil {
-                // Digits
-                let digits = val.filter { $0.isNumber }
-                if digits.count >= 4, let y = Int(digits.prefix(4)), y >= 1900, y <= 2099 {
+                if let y = MetadataSanitizer.extract4DigitYear(from: val) {
                     meta.year = y
                 }
+            } else if meta.lyrics == nil && val.count > 60 && (val.contains("\n") || val.contains("\r") || val.contains("[0")) {
+                meta.lyrics = val
             }
         }
     }
@@ -694,11 +790,11 @@ public struct FastAudioMetadataReader: Sendable {
             isLastBlock = (blockHeader[0] & 0x80) != 0
             // Block type
             let blockType = Int(blockHeader[0] & 0x7F)
-            // Block length
+            // Block length (clamped to 16MB max)
             let blockLength = (Int(blockHeader[1]) << 16) | (Int(blockHeader[2]) << 8) | Int(blockHeader[3])
 
             // Ensure preconditions are met before proceeding
-            guard blockLength > 0, let blockData = try? handle.read(upToCount: blockLength), blockData.count == blockLength else { break }
+            guard blockLength > 0, blockLength <= 16 * 1024 * 1024, let blockData = try? handle.read(upToCount: blockLength), blockData.count == blockLength else { break }
 
             if blockType == 0 && blockLength >= 18 {
                 // STREAMINFO
@@ -798,14 +894,13 @@ public struct FastAudioMetadataReader: Sendable {
                         if meta.albumArtist == nil { meta.albumArtist = val }
                     case "GENRE", "STYLE":
                         if meta.genre == nil { meta.genre = val }
+                    case "LYRICS", "UNSYNCEDLYRICS", "UNSYNCED LYRICS", "UNSYNCED_LYRICS", "SYNCEDLYRICS", "SYNCED_LYRICS", "LYRIC", "TEXT", "WORDS":
+                        if meta.lyrics == nil { meta.lyrics = val }
                     case "DATE", "YEAR", "RELEASEDATE", "RELEASE_DATE", "ORIGINALDATE", "ORIGINAL_DATE", "ORIGINALYEAR":
-                        // Digits
-                        let digits = val.filter { $0.isNumber }
-                        if digits.count >= 4, let y = Int(digits.prefix(4)), y >= 1900, y <= 2099 {
+                        if let y = MetadataSanitizer.extract4DigitYear(from: val) {
                             meta.year = y
                         }
                     case "TRACKNUMBER", "TRACK":
-                        // Parts
                         let parts = val.split(separator: "/")
                         if let first = parts.first, let num = Int(first) {
                             meta.trackNumber = num
@@ -818,17 +913,15 @@ public struct FastAudioMetadataReader: Sendable {
                             meta.discNumber = num
                         }
                     default:
-                        if key.contains("ALBUM") && meta.album == nil {
+                        if (key.contains("LYRIC") || key.contains("TEXT") || (val.count > 60 && (val.contains("\n") || val.contains("\r") || val.contains("[0")))) && meta.lyrics == nil {
+                            meta.lyrics = val
+                        } else if key.contains("ALBUM") && meta.album == nil {
                             meta.album = val
                         } else if key.contains("ARTIST") && meta.artist == nil {
                             meta.artist = val
                         }
-                        if meta.year == nil {
-                            // Digits
-                            let digits = val.filter { $0.isNumber }
-                            if digits.count >= 4, let y = Int(digits.prefix(4)), y >= 1900, y <= 2099 {
-                                meta.year = y
-                            }
+                        if meta.year == nil, let y = MetadataSanitizer.extract4DigitYear(from: val) {
+                            meta.year = y
                         }
                     }
                 }
@@ -947,9 +1040,7 @@ public struct FastAudioMetadataReader: Sendable {
                 case "IPRD", "IALB", "ALBM": if meta.album == nil { meta.album = str }
                 case "IGNR", "GENR": if meta.genre == nil { meta.genre = str }
                 case "ICRD", "YEAR", "DATE":
-                    // Digits
-                    let digits = str.filter { $0.isNumber }
-                    if digits.count >= 4, let y = Int(digits.prefix(4)), y >= 1900, y <= 2099 {
+                    if let y = MetadataSanitizer.extract4DigitYear(from: str) {
                         meta.year = y
                     }
                 case "ITRK", "TRCK":
@@ -960,12 +1051,8 @@ public struct FastAudioMetadataReader: Sendable {
                     if chunkID.contains("ALB") || chunkID.contains("PRD") {
                         if meta.album == nil { meta.album = str }
                     }
-                    if meta.year == nil {
-                        // Digits
-                        let digits = str.filter { $0.isNumber }
-                        if digits.count >= 4, let y = Int(digits.prefix(4)), y >= 1900, y <= 2099 {
-                            meta.year = y
-                        }
+                    if meta.year == nil, let y = MetadataSanitizer.extract4DigitYear(from: str) {
+                        meta.year = y
                     }
                 }
             }
@@ -997,9 +1084,9 @@ public struct FastAudioMetadataReader: Sendable {
             // Unique identifier for chunk id
             let chunkID = String(decoding: chunkHeader[0..<4], as: UTF8.self)
             // Chunk size
-            let chunkSize = (Int(chunkHeader[4]) << 24) | (Int(chunkHeader[5]) << 16) | (Int(chunkHeader[6]) << 8) | Int(chunkHeader[7])
+            let chunkSize = Int((UInt32(chunkHeader[4]) << 24) | (UInt32(chunkHeader[5]) << 16) | (UInt32(chunkHeader[6]) << 8) | UInt32(chunkHeader[7]))
             // Ensure preconditions are met before proceeding
-            guard chunkSize >= 0 else { break }
+            guard chunkSize >= 0, chunkSize <= 64 * 1024 * 1024 else { break }
 
             if chunkID == "COMM" && chunkSize >= 18 {
                 if let commData = try? handle.read(upToCount: 18), commData.count == 18 {

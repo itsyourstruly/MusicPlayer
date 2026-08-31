@@ -288,11 +288,17 @@ public struct TrackRowView: View {
             )
         }
         .contextMenu {
-            Button(action: onPlayNext) {
+            Button(action: triggerPlayNext) {
                 Text("PLAY NEXT")
             }
-            Button(action: onQueueNext) {
+            Button(action: triggerQueueNext) {
                 Text("QUEUE NEXT")
+            }
+            Button(action: {
+                HapticFeedback.notificationSuccess()
+                onAddToQueue()
+            }) {
+                Text("ADD TO QUEUE")
             }
 
             // Artists
@@ -375,7 +381,9 @@ public struct TrackRowView: View {
                 dragOffset = activationThreshold
             }
 
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 450_000_000)
+                guard !Task.isCancelled else { return }
                 withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) {
                     dragOffset = 0
                     hasPassedThreshold = false
@@ -397,15 +405,13 @@ public struct TrackRowView: View {
             }
 
             againDismissTask?.cancel()
-            againDismissTask = Task {
+            againDismissTask = Task { @MainActor in
                 try? await Task.sleep(nanoseconds: 5_000_000_000)
                 if !Task.isCancelled {
-                    await MainActor.run {
-                        withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) {
-                            dragOffset = 0
-                            hasPassedThreshold = false
-                            showQueueNextAgain = false
-                        }
+                    withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) {
+                        dragOffset = 0
+                        hasPassedThreshold = false
+                        showQueueNextAgain = false
                     }
                 }
             }
@@ -419,7 +425,9 @@ public struct TrackRowView: View {
                 dragOffset = -activationThreshold
             }
 
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 450_000_000)
+                guard !Task.isCancelled else { return }
                 withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) {
                     dragOffset = 0
                     hasPassedThreshold = false
@@ -445,7 +453,9 @@ public struct TrackRowView: View {
             onQueueNext()
         }
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 450_000_000)
+            guard !Task.isCancelled else { return }
             withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) {
                 dragOffset = 0
                 hasPassedThreshold = false

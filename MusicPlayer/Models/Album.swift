@@ -52,14 +52,21 @@ public struct Album: Identifiable, Codable, Sendable, Hashable {
         artworkKey: String? = nil,
         tracks: [Track] = []
     ) {
-        self.title = title
+        var cleanTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        if cleanTitle.hasSuffix(" (Alternates)") {
+            cleanTitle = String(cleanTitle.dropLast(" (Alternates)".count)).trimmingCharacters(in: .whitespacesAndNewlines)
+        } else if cleanTitle.hasSuffix("(Alternates)") {
+            cleanTitle = String(cleanTitle.dropLast("(Alternates)".count)).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        self.title = cleanTitle
         self.artist = artist
         self.year = year
         self.genre = genre
         self.artworkKey = artworkKey
 
         // N title
-        let nTitle = FuzzyMatcher.normalize(title)
+        let nTitle = FuzzyMatcher.normalize(cleanTitle)
         // N artist
         let nArtist = FuzzyMatcher.normalize(artist)
         self.normalizedTitle = nTitle
@@ -165,12 +172,48 @@ public struct Album: Identifiable, Codable, Sendable, Hashable {
 
     /// Indicates whether this album is a standalone single or EP release.
     public var isSingle: Bool {
-        // Lower
         let lower = title.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
         if lower == "single" || lower.hasSuffix(" - single") || lower.hasSuffix(" (single)") || lower.hasSuffix(" [single]") || lower.hasSuffix(" - ep") || lower.hasSuffix(" (ep)") || lower.hasSuffix(" [ep]") {
             return true
         }
         return tracks.count <= 2
+    }
+
+    /// Indicates whether this album is a remix or alternate version collection.
+    public var isRemix: Bool {
+        let lower = title.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        if lower.hasSuffix("(remixes & alternates)") || lower.hasSuffix("(remixes)") || lower.hasSuffix("[remixes]") || lower.hasSuffix("- remixes") || lower.hasSuffix("(remix)") || lower.hasSuffix("(alternates)") || lower.hasSuffix("(alternatives)") || lower == "remixes" || lower == "remixes & alternates" || lower == "remixes & alternatives" {
+            return true
+        }
+        if !tracks.isEmpty && tracks.allSatisfy({ MetadataSanitizer.isRemixOrAlternateVersion(title: $0.title, album: $0.album) }) {
+            return true
+        }
+        return false
+    }
+
+    /// Indicates whether this album is a live concert recording or session.
+    public var isLive: Bool {
+        let lower = title.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        if lower.hasSuffix("(live)") || lower.hasSuffix("[live]") || lower.hasSuffix("- live") || lower.contains("live at") || lower.contains("live in") || lower.contains("live from") || lower == "live recordings" || lower == "live" {
+            return true
+        }
+        if !tracks.isEmpty && tracks.allSatisfy({ MetadataSanitizer.isLiveRecording(title: $0.title, album: $0.album) }) {
+            return true
+        }
+        return false
+    }
+
+    /// Indicates whether this album is a primary studio/full release (not single, not remix, not live).
+    public var isStudioAlbum: Bool {
+        return !isSingle && !isRemix && !isLive
+    }
+
+    /// Resolved visual artwork key for this album (album tag artworkKey, falling back to first track with artwork).
+    public var effectiveArtworkKey: String? {
+        if let key = artworkKey, !key.isEmpty {
+            return key
+        }
+        return tracks.compactMap { $0.artworkKey }.first(where: { !$0.isEmpty })
     }
 
     // MARK: - Artist Attribution
@@ -184,8 +227,10 @@ public struct Album: Identifiable, Codable, Sendable, Hashable {
         // Ensure preconditions are met before proceeding
         guard !cleanName.isEmpty else { return false }
 
-        // 1. Direct album artist match (e.g. Album.artist == "Pete & Bas" or "Drake")
-        if artist.localizedCaseInsensitiveCompare(cleanName) == .orderedSame {
+        // 1. Direct album artist match (e.g. Album.artist == "Pete & Bas" or "Drake" or "J. Cole" vs "J Cole")
+        let canonicalCleanName = ArtistParser.canonicalArtistKey(cleanName)
+        if artist.localizedCaseInsensitiveCompare(cleanName) == .orderedSame ||
+           ArtistParser.canonicalArtistKey(artist) == canonicalCleanName {
             return true
         }
 
@@ -196,7 +241,7 @@ public struct Album: Identifiable, Codable, Sendable, Hashable {
             let joinedCanonical = joined.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
             if albumArtistCanonical == joinedCanonical {
                 // This album is explicitly a joined artist album
-                return cleanName.lowercased() == joinedCanonical
+                return cleanName.lowercased() == joinedCanonical || canonicalCleanName == ArtistParser.canonicalArtistKey(joined)
             }
             // Joined parts
             let joinedParts = ArtistParser.parseArtists(from: joined).map { $0.lowercased() }
@@ -204,14 +249,17 @@ public struct Album: Identifiable, Codable, Sendable, Hashable {
                 // Album parts
                 let albumParts = ArtistParser.parseArtists(from: artist).map { $0.lowercased() }
                 if Set(joinedParts).isSubset(of: Set(albumParts)) {
-                    return cleanName.lowercased() == joinedCanonical
+                    return cleanName.lowercased() == joinedCanonical || canonicalCleanName == ArtistParser.canonicalArtistKey(joined)
                 }
             }
         }
 
         // 2. Album artist tag includes artist as a co-creator (e.g. "Drake & 21 Savage")
         let albumArtists = ArtistParser.parseArtists(from: artist)
-        if albumArtists.contains(where: { $0.localizedCaseInsensitiveCompare(cleanName) == .orderedSame }) {
+        if albumArtists.contains(where: {
+            $0.localizedCaseInsensitiveCompare(cleanName) == .orderedSame ||
+            ArtistParser.canonicalArtistKey($0) == canonicalCleanName
+        }) {
             return true
         }
 
@@ -250,7 +298,10 @@ public struct Album: Identifiable, Codable, Sendable, Hashable {
 
             // Primary artists
             let primaryArtists = ArtistParser.parseArtists(from: track.artist)
-            if primaryArtists.contains(where: { $0.localizedCaseInsensitiveCompare(cleanName) == .orderedSame }) {
+            if primaryArtists.contains(where: {
+                $0.localizedCaseInsensitiveCompare(cleanName) == .orderedSame ||
+                ArtistParser.canonicalArtistKey($0) == canonicalCleanName
+            }) {
                 tracksWhereArtistIsPrimary += 1
             }
         }
@@ -278,8 +329,8 @@ public struct Album: Identifiable, Codable, Sendable, Hashable {
     public func isFeaturedAlbum(for artistName: String, joinedArtists: [String] = []) -> Bool {
         // Clean name
         let cleanName = artistName.trimmingCharacters(in: .whitespacesAndNewlines)
-        // Ensure preconditions are met before proceeding
         guard !cleanName.isEmpty else { return false }
+        let canonicalCleanName = ArtistParser.canonicalArtistKey(cleanName)
 
         // If this is the artist's own lead or collaboration album, it is not a guest feature
         if isLeadOrCollaborativeAlbum(for: cleanName, joinedArtists: joinedArtists) {
@@ -292,7 +343,7 @@ public struct Album: Identifiable, Codable, Sendable, Hashable {
             let joinedCanonical = joined.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
             // Joined parts
             let joinedParts = ArtistParser.parseArtists(from: joined).map { $0.lowercased() }
-            if joinedParts.contains(cleanName.lowercased()) {
+            if joinedParts.contains(cleanName.lowercased()) || joinedParts.contains(canonicalCleanName) {
                 // Album parts
                 let albumParts = ArtistParser.parseArtists(from: artist).map { $0.lowercased() }
                 if Set(joinedParts).isSubset(of: Set(albumParts)) || artist.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == joinedCanonical {
@@ -310,7 +361,7 @@ public struct Album: Identifiable, Codable, Sendable, Hashable {
                 let joinedCanonical = joined.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
                 // Joined parts
                 let joinedParts = ArtistParser.parseArtists(from: joined).map { $0.lowercased() }
-                if joinedParts.contains(cleanName.lowercased()) {
+                if joinedParts.contains(cleanName.lowercased()) || joinedParts.contains(canonicalCleanName) {
                     // Track parts
                     let trackParts = ArtistParser.parseArtists(from: track.artist).map { $0.lowercased() }
                     if Set(joinedParts).isSubset(of: Set(trackParts)) || track.artist.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == joinedCanonical {
@@ -328,7 +379,10 @@ public struct Album: Identifiable, Codable, Sendable, Hashable {
             }
             // Track artists
             let trackArtists = ArtistParser.parseArtists(from: track.artist)
-            if trackArtists.contains(where: { $0.localizedCaseInsensitiveCompare(cleanName) == .orderedSame }) {
+            if trackArtists.contains(where: {
+                $0.localizedCaseInsensitiveCompare(cleanName) == .orderedSame ||
+                ArtistParser.canonicalArtistKey($0) == canonicalCleanName
+            }) {
                 return true
             }
         }

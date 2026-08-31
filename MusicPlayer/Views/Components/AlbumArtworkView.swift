@@ -39,12 +39,22 @@ public struct AlbumArtworkView: View {
                 image
                     .resizable()
                     .aspectRatio(1.0, contentMode: .fill)
+                    .transition(.opacity)
             } else {
                 typographicPlaceholder
+                    .transition(.opacity)
             }
         }
         .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-        // Async lifecycle task
+        .onAppear {
+            Task {
+                await loadArtwork()
+            }
+        }
+        .onDisappear {
+            // Free the decoded image bitmap immediately upon exiting the viewport to keep memory minimal
+            self.loadedImage = nil
+        }
         .task(id: artworkKey) {
             await loadArtwork()
         }
@@ -74,30 +84,26 @@ public struct AlbumArtworkView: View {
 
     // Load artwork
     private func loadArtwork() async {
-        // Ensure preconditions are met before proceeding
         guard let key = artworkKey, !key.isEmpty else {
-            withAnimation(.easeInOut(duration: 0.35)) {
-                loadedImage = nil
-            }
+            if loadedImage != nil { loadedImage = nil }
             return
         }
 
-        // Platform img
-        let platformImg = await ArtworkCacheService.shared.loadDecodedArtwork(key: key)
+        // Load downsampled decoded artwork from disk cache with zero memory bloat
+        let platformImg = await ArtworkCacheService.shared.loadDecodedArtwork(key: key, maxDimension: 400)
+        guard !Task.isCancelled else { return }
+
         if let platformImg = platformImg {
             #if canImport(UIKit)
-            withAnimation(.easeInOut(duration: 0.38)) {
-                self.loadedImage = Image(uiImage: platformImg)
-            }
+            let img = Image(uiImage: platformImg)
             #elseif canImport(AppKit)
-            withAnimation(.easeInOut(duration: 0.38)) {
-                self.loadedImage = Image(nsImage: platformImg)
-            }
+            let img = Image(nsImage: platformImg)
             #endif
-        } else {
-            withAnimation(.easeInOut(duration: 0.35)) {
-                self.loadedImage = nil
+            withAnimation(.easeOut(duration: 0.18)) {
+                self.loadedImage = img
             }
+        } else {
+            self.loadedImage = nil
         }
     }
 

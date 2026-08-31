@@ -415,16 +415,39 @@ private struct CandidateComparisonCard: View {
     // Body
     var body: some View {
         VStack(alignment: .center, spacing: 10) {
-            // Centered Album Artwork at top
+            // Centered Album Artwork at top with tap-to-select functionality
             VStack(spacing: 6) {
-                AlbumArtworkView(
-                    artworkKey: candidate.track.artworkKey,
-                    title: candidate.track.album,
-                    subtitle: candidate.track.artist,
-                    cornerRadius: 8
-                )
-                .frame(width: 150, height: 150)
-                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                Button(action: {
+                    HapticFeedback.selectionChanged()
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+                        onSelect()
+                    }
+                }) {
+                    ZStack(alignment: .topTrailing) {
+                        AlbumArtworkView(
+                            artworkKey: candidate.track.artworkKey,
+                            title: candidate.track.album,
+                            subtitle: candidate.track.artist,
+                            cornerRadius: 8
+                        )
+                        .frame(width: 150, height: 150)
+                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .stroke(isPrimary ? Color.blue : Color.secondary.opacity(0.25), lineWidth: isPrimary ? 2.5 : 1)
+                        )
+                        .shadow(color: isPrimary ? Color.blue.opacity(0.35) : Color.clear, radius: 6, x: 0, y: 2)
+
+                        if isPrimary {
+                            Image(systemName: "checkmark.circle.fill")
+                                .font(.system(size: 20))
+                                .foregroundStyle(Color.blue, Color.white)
+                                .padding(6)
+                                .transition(.scale.combined(with: .opacity))
+                        }
+                    }
+                }
+                .buttonStyle(.plain)
 
                 // Sub-Artwork Status Label
                 if isPrimary {
@@ -432,7 +455,7 @@ private struct CandidateComparisonCard: View {
                         .font(.system(size: 9, weight: .bold, design: .monospaced))
                         .foregroundStyle(Color.blue)
                 } else {
-                    Text("REDUNDANT DUPLICATE")
+                    Text("TAP ARTWORK TO KEEP")
                         .font(.system(size: 9, weight: .bold, design: .monospaced))
                         .foregroundStyle(Color.secondary)
                 }

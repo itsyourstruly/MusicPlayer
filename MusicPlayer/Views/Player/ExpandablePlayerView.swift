@@ -24,6 +24,7 @@ public struct ExpandablePlayerView: View {
 
     @State private var showingQueue: Bool = false
     @State private var showingFileInfo: Bool = false
+    @State private var showingPlaybackSheet: Bool = false
     @State private var showingPlaylistPicker: Bool = false
     @State private var selectedArtistForNavigation: Artist? = nil
     @State private var selectedAlbumForNavigation: Album? = nil
@@ -113,6 +114,9 @@ public struct ExpandablePlayerView: View {
                     onOpenInfo: {
                         showingFileInfo = true
                     },
+                    onOpenPlayback: {
+                        showingPlaybackSheet = true
+                    },
                     onOpenPlaylistPicker: {
                         showingPlaylistPicker = true
                     },
@@ -142,29 +146,30 @@ public struct ExpandablePlayerView: View {
                     },
                     onDragEnded: { translation, predictedEnd in
                         isDragging = false
-                        // H
                         let h = translation.height
-                        // W
                         let w = translation.width
-                        // Predicted h
                         let predictedH = predictedEnd.height
 
-                        if dragStartProgress <= 0.3 {
-                            // Started from Miniplayer
-                            if abs(w) > abs(h) && w < -35 {
-                                // Horizontal swipe left -> Next track
+                        // Horizontal gesture priority for Next/Previous tracks
+                        if abs(w) > 45 && abs(w) > abs(h) * 1.5 {
+                            if w < -45 {
                                 skipNext()
-                                snapTo(expanded: false)
-                            } else if abs(w) > abs(h) && w > 35 {
-                                // Horizontal swipe right -> Previous track
+                            } else if w > 45 {
                                 skipPrevious()
-                                snapTo(expanded: false)
-                            } else if h < -40 || predictedH < -80 || expansionProgress > 0.35 {
+                            }
+                            snapTo(expanded: dragStartProgress > 0.5)
+                            return
+                        }
+
+                        // Vertical gesture handling with momentum flick support
+                        if dragStartProgress < 0.5 {
+                            // Started from Miniplayer
+                            if h < -35 || predictedH < -70 || expansionProgress > 0.35 {
                                 // Upward drag/flick threshold met -> Expand to Fullscreen
                                 expandPlayer()
                             } else {
-                                // Drag not far enough -> Spring back to Miniplayer
-                                snapTo(expanded: false)
+                                // Snap back to Miniplayer
+                                collapsePlayer()
                             }
                         } else {
                             // Started from Fullscreen or mid-transition
@@ -187,11 +192,15 @@ public struct ExpandablePlayerView: View {
             .sheet(isPresented: $showingQueue) {
                 PlayerQueueView(playerService: playerService)
             }
-            // Modal presentation sheet
             .sheet(isPresented: $showingFileInfo) {
                 TrackInfoSheetView(track: track, libraryStore: libraryStore)
+                    .tint(libraryStore.settings.appTheme.accentColor)
+                    .environment(\.appTheme, libraryStore.settings.appTheme)
             }
-            // Modal presentation sheet
+            .sheet(isPresented: $showingPlaybackSheet) {
+                PlaybackControlsSheetView(playerService: playerService)
+                    .environment(\.appTheme, libraryStore.settings.appTheme)
+            }
             .sheet(isPresented: $showingPlaylistPicker) {
                 playlistPickerSheet(for: track)
             }
@@ -261,18 +270,6 @@ public struct ExpandablePlayerView: View {
                     self.palette = newPalette
                 }
             }
-            // Modal presentation sheet
-            .sheet(isPresented: $showingQueue) {
-                PlayerQueueView(playerService: playerService)
-            }
-            // Modal presentation sheet
-            .sheet(isPresented: $showingFileInfo) {
-                TrackInfoSheetView(track: track, libraryStore: libraryStore)
-            }
-            // Modal presentation sheet
-            .sheet(isPresented: $showingPlaylistPicker) {
-                playlistPickerSheet(for: track)
-            }
         }
     }
 
@@ -309,9 +306,7 @@ public struct ExpandablePlayerView: View {
         // Ensure preconditions are met before proceeding
         guard playerService.hasNextTrack else { return }
         HapticFeedback.selectionChanged()
-        withAnimation(.spring(response: 0.26, dampingFraction: 0.78)) {
-            playerService.next()
-        }
+        playerService.next()
     }
 
     // Skip previous
@@ -319,9 +314,7 @@ public struct ExpandablePlayerView: View {
         // Ensure preconditions are met before proceeding
         guard playerService.hasPreviousTrack else { return }
         HapticFeedback.selectionChanged()
-        withAnimation(.spring(response: 0.26, dampingFraction: 0.78)) {
-            playerService.previous()
-        }
+        playerService.previous()
     }
 
     // Playlist picker sheet
@@ -412,6 +405,7 @@ private struct MorphingPlayerCard: View, Animatable {
     // On open info
     let onOpenInfo: () -> Void
     // On open playlist picker
+    let onOpenPlayback: () -> Void
     let onOpenPlaylistPicker: () -> Void
     // On select artist
     let onSelectArtist: (Artist) -> Void
@@ -426,6 +420,22 @@ private struct MorphingPlayerCard: View, Animatable {
     var animatableData: CGFloat {
         get { progress }
         set { progress = newValue }
+    }
+
+    @State private var isArtworkFlipped: Bool = false
+    private var isLyricsViewPreferred: Bool {
+        get { libraryStore.settings.isLyricsViewPreferred }
+        nonmutating set {
+            libraryStore.settings.isLyricsViewPreferred = newValue
+            libraryStore.saveSettings()
+        }
+    }
+    @State private var currentTrackHasLyrics: Bool = true
+    @State private var isArtworkAnimationEnabled: Bool = true
+    @State private var isLyricsExpanded: Bool = false
+
+    private var isLyricsViewActive: Bool {
+        isLyricsViewPreferred && currentTrackHasLyrics
     }
 
     @State private var currentPitch: Double = 0.0
@@ -457,6 +467,7 @@ private struct MorphingPlayerCard: View, Animatable {
         let isPlaying = playerService.playbackStatus.isPlaying
 
         // Dynamic Card Geometry
+        // Dynamic Card Geometry
         let miniHeight: CGFloat = 64
         // Card height
         let cardHeight: CGFloat = lerp(start: miniHeight, end: screenHeight, t: clampedProgress)
@@ -469,33 +480,30 @@ private struct MorphingPlayerCard: View, Animatable {
 
         // Single Shared Artwork Geometry
         let miniArtworkSize: CGFloat = 46
-        // Mini artwork corner
         let miniArtworkCorner: CGFloat = 10
-        // Mini artwork x
         let miniArtworkX: CGFloat = 12
-        // Mini artwork y
         let miniArtworkY: CGFloat = (miniHeight - miniArtworkSize) / 2 // 9pt centered
 
-        // Full artwork dimension
+        // Full artwork dimension in standard mode vs lyrics header mode
         let fullArtworkDimension: CGFloat = min(screenWidth - 44, screenHeight * 0.42, 350)
-        // Full artwork corner
         let fullArtworkCorner: CGFloat = 22
-        // Full artwork x
         let fullArtworkX: CGFloat = (screenWidth - fullArtworkDimension) / 2
-        // Full artwork y
         let fullArtworkY: CGFloat = topSafeArea + 70
 
-        // Current artwork size
-        let currentArtworkSize: CGFloat = lerp(start: miniArtworkSize, end: fullArtworkDimension, t: clampedProgress)
-        // Current artwork corner
-        let currentArtworkCorner: CGFloat = lerp(start: miniArtworkCorner, end: fullArtworkCorner, t: clampedProgress)
-        // Current artwork x
-        let currentArtworkX: CGFloat = lerp(start: miniArtworkX, end: fullArtworkX, t: clampedProgress)
-        // Current artwork y
-        let currentArtworkY: CGFloat = lerp(start: miniArtworkY, end: fullArtworkY, t: clampedProgress)
+        // Target coordinates in full screen mode (smoothly adopts top header coordinates in lyrics mode)
+        let targetFullArtworkDimension: CGFloat = isLyricsViewActive ? 38 : fullArtworkDimension
+        let targetFullArtworkCorner: CGFloat = isLyricsViewActive ? 6 : fullArtworkCorner
+        let targetFullArtworkX: CGFloat = isLyricsViewActive ? 20 : fullArtworkX
+        let targetFullArtworkY: CGFloat = isLyricsViewActive ? (topSafeArea + 19) : fullArtworkY
+
+        // Current artwork geometry
+        let currentArtworkSize: CGFloat = lerp(start: miniArtworkSize, end: targetFullArtworkDimension, t: clampedProgress)
+        let currentArtworkCorner: CGFloat = lerp(start: miniArtworkCorner, end: targetFullArtworkCorner, t: clampedProgress)
+        let currentArtworkX: CGFloat = lerp(start: miniArtworkX, end: targetFullArtworkX, t: clampedProgress)
+        let currentArtworkY: CGFloat = lerp(start: miniArtworkY, end: targetFullArtworkY, t: clampedProgress)
 
         // Play pause scale
-        let playPauseScale: CGFloat = isPlaying ? 1.0 : 0.84
+        let playPauseScale: CGFloat = (isPlaying || isLyricsViewActive) ? 1.0 : 0.84
         // Base artwork scale
         let baseArtworkScale: CGFloat = lerp(start: 1.0, end: playPauseScale, t: clampedProgress)
         // Dynamic artwork scale
@@ -524,7 +532,7 @@ private struct MorphingPlayerCard: View, Animatable {
                 // 1. Unified Dynamic Background
                 cardBackground(cornerRadius: cardCornerRadius, progress: clampedProgress)
 
-                // 2. Miniplayer Layer (Interactive & tap-to-expand)
+                // 2. Miniplayer Layer (Always active when collapsed, handles tap-to-expand)
                 miniplayerContent(miniArtworkSize: miniArtworkSize)
                     .opacity(miniOpacity)
                     .offset(x: -clampedProgress * 24)
@@ -532,16 +540,20 @@ private struct MorphingPlayerCard: View, Animatable {
                     .onTapGesture {
                         onTapMiniPlayer()
                     }
-                    .allowsHitTesting(clampedProgress < 0.15)
+                    .allowsHitTesting(clampedProgress < 0.25)
+                    .zIndex(2)
 
-                // 3. Fullscreen Layer (Controls, progress bar, title, queue)
-                fullscreenContent(fullArtworkSize: fullArtworkDimension)
-                    .opacity(fullOpacity)
-                    .offset(y: (1.0 - clampedProgress) * 28)
-                    .allowsHitTesting(clampedProgress > 0.80)
-                    .zIndex(5)
+                // 3. Fullscreen Layer (Controls, progress bar, title, queue, lyrics)
+                fullscreenContent(
+                    fullArtworkSize: fullArtworkDimension,
+                    progress: clampedProgress
+                )
+                .opacity(fullOpacity)
+                .offset(y: (1.0 - clampedProgress) * 28)
+                .allowsHitTesting(clampedProgress > 0.75)
+                .zIndex(5)
 
-                // 4. SINGLE SHARED ALBUM ARTWORK (Hero continuous transition with subtle 3D floating depth & touch press)
+                // 4. SINGLE SHARED ALBUM ARTWORK (Continuous transition in all modes: hero 3D in standard, header in lyrics mode)
                 let isAlbumColor = backgroundStyle == .albumColor
 
                 // Effective raw pitch
@@ -557,38 +569,61 @@ private struct MorphingPlayerCard: View, Animatable {
                 // Effective raw stretch y
                 let effectiveRawStretchY: CGFloat = isTouchingArtwork ? touchStretchY : currentStretchY
 
-                // Pitch degrees
-                let pitchDegrees: Double = isPlaying ? (effectiveRawPitch * Double(clampedProgress)) : 0.0
-                // Yaw degrees
-                let yawDegrees: Double = isPlaying ? (effectiveRawYaw * Double(clampedProgress)) : 0.0
-                // Roll degrees
-                let rollDegrees: Double = isPlaying ? (effectiveRawRoll * Double(clampedProgress)) : 0.0
+                // Pitch degrees (only active in standard artwork mode)
+                let pitchDegrees: Double = (isPlaying && !isLyricsViewActive) ? (effectiveRawPitch * Double(clampedProgress)) : 0.0
+                // Yaw degrees (only active in standard artwork mode)
+                let yawDegrees: Double = (isPlaying && !isLyricsViewActive) ? (effectiveRawYaw * Double(clampedProgress)) : 0.0
+                // Roll degrees (only active in standard artwork mode)
+                let rollDegrees: Double = (isPlaying && !isLyricsViewActive) ? (effectiveRawRoll * Double(clampedProgress)) : 0.0
                 // Elevation val
-                let elevationVal: CGFloat = isPlaying ? (effectiveRawElevation * clampedProgress) : 0.0
+                let elevationVal: CGFloat = (isPlaying && !isLyricsViewActive) ? (effectiveRawElevation * clampedProgress) : 0.0
                 // Stretch x val
-                let stretchXVal: CGFloat = isPlaying ? (1.0 + (effectiveRawStretchX - 1.0) * clampedProgress) : 1.0
+                let stretchXVal: CGFloat = (isPlaying && !isLyricsViewActive) ? (1.0 + (effectiveRawStretchX - 1.0) * clampedProgress) : 1.0
                 // Stretch y val
-                let stretchYVal: CGFloat = isPlaying ? (1.0 + (effectiveRawStretchY - 1.0) * clampedProgress) : 1.0
+                let stretchYVal: CGFloat = (isPlaying && !isLyricsViewActive) ? (1.0 + (effectiveRawStretchY - 1.0) * clampedProgress) : 1.0
 
                 // Shadow offset x
-                let shadowOffsetX: CGFloat = isPlaying ? CGFloat((effectiveRawYaw * -1.85 + effectiveRawRoll * 0.7) * Double(clampedProgress)) : 0
+                let shadowOffsetX: CGFloat = (isPlaying && !isLyricsViewActive) ? CGFloat((effectiveRawYaw * -1.85 + effectiveRawRoll * 0.7) * Double(clampedProgress)) : 0
                 // Base shadow offset y
                 let baseShadowOffsetY: Double = (11.5 + pitchDegrees * 1.5 + Double(elevationVal * 0.75)) * Double(clampedProgress)
                 // Shadow offset y
-                let shadowOffsetY: CGFloat = isPlaying ? CGFloat(baseShadowOffsetY) : 0
+                let shadowOffsetY: CGFloat = (isPlaying && !isLyricsViewActive) ? CGFloat(baseShadowOffsetY) : 0
                 // Dynamic shadow radius
-                let dynamicShadowRadius: CGFloat = isPlaying ? lerp(start: 0, end: max(14.0, 24.0 + elevationVal * 1.2), t: clampedProgress) : 0
+                let dynamicShadowRadius: CGFloat = (isPlaying && !isLyricsViewActive) ? lerp(start: 0, end: max(14.0, 24.0 + elevationVal * 1.2), t: clampedProgress) : 0
 
-                AlbumArtworkView(
-                    artworkKey: track.artworkKey,
-                    title: track.album,
-                    subtitle: track.artist,
-                    cornerRadius: currentArtworkCorner
-                )
-                .clipShape(RoundedRectangle(cornerRadius: currentArtworkCorner, style: .continuous))
+                // 4. SINGLE SHARED ALBUM ARTWORK (Hero continuous transition with subtle 3D floating depth & touch press & 180 flip)
+                ZStack {
+                    if !isArtworkFlipped {
+                        AlbumArtworkView(
+                            artworkKey: track.artworkKey,
+                            title: track.album,
+                            subtitle: track.artist,
+                            cornerRadius: currentArtworkCorner
+                        )
+                        .clipShape(RoundedRectangle(cornerRadius: currentArtworkCorner, style: .continuous))
+                        .contentShape(RoundedRectangle(cornerRadius: currentArtworkCorner, style: .continuous))
+                        .onTapGesture {
+                            if clampedProgress < 0.25 {
+                                onTapMiniPlayer()
+                            } else if isLyricsViewActive {
+                                HapticFeedback.lightImpact()
+                                withAnimation(.spring(response: 0.42, dampingFraction: 0.82)) {
+                                    isLyricsViewPreferred = false
+                                }
+                            } else if clampedProgress > 0.85 {
+                                HapticFeedback.selectionChanged()
+                                withAnimation(.spring(response: 0.52, dampingFraction: 0.76)) {
+                                    isArtworkFlipped = true
+                                }
+                            }
+                        }
+                    } else {
+                        artworkBackView(dimension: currentArtworkSize)
+                            .rotation3DEffect(.degrees(180), axis: (x: 0, y: 1, z: 0))
+                    }
+                }
                 .frame(width: currentArtworkSize, height: currentArtworkSize)
-                // Multi-tier 3D Floating Shadows (Active and elevated when playing, completely removed when paused)
-                // 1. Ambient Floating Glow / Deep Drop Shadow with dynamic angle & altitude dilation
+                // Multi-tier 3D Floating Shadows (Active in standard mode, subtle in lyrics mode)
                 .shadow(
                     color: isAlbumColor ?
                         Color.black.opacity(isPlaying ? (0.35 * Double(clampedProgress)) : 0.0) :
@@ -597,60 +632,55 @@ private struct MorphingPlayerCard: View, Animatable {
                     x: shadowOffsetX,
                     y: shadowOffsetY
                 )
-                // 2. Soft Deep Floating Drop Shadow
                 .shadow(
                     color: Color.black.opacity(
                         isPlaying ? ((isAlbumColor ? 0.30 : 0.24) * Double(clampedProgress)) : 0.0
                     ),
-                    radius: isPlaying ? lerp(start: 0, end: 16, t: clampedProgress) : 0,
+                    radius: (isPlaying && !isLyricsViewActive) ? lerp(start: 0, end: 16, t: clampedProgress) : 0,
                     x: shadowOffsetX * 0.7,
                     y: shadowOffsetY * 0.75
                 )
-                // 3. Subtle Contact Floor Shadow
                 .shadow(
                     color: Color.black.opacity(
                         isPlaying ? ((isAlbumColor ? 0.16 : 0.10) * Double(clampedProgress)) : 0.0
                     ),
-                    radius: isPlaying ? lerp(start: 0, end: 6, t: clampedProgress) : 0,
+                    radius: (isPlaying && !isLyricsViewActive) ? lerp(start: 0, end: 6, t: clampedProgress) : 0,
                     x: shadowOffsetX * 0.35,
                     y: shadowOffsetY * 0.35
                 )
                 // Floating vertical altitude bob
                 .offset(y: elevationVal)
                 // Subtle natural 2D roll tilt
-                .rotationEffect(.degrees(rollDegrees))
+                .rotationEffect(.degrees((isArtworkAnimationEnabled && !isLyricsViewActive) ? rollDegrees : 0))
                 // Natural 3D Pitch (X-axis)
                 .rotation3DEffect(
-                    .degrees(pitchDegrees),
-                    axis: (x: 1.0, y: 0.0, z: 0.0),
+                    .degrees(isArtworkFlipped ? 180 : ((isArtworkAnimationEnabled && !isLyricsViewActive) ? pitchDegrees : 0)),
+                    axis: (x: isArtworkFlipped ? 0 : 1.0, y: isArtworkFlipped ? 1.0 : 0.0, z: 0.0),
                     anchor: .center,
                     perspective: 0.55
                 )
                 // Natural 3D Yaw (Y-axis)
                 .rotation3DEffect(
-                    .degrees(yawDegrees),
+                    .degrees(isArtworkFlipped ? 0 : ((isArtworkAnimationEnabled && !isLyricsViewActive) ? yawDegrees : 0)),
                     axis: (x: 0.0, y: 1.0, z: 0.0),
                     anchor: .center,
                     perspective: 0.55
                 )
                 // Subtle organic stretch elasticity
                 .scaleEffect(
-                    x: stretchXVal,
-                    y: stretchYVal,
+                    x: (isArtworkAnimationEnabled && !isLyricsViewActive) ? stretchXVal : 1.0,
+                    y: (isArtworkAnimationEnabled && !isLyricsViewActive) ? stretchYVal : 1.0,
                     anchor: .center
                 )
-                // Dynamic Play/Pause Spring Scale Effect (Smooth & non-jittery transform scaling)
+                // Dynamic Play/Pause Spring Scale Effect
                 .scaleEffect(dynamicArtworkScale, anchor: .center)
-                // Smooth UI transition animation
                 .animation(.spring(response: 0.46, dampingFraction: 0.72), value: isPlaying)
-                .contentShape(RoundedRectangle(cornerRadius: currentArtworkCorner, style: .continuous))
                 // Interactive drag and touch gesture handling
                 .gesture(
                     LongPressGesture(minimumDuration: 1.0)
                         .sequenced(before: DragGesture(minimumDistance: 0, coordinateSpace: .local))
                         .onChanged { value in
-                            // Ensure preconditions are met before proceeding
-                            guard clampedProgress > 0.75 else { return }
+                            guard clampedProgress > 0.75 && !isArtworkFlipped && !isLyricsViewActive else { return }
                             switch value {
                             case .second(true, let drag):
                                 if let drag = drag {
@@ -661,8 +691,7 @@ private struct MorphingPlayerCard: View, Animatable {
                             }
                         }
                         .onEnded { value in
-                            // Ensure preconditions are met before proceeding
-                            guard clampedProgress > 0.75 else { return }
+                            guard clampedProgress > 0.75 && !isArtworkFlipped && !isLyricsViewActive else { return }
                             switch value {
                             case .second(true, _):
                                 handleArtworkTouchEnded()
@@ -673,9 +702,11 @@ private struct MorphingPlayerCard: View, Animatable {
                             }
                         }
                 )
-                .offset(x: currentArtworkX, y: currentArtworkY)
-                .zIndex(2)
-                .allowsHitTesting(clampedProgress > 0.75)
+                .position(
+                    x: currentArtworkX + currentArtworkSize / 2,
+                    y: currentArtworkY + currentArtworkSize / 2
+                )
+                .zIndex(10)
             }
             .frame(width: screenWidth - (horizontalMargin * 2), height: cardHeight, alignment: .topLeading)
             .clipShape(RoundedRectangle(cornerRadius: cardCornerRadius, style: .continuous))
@@ -750,6 +781,9 @@ private struct MorphingPlayerCard: View, Animatable {
                 }
             }
         }
+        .task(id: track.id) {
+            await checkLyricsAvailabilityForCurrentTrack()
+        }
         // React to state changes
         .onChange(of: track.id) { _, _ in
             if playerService.playbackStatus.isPlaying {
@@ -757,10 +791,21 @@ private struct MorphingPlayerCard: View, Animatable {
             }
         }
         // React to state changes
-        .onChange(of: isExpanded) { _, _ in
-            if playerService.playbackStatus.isPlaying {
+        .onChange(of: isExpanded) { _, expanded in
+            if !expanded {
+                isArtworkFlipped = false
+                isLyricsExpanded = false
+            } else if playerService.playbackStatus.isPlaying && isArtworkAnimationEnabled {
                 start3DFloatingAnimationLoop()
             }
+        }
+        .onChange(of: isLyricsViewActive) { _, active in
+            if !active {
+                isLyricsExpanded = false
+            }
+        }
+        .onChange(of: playerService.currentTrack?.id) { _, _ in
+            isLyricsExpanded = false
         }
     }
 
@@ -989,50 +1034,19 @@ private struct MorphingPlayerCard: View, Animatable {
 
     // MARK: - Card Background
 
-    // Card background
+    // Card background (Smooth In-Place Crossfade & Blend Transition)
     private func cardBackground(cornerRadius: CGFloat, progress: CGFloat) -> some View {
-        ZStack {
-            switch backgroundStyle {
-            case .albumColor:
-                // Deep dark base
-                Color(red: 0.12, green: 0.12, blue: 0.14)
+        let style = backgroundStyle
 
-                // Dynamic primary color
-                palette.primaryColor
-                    .opacity(0.85)
-
-                // Contrast dark overlay
-                Color.black
-                    .opacity(lerp(start: 0.28, end: 0.48, t: progress))
-
-            case .albumBlur:
-                // Deep dark base
-                Color(red: 0.10, green: 0.10, blue: 0.12)
-
-                // Blurred album artwork scaled to cover background
-                AlbumArtworkView(
-                    artworkKey: track.artworkKey,
-                    title: track.album,
-                    subtitle: track.artist,
-                    cornerRadius: 0
-                )
-                .scaledToFill()
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .blur(radius: 40)
-                .clipped()
-
-                // Contrast dark overlay ensuring crisp text readability
-                Color.black
-                    .opacity(lerp(start: 0.40, end: 0.52, t: progress))
-
-            case .solid:
-                // Solid theme background color
-                appTheme.solidPlayerBackground
-
-                // Subtle depth overlay
-                Color.black
-                    .opacity(lerp(start: 0.12, end: 0.30, t: progress))
-            }
+        return ZStack {
+            PlayerBackgroundView(
+                style: style,
+                appTheme: appTheme,
+                primaryColor: palette.primaryColor,
+                artworkKey: track.artworkKey,
+                cornerRadius: cornerRadius,
+                overlayOpacity: lerp(start: 0.38, end: 0.50, t: progress)
+            )
 
             // Border highlight
             RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
@@ -1090,91 +1104,184 @@ private struct MorphingPlayerCard: View, Animatable {
     // MARK: - Fullscreen Layer
 
     // Fullscreen content
-    private func fullscreenContent(fullArtworkSize: CGFloat) -> some View {
+    private func fullscreenContent(fullArtworkSize: CGFloat, progress: CGFloat) -> some View {
         VStack(spacing: 0) {
             // 1. Top Navigation Bar
             topBar()
                 .padding(.top, topSafeArea + 6)
+                .zIndex(20)
 
-            // Space reserved for hero artwork (aligned with downward repositioned 3D artwork)
-            Color.clear
-                .frame(width: fullArtworkSize, height: fullArtworkSize)
-                .padding(.top, 28)
+            if isLyricsViewActive {
+                // MARK: - Lyrics Mode Layout with Floating Glass Layer
+                ZStack(alignment: .bottom) {
+                    // Underlying Bottom Controls Deck
+                    VStack(spacing: 12) {
+                        Spacer()
 
-            Spacer(minLength: 8)
+                        PlaybackProgressBar(
+                            playerService: playerService,
+                            foregroundColor: Color.white,
+                            secondaryForegroundColor: Color.white.opacity(0.65)
+                        )
+                        .padding(.horizontal, 28)
 
-            // 2. Track Title & Artist Subtitle with clickable multi-artists
-            VStack(spacing: 4) {
-                Text(track.title)
-                    .font(.system(size: 22, weight: .bold))
-                    .foregroundStyle(Color.white)
-                    .multilineTextAlignment(.center)
-                    .lineLimit(2)
+                        PlayerControlsView(
+                            playerService: playerService,
+                            foregroundColor: Color.white,
+                            secondaryForegroundColor: Color.white.opacity(0.65)
+                        )
+                        .padding(.vertical, 4)
 
-                MultiArtistButtonsView(
-                    rawArtist: track.artist,
-                    joinedArtists: libraryStore.settings.joinedArtists,
-                    font: .system(size: 16, weight: .medium),
-                    foregroundColor: Color.white.opacity(0.85),
-                    separatorColor: Color.white.opacity(0.60),
-                    lineLimit: 1,
-                    onSelectArtist: { artistName in
-                        if let artistObj = libraryStore.findArtist(name: artistName) {
-                            onSelectArtist(artistObj)
+                        // Bottom Action Bar (QUEUE on left, Audio Route on right)
+                        HStack(spacing: 24) {
+                            Button(action: onOpenQueue) {
+                                HStack(spacing: 6) {
+                                    Text("QUEUE")
+                                        .font(.system(size: 13, weight: .bold, design: .monospaced))
+                                    Text("↑")
+                                        .font(.system(size: 13, weight: .bold, design: .monospaced))
+                                }
+                                .foregroundStyle(Color.white)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 8)
+                            }
+                            .buttonStyle(.plain)
+
+                            Spacer()
+
+                            AirPlayButtonView(
+                                routeName: playerService.currentAudioRouteName,
+                                foregroundColor: Color.white
+                            )
                         }
+                        .padding(.horizontal, 28)
+                        .padding(.bottom, max(bottomSafeArea, 16) + 12)
                     }
-                )
-            }
-            .padding(.horizontal, 28)
+                    .opacity(max(0.0, min(1.0, Double((progress - 0.35) / 0.60))))
+                    .zIndex(1)
 
-            Spacer(minLength: 12)
-
-            // 3. Interactive Seek Scrubber
-            PlaybackProgressBar(
-                playerService: playerService,
-                foregroundColor: Color.white,
-                secondaryForegroundColor: Color.white.opacity(0.65)
-            )
-            .padding(.horizontal, 28)
-
-            Spacer(minLength: 12)
-
-            // 4. Pure Text Controls Deck
-            PlayerControlsView(
-                playerService: playerService,
-                foregroundColor: Color.white,
-                secondaryForegroundColor: Color.white.opacity(0.65)
-            )
-            .padding(.vertical, 4)
-
-            Spacer(minLength: 12)
-
-            // 5. Bottom Action Bar (QUEUE on left, Audio Route on right)
-            HStack(spacing: 24) {
-                Button(action: onOpenQueue) {
-                    HStack(spacing: 6) {
-                        Text("QUEUE")
-                            .font(.system(size: 13, weight: .bold, design: .monospaced))
-                        Text("↑")
-                            .font(.system(size: 13, weight: .bold, design: .monospaced))
-                    }
-                    .foregroundStyle(Color.white)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 8)
+                    // Central Lyrics View (Floating Glass on top when expanded)
+                    LyricsPlayerView(
+                        rawLyrics: track.lyrics,
+                        trackURL: track.url,
+                        currentTime: playerService.currentTime,
+                        duration: track.duration,
+                        foregroundColor: Color.white,
+                        secondaryForegroundColor: Color.white.opacity(0.65),
+                        onSeek: { targetTime in
+                            playerService.seek(to: targetTime)
+                        },
+                        onLyricsAvailabilityChanged: { hasLyrics in
+                            withAnimation(.spring(response: 0.42, dampingFraction: 0.82)) {
+                                currentTrackHasLyrics = hasLyrics
+                            }
+                        },
+                        onExpansionChanged: { expanded in
+                            withAnimation(.spring(response: 0.40, dampingFraction: 0.86)) {
+                                isLyricsExpanded = expanded
+                            }
+                        }
+                    )
+                    .padding(.horizontal, 16)
+                    .padding(.top, 4)
+                    .padding(.bottom, 12)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .opacity(max(0.0, min(1.0, Double((progress - 0.20) / 0.70))))
+                    .zIndex(10)
                 }
-                .buttonStyle(.plain)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .transition(.opacity)
+            } else {
+                // MARK: - Standard FullScreen Player Layout
+                // Space reserved for hero artwork
+                Color.clear
+                    .frame(width: fullArtworkSize, height: fullArtworkSize)
+                    .padding(.top, 28)
 
-                Spacer()
+                Spacer(minLength: 8)
 
-                AirPlayButtonView(
-                    routeName: playerService.currentAudioRouteName,
-                    foregroundColor: Color.white
+                // 2. Track Title & Artist Subtitle with clickable multi-artists
+                VStack(spacing: 4) {
+                    Text(track.title)
+                        .font(.system(size: 22, weight: .bold))
+                        .foregroundStyle(Color.white)
+                        .multilineTextAlignment(.center)
+                        .lineLimit(2)
+
+                    MultiArtistButtonsView(
+                        rawArtist: track.artist,
+                        joinedArtists: libraryStore.settings.joinedArtists,
+                        font: .system(size: 16, weight: .medium),
+                        foregroundColor: Color.white.opacity(0.85),
+                        separatorColor: Color.white.opacity(0.60),
+                        lineLimit: 1,
+                        onSelectArtist: { artistName in
+                            if let artistObj = libraryStore.findArtist(name: artistName) {
+                                onSelectArtist(artistObj)
+                            }
+                        }
+                    )
+                }
+                .padding(.horizontal, 28)
+
+                Spacer(minLength: 12)
+
+                // 3. Interactive Seek Scrubber
+                PlaybackProgressBar(
+                    playerService: playerService,
+                    foregroundColor: Color.white,
+                    secondaryForegroundColor: Color.white.opacity(0.65)
                 )
+                .padding(.horizontal, 28)
+
+                Spacer(minLength: 12)
+
+                // 4. Pure Text Controls Deck
+                PlayerControlsView(
+                    playerService: playerService,
+                    foregroundColor: Color.white,
+                    secondaryForegroundColor: Color.white.opacity(0.65)
+                )
+                .padding(.vertical, 4)
+
+                Spacer(minLength: 12)
+
+                // Bottom Action Bar (QUEUE on left, Audio Route on right)
+                HStack(spacing: 24) {
+                    Button(action: onOpenQueue) {
+                        HStack(spacing: 6) {
+                            Text("QUEUE")
+                                .font(.system(size: 13, weight: .bold, design: .monospaced))
+                            Text("↑")
+                                .font(.system(size: 13, weight: .bold, design: .monospaced))
+                        }
+                        .foregroundStyle(Color.white)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 8)
+                    }
+                    .buttonStyle(.plain)
+
+                    Spacer()
+
+                    AirPlayButtonView(
+                        routeName: playerService.currentAudioRouteName,
+                        foregroundColor: Color.white
+                    )
+                }
+                .padding(.horizontal, 28)
+                .padding(.bottom, max(bottomSafeArea, 16) + 12)
             }
-            .padding(.horizontal, 28)
-            .padding(.bottom, max(bottomSafeArea, 16) + 12)
         }
         .frame(width: screenWidth, height: screenHeight, alignment: .top)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            if isArtworkFlipped {
+                HapticFeedback.selectionChanged()
+                withAnimation(.spring(response: 0.52, dampingFraction: 0.76)) {
+                    isArtworkFlipped = false
+                }
+            }
+        }
     }
 
     // Top bar
@@ -1190,51 +1297,238 @@ private struct MorphingPlayerCard: View, Animatable {
                 }
 
             ZStack {
-                // Exactly Centered Title Header with clickable album name
-                VStack(spacing: 2) {
-                    Text("NOW PLAYING")
-                        .font(.system(size: 10, weight: .bold, design: .monospaced))
-                        .foregroundStyle(Color.white.opacity(0.65))
+                if isLyricsViewActive {
+                    // Lyrics Mode Header: Space reserved for single shared artwork on left, title & artist next to it, trailing controls on right
+                    HStack(spacing: 12) {
+                        // Invisible placeholder reserving space for the single shared artwork
+                        Color.clear
+                            .frame(width: 38, height: 38)
 
-                    Button(action: {
-                        HapticFeedback.lightImpact()
-                        if let albumObj = libraryStore.findAlbum(title: track.album, artist: track.artist) {
-                            onSelectAlbum(albumObj)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(track.title)
+                                .font(.system(size: 14, weight: .bold))
+                                .foregroundStyle(Color.white)
+                                .lineLimit(1)
+
+                            Text(track.artist)
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundStyle(Color.white.opacity(0.75))
+                                .lineLimit(1)
                         }
-                    }) {
-                        Text(track.album)
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(Color.white)
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.70)
-                            .truncationMode(.tail)
-                    }
-                    .buttonStyle(.plain)
-                }
-                .padding(.horizontal, 64)
-                .frame(maxWidth: .infinity, alignment: .center)
 
-                // Trailing Clean INFO Menu Button
+                        Spacer()
+                    }
+                    .padding(.trailing, 60)
+                    .transition(.opacity)
+                } else {
+                    // Standard Centered Title Header with clickable album name
+                    VStack(spacing: 2) {
+                        Text("NOW PLAYING")
+                            .font(.system(size: 10, weight: .bold, design: .monospaced))
+                            .foregroundStyle(Color.white.opacity(0.65))
+
+                        Button(action: {
+                            HapticFeedback.lightImpact()
+                            if let albumObj = libraryStore.findAlbum(title: track.album, artist: track.artist) {
+                                onSelectAlbum(albumObj)
+                            }
+                        }) {
+                            Text(track.album)
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(Color.white)
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.70)
+                                .truncationMode(.tail)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .padding(.horizontal, 64)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .transition(.opacity)
+                }
+
+                // Trailing Controls: Previous / Play-Pause / Next when lyrics are active AND expanded, otherwise INFO Menu Button
                 HStack {
                     Spacer()
 
-                    Menu {
-                        Button(action: onOpenPlaylistPicker) {
-                            Text("ADD TO PLAYLIST")
+                    if isLyricsViewActive && isLyricsExpanded {
+                        HStack(spacing: 16) {
+                            Button(action: {
+                                HapticFeedback.mediumImpact()
+                                playerService.previous()
+                            }) {
+                                Image(systemName: "chevron.left.chevron.left.dotted")
+                                    .font(.system(size: 16, weight: .semibold))
+                                    .foregroundStyle(Color.white)
+                            }
+                            .buttonStyle(.plain)
+
+                            Button(action: {
+                                HapticFeedback.mediumImpact()
+                                playerService.togglePlayPause()
+                            }) {
+                                Image(systemName: playerService.playbackStatus.isPlaying ? "pause.fill" : "play.fill")
+                                    .font(.system(size: 17, weight: .bold))
+                                    .foregroundStyle(Color.white)
+                            }
+                            .buttonStyle(.plain)
+
+                            Button(action: {
+                                HapticFeedback.mediumImpact()
+                                playerService.next()
+                            }) {
+                                Image(systemName: "chevron.right.dotted.chevron.right")
+                                    .font(.system(size: 16, weight: .semibold))
+                                    .foregroundStyle(Color.white)
+                            }
+                            .buttonStyle(.plain)
                         }
-                        Button(action: onOpenInfo) {
-                            Text("FILE INFO")
+                        .transition(.opacity.combined(with: .scale(scale: 0.92)))
+                    } else {
+                        Menu {
+                            Button(action: onOpenPlayback) {
+                                Text("PLAYBACK")
+                            }
+                            Button(action: onOpenPlaylistPicker) {
+                                Text("ADD TO PLAYLIST")
+                            }
+                            Button(action: onOpenInfo) {
+                                Text("FILE INFO")
+                            }
+                        } label: {
+                            Text("INFO")
+                                .font(.system(size: 13, weight: .bold, design: .monospaced))
+                                .foregroundStyle(Color.white)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 6)
                         }
-                    } label: {
-                        Text("INFO")
-                            .font(.system(size: 13, weight: .bold, design: .monospaced))
-                            .foregroundStyle(Color.white)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 6)
+                        .transition(.opacity.combined(with: .scale(scale: 0.92)))
                     }
                 }
             }
             .padding(.horizontal, 20)
+        }
+    }
+
+    // MARK: - Artwork Back View
+
+    private func artworkBackView(dimension: CGFloat) -> some View {
+        VStack(spacing: 26) {
+            Spacer()
+
+            // 1. LYRICS Button (Large text, no background, blue when enabled)
+            Button(action: {
+                HapticFeedback.lightImpact()
+                withAnimation(.spring(response: 0.42, dampingFraction: 0.82)) {
+                    isLyricsViewPreferred.toggle()
+                    if isLyricsViewPreferred {
+                        currentTrackHasLyrics = true
+                        isArtworkFlipped = false
+                    }
+                }
+            }) {
+                Text("LYRICS")
+                    .font(.system(size: 20, weight: .bold, design: .monospaced))
+                    .foregroundStyle(isLyricsViewPreferred ? Color.blue : Color.white.opacity(0.40))
+            }
+            .buttonStyle(.plain)
+
+            // 2. ANIMATE ARTWORK Toggle Button (Large text, no background)
+            Button(action: {
+                HapticFeedback.lightImpact()
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    isArtworkAnimationEnabled.toggle()
+                    if !isArtworkAnimationEnabled {
+                        swayAnimationTask?.cancel()
+                        currentPitch = 0.0
+                        currentYaw = 0.0
+                        currentRoll = 0.0
+                        currentElevation = 0.0
+                        currentStretchX = 1.0
+                        currentStretchY = 1.0
+                    } else if playerService.playbackStatus.isPlaying {
+                        start3DFloatingAnimationLoop()
+                    }
+                }
+            }) {
+                Text("ANIMATE ARTWORK")
+                    .font(.system(size: 16, weight: .bold, design: .monospaced))
+                    .foregroundStyle(isArtworkAnimationEnabled ? Color.blue : Color.white.opacity(0.40))
+            }
+            .buttonStyle(.plain)
+
+            // 3. BACKGROUND Picker (Large text, gray when unselected, white when selected)
+            VStack(spacing: 12) {
+                Text("BACKGROUND")
+                    .font(.system(size: 13, weight: .bold, design: .monospaced))
+                    .foregroundStyle(Color.white.opacity(0.40))
+
+                HStack(spacing: 14) {
+                    ForEach(PlayerBackgroundStyle.allCases, id: \.self) { style in
+                        Button(action: {
+                            HapticFeedback.selectionChanged()
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                libraryStore.settings.playerBackgroundStyle = style
+                                libraryStore.saveSettings()
+                            }
+                        }) {
+                            Text(style.displayName.uppercased())
+                                .font(.system(size: 13, weight: .bold, design: .monospaced))
+                                .foregroundStyle(
+                                    libraryStore.settings.playerBackgroundStyle == style ?
+                                        Color.white :
+                                        Color.white.opacity(0.35)
+                                )
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+
+            Spacer()
+
+            // Flip back prompt
+            Text("TAP ANYWHERE TO FLIP BACK")
+                .font(.system(size: 11, weight: .bold, design: .monospaced))
+                .foregroundStyle(Color.white.opacity(0.30))
+                .padding(.bottom, 12)
+        }
+        .frame(width: dimension, height: dimension)
+        .background(
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .fill(Color(red: 0.12, green: 0.12, blue: 0.14).opacity(0.95))
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .stroke(Color.white.opacity(0.15), lineWidth: 1)
+        )
+        .contentShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .onTapGesture {
+            HapticFeedback.selectionChanged()
+            withAnimation(.spring(response: 0.52, dampingFraction: 0.76)) {
+                isArtworkFlipped = false
+            }
+        }
+    }
+
+    private func checkLyricsAvailabilityForCurrentTrack() async {
+        if let raw = track.lyrics, !raw.isEmpty {
+            let parsed = LyricsParser.parse(raw)
+            let hasLyrics = !parsed.isEmpty
+            withAnimation(.spring(response: 0.42, dampingFraction: 0.82)) {
+                currentTrackHasLyrics = hasLyrics
+            }
+            return
+        }
+
+        let extracted = await AudioScannerService.extractLyrics(from: track.url)
+        if !Task.isCancelled {
+            let parsed = LyricsParser.parse(extracted)
+            let hasLyrics = !parsed.isEmpty
+            withAnimation(.spring(response: 0.42, dampingFraction: 0.82)) {
+                currentTrackHasLyrics = hasLyrics
+            }
         }
     }
 }

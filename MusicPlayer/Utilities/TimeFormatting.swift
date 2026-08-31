@@ -36,6 +36,16 @@ public enum TimeFormatting {
     }
 
     /// Convenience alias for format(seconds:).
+    public static func formatDuration(seconds: TimeInterval) -> String {
+        format(seconds: seconds)
+    }
+
+    /// Convenience alias for format(seconds:).
+    public static func formatDuration(_ duration: TimeInterval) -> String {
+        format(seconds: duration)
+    }
+
+    /// Convenience alias for format(seconds:).
     public static func formatTime(_ seconds: TimeInterval) -> String {
         format(seconds: seconds)
     }

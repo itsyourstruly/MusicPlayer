@@ -38,10 +38,10 @@ public struct UnmatchedTracksListView: View {
 
                             UnmatchedHeaderCardView(
                                 count: libraryStore.unmatchedTracks.count,
-                                isScanning: libraryStore.isBackgroundCheckingMetadata,
-                                onRecheckAll: {
+                                onRescanAll: {
                                     HapticFeedback.notificationSuccess()
                                     libraryStore.recheckAllUnmatchedTracks()
+                                    dismiss()
                                 }
                             )
 
@@ -134,19 +134,21 @@ public struct UnmatchedTracksListView: View {
         )
     }
 
-    // Recheck track
+    // Recheck track safely in background
     private func recheckTrack(_ track: Track) {
         checkingTrackIDs.insert(track.id)
         trackStatusMessages[track.id] = "Checking online database..."
 
         Task {
             let matched = await libraryStore.recheckUnmatchedTrack(track)
-            checkingTrackIDs.remove(track.id)
-            if matched {
-                trackStatusMessages[track.id] = "Match found! Added to enrichment queue."
-                HapticFeedback.notificationSuccess()
-            } else {
-                trackStatusMessages[track.id] = "No exact match found."
+            await MainActor.run {
+                checkingTrackIDs.remove(track.id)
+                if matched {
+                    trackStatusMessages[track.id] = "Match found! Added to enrichment queue."
+                    HapticFeedback.notificationSuccess()
+                } else {
+                    trackStatusMessages[track.id] = "No exact match found."
+                }
             }
         }
     }
@@ -167,16 +169,13 @@ public struct UnmatchedTracksListView: View {
     }
 }
 
-/// Summary header card for Unmatched Tracks sheet.
+/// Summary header card for Unmatched Tracks sheet with RESCAN ALL button.
 private struct UnmatchedHeaderCardView: View {
     let count: Int
-    let isScanning: Bool
-    let onRecheckAll: () -> Void
-
-    @Environment(\.appTheme) private var appTheme
+    let onRescanAll: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 3) {
                     Text("NO EXACT ONLINE MATCH")
@@ -190,25 +189,17 @@ private struct UnmatchedHeaderCardView: View {
 
                 Spacer()
 
-                Text("STRICT FILTER")
-                    .font(.system(size: 9, weight: .bold, design: .monospaced))
-                    .foregroundStyle(Color.blue)
+                Button("RESCAN ALL") {
+                    onRescanAll()
+                }
+                .font(.system(size: 12, weight: .bold, design: .monospaced))
+                .foregroundStyle(Color.blue)
+                .buttonStyle(.plain)
             }
 
-            Text("THESE TRACKS HAD NO EXACT MATCH IN THE APPLE MUSIC CATALOG DURING BACKGROUND ANALYSIS AND WERE IGNORED TO PREVENT INCORRECT TAG ASSIGNMENTS.")
+            Text("THESE TRACKS HAD NO EXACT MATCH IN ONLINE CATALOGS DURING BACKGROUND ANALYSIS. YOU CAN RUN CUSTOM SEARCH OR RESCAN.")
                 .font(.system(size: 11, design: .monospaced))
                 .foregroundStyle(.secondary)
-
-            Divider()
-                .overlay(appTheme.separatorColor.opacity(0.5))
-
-            Button(action: onRecheckAll) {
-                Text(isScanning ? "CHECKING DATABASE..." : "RE-CHECK ALL (\(count) TRACKS)")
-                    .font(.system(size: 13, weight: .bold, design: .monospaced))
-                    .foregroundStyle(isScanning ? Color.secondary : Color.blue)
-            }
-            .buttonStyle(.plain)
-            .disabled(isScanning)
         }
         .padding(.vertical, 8)
     }
@@ -225,7 +216,7 @@ private struct UnmatchedTrackCardView: View {
     @Environment(\.appTheme) private var appTheme
 
     var body: some View {
-        VStack(alignment: .center, spacing: 12) {
+        VStack(alignment: .center, spacing: 14) {
             // Centered Album Artwork
             VStack(spacing: 6) {
                 AlbumArtworkView(
@@ -267,17 +258,9 @@ private struct UnmatchedTrackCardView: View {
                     .padding(.vertical, 2)
             }
 
-            // Centered Action Buttons
+            // Centered Action Buttons matching Look Good sheet
             HStack(spacing: 24) {
                 Spacer()
-
-                Button(action: onRecheck) {
-                    Text(isChecking ? "CHECKING..." : "RE-CHECK")
-                        .font(.system(size: 12, weight: .bold, design: .monospaced))
-                        .foregroundStyle(isChecking ? Color.secondary : Color.blue)
-                }
-                .buttonStyle(.plain)
-                .disabled(isChecking)
 
                 Button(action: onManualSearch) {
                     Text("CUSTOM SEARCH")
@@ -286,9 +269,16 @@ private struct UnmatchedTrackCardView: View {
                 }
                 .buttonStyle(.plain)
 
+                Button(action: onRecheck) {
+                    Text(isChecking ? "RESCANNING..." : "RESCAN")
+                        .font(.system(size: 12, weight: .bold, design: .monospaced))
+                        .foregroundStyle(isChecking ? Color.secondary : Color.blue)
+                }
+                .buttonStyle(.plain)
+                .disabled(isChecking)
+
                 Spacer()
             }
-            .padding(.top, 4)
         }
         .padding(.vertical, 8)
     }

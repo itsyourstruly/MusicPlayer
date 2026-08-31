@@ -94,6 +94,8 @@ public struct OnlineAlbumItem: Identifiable, Sendable, Hashable {
     public let artworkURL: URL?
     /// Editorial description returned by the online source (may be nil for lesser-known releases).
     public var description: String?
+    /// Provider source API (e.g. "Apple Music", "Deezer", "MusicBrainz")
+    public let sourceAPI: String
     /// Populated on demand when the album detail view is loaded.
     public var tracklist: [OnlineTrackItem]
 
@@ -112,6 +114,7 @@ public struct OnlineAlbumItem: Identifiable, Sendable, Hashable {
         discCount: Int? = nil,
         artworkURL: URL? = nil,
         description: String? = nil,
+        sourceAPI: String = "Apple Music",
         tracklist: [OnlineTrackItem] = []
     ) {
         self.id = id
@@ -127,6 +130,7 @@ public struct OnlineAlbumItem: Identifiable, Sendable, Hashable {
         self.discCount = discCount
         self.artworkURL = artworkURL
         self.description = description
+        self.sourceAPI = sourceAPI
         self.tracklist = tracklist
     }
 

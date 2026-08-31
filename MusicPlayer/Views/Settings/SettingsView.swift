@@ -174,8 +174,8 @@ public enum SettingOptionCatalog {
     public static let rememberPlaybackPosition = SettingOptionDetail(
         id: "rememberPlaybackPosition",
         title: "REMEMBER PLAYBACK POSITION",
-        whatItDoes: "• REMEMBERS EXACTLY WHERE YOU STOPPED IN LONG TRACKS, PODCASTS, OR AUDIOBOOKS SO YOU CAN RESUME LATER.",
-        howToUseIt: "1. TAP TO TOGGLE ON (BLUE) OR OFF (RED)."
+        whatItDoes: "• REMEMBERS EXACTLY WHERE YOU STOPPED IN LONG TRACKS, PODCASTS, OR DJ SETS.\n• EXPANDS TO LET YOU SET THE MINIMUM TRACK DURATION (10 TO 60 MINUTES) TO REMEMBER.\n• RESUMES FROM YOUR LAST POSITION ANYTIME YOU RETURN TO A TRACK.",
+        howToUseIt: "1. TAP TO TOGGLE ON (BLUE) OR OFF (RED).\n2. DRAG THE SLIDER TO SET THE MINIMUM TRACK LENGTH (10 TO 60 MIN)."
     )
 
     public static let showAudioSpecs = SettingOptionDetail(
@@ -293,6 +293,18 @@ public struct SettingsView: View {
                     // MARK: - Top Page & Sheet Navigation Buttons (White Background, Black Text)
                     topPageButtonsGroup
 
+                    if libraryStore.isBackgroundCheckingMetadata {
+                        HStack {
+                            Spacer()
+                            Text("\(libraryStore.backgroundCheckScannedCount) of \(libraryStore.backgroundCheckTotalCount)")
+                                .font(.system(size: 12, weight: .bold, design: .monospaced))
+                                .foregroundStyle(Color.blue)
+                            Spacer()
+                        }
+                        .padding(.vertical, 2)
+                        .transition(.opacity)
+                    }
+
                     Divider()
                         .overlay(libraryStore.settings.appTheme.separatorColor.opacity(0.4))
                         .padding(.vertical, 6)
@@ -349,6 +361,7 @@ public struct SettingsView: View {
                 Button("CLEAR CACHE", role: .destructive) {
                     libraryStore.clearDownloadedMetadataCache()
                     Task {
+                        try? await Task.sleep(nanoseconds: 100_000_000)
                         await refreshCacheSize()
                     }
                 }
@@ -403,12 +416,11 @@ public struct SettingsView: View {
                     )
                 }
                 .buttonStyle(.plain)
-                .simultaneousGesture(
-                    LongPressGesture(minimumDuration: 0.45).onEnded { _ in
-                        HapticFeedback.notificationSuccess()
+                .contextMenu {
+                    Button("Option Info") {
                         activeDetail = SettingOptionCatalog.appearance
                     }
-                )
+                }
 
                 // 2. Playback Page
                 NavigationLink(destination: PlaybackSettingsView(libraryStore: libraryStore, playerService: playerService ?? AudioPlayerService())) {
@@ -420,12 +432,11 @@ public struct SettingsView: View {
                     )
                 }
                 .buttonStyle(.plain)
-                .simultaneousGesture(
-                    LongPressGesture(minimumDuration: 0.45).onEnded { _ in
-                        HapticFeedback.notificationSuccess()
+                .contextMenu {
+                    Button("Option Info") {
                         activeDetail = SettingOptionCatalog.playback
                     }
-                )
+                }
             }
 
             // Group 2: Metadata & Duplicates Review Sheets
@@ -517,17 +528,19 @@ public struct SettingsView: View {
         detail: SettingOptionDetail,
         isDisabled: Bool = false
     ) -> some View {
-        Button(action: action) {
+        Button(action: {
+            HapticFeedback.notificationSuccess()
+            action()
+        }) {
             topButtonContent(title: title, badge: badge, isMuted: isDisabled)
         }
         .buttonStyle(.plain)
         .disabled(isDisabled)
-        .simultaneousGesture(
-            LongPressGesture(minimumDuration: 0.45).onEnded { _ in
-                HapticFeedback.notificationSuccess()
+        .contextMenu {
+            Button("Option Info") {
                 activeDetail = detail
             }
-        )
+        }
     }
 
     // MARK: - Inline Controls Group
@@ -536,18 +549,13 @@ public struct SettingsView: View {
             // Folder Section Info & Actions
             folderControlsView
 
-            // Background Scanning Status Logs
+            // Live Background Scanning Status Logs
             scanningStatusLogsView
 
-            // Toggle 1: Auto-Hide Duplicates
-            TypographicToggleRow(
-                title: "AUTO-HIDE LOWER QUALITY DUPLICATES",
-                isOn: $libraryStore.settings.autoHideDuplicates,
-                onToggle: { libraryStore.saveSettings() },
-                onLongPress: { activeDetail = SettingOptionCatalog.autoHideDuplicates }
-            )
+            Divider()
+                .overlay(libraryStore.settings.appTheme.separatorColor.opacity(0.4))
 
-            // Toggle 2: Write Metadata to Disk
+            // Write Metadata to Disk
             TypographicToggleRow(
                 title: "WRITE METADATA TO FILES ON DISK",
                 isOn: Binding(
@@ -562,21 +570,20 @@ public struct SettingsView: View {
 
             // Action: Rescan All Metadata
             Button(action: {
-                libraryStore.rescanAllMetadata()
                 HapticFeedback.notificationSuccess()
+                libraryStore.rescanAllMetadata()
             }) {
-                Text("RESCAN ALL METADATA")
+                Text(libraryStore.isBackgroundCheckingMetadata ? "SCANNING METADATA..." : "RESCAN ALL METADATA")
                     .font(.system(size: 14.5, weight: .bold, design: .monospaced))
                     .foregroundStyle(libraryStore.isBackgroundCheckingMetadata ? Color.secondary : Color.blue)
             }
             .buttonStyle(.plain)
             .disabled(libraryStore.isBackgroundCheckingMetadata)
-            .simultaneousGesture(
-                LongPressGesture(minimumDuration: 0.45).onEnded { _ in
-                    HapticFeedback.notificationSuccess()
+            .contextMenu {
+                Button("Option Info") {
                     activeDetail = SettingOptionCatalog.rescanAllMetadata
                 }
-            )
+            }
 
             // Action: Reset Home Shuffle
             if !libraryStore.settings.customShuffleTarget.isAll {
@@ -592,17 +599,17 @@ public struct SettingsView: View {
                         .foregroundStyle(Color.blue)
                 }
                 .buttonStyle(.plain)
-                .simultaneousGesture(
-                    LongPressGesture(minimumDuration: 0.45).onEnded { _ in
-                        HapticFeedback.notificationSuccess()
+                .contextMenu {
+                    Button("Option Info") {
                         activeDetail = SettingOptionCatalog.resetHomeShuffle
                     }
-                )
+                }
             }
 
             // Action: Clear Metadata & Artwork Cache
             HStack {
                 Button(action: {
+                    HapticFeedback.notificationSuccess()
                     showingClearCacheAlert = true
                 }) {
                     Text("CLEAR METADATA & ARTWORK CACHE")
@@ -617,15 +624,15 @@ public struct SettingsView: View {
                     .font(.system(size: 11, design: .monospaced))
                     .foregroundStyle(.secondary)
             }
-            .simultaneousGesture(
-                LongPressGesture(minimumDuration: 0.45).onEnded { _ in
-                    HapticFeedback.notificationSuccess()
+            .contextMenu {
+                Button("Option Info") {
                     activeDetail = SettingOptionCatalog.clearArtworkCache
                 }
-            )
+            }
 
             // System Architecture Info Action
             Button(action: {
+                HapticFeedback.notificationSuccess()
                 activeDetail = SettingOptionCatalog.systemArchitecture
             }) {
                 HStack {
@@ -639,12 +646,6 @@ public struct SettingsView: View {
                 }
             }
             .buttonStyle(.plain)
-            .simultaneousGesture(
-                LongPressGesture(minimumDuration: 0.45).onEnded { _ in
-                    HapticFeedback.notificationSuccess()
-                    activeDetail = SettingOptionCatalog.systemArchitecture
-                }
-            )
         }
     }
 
@@ -666,55 +667,60 @@ public struct SettingsView: View {
                 }
 
                 HStack(spacing: 18) {
-                    Button(action: { showingFolderPicker = true }) {
+                    Button(action: {
+                        HapticFeedback.notificationSuccess()
+                        showingFolderPicker = true
+                    }) {
                         Text("CHANGE FOLDER")
                             .font(.system(size: 13, weight: .bold, design: .monospaced))
                             .foregroundStyle(Color.blue)
                     }
                     .buttonStyle(.plain)
-                    .simultaneousGesture(
-                        LongPressGesture(minimumDuration: 0.45).onEnded { _ in
-                            HapticFeedback.notificationSuccess()
+                    .contextMenu {
+                        Button("Option Info") {
                             activeDetail = SettingOptionCatalog.linkFolder
                         }
-                    )
+                    }
 
                     Button(action: {
+                        HapticFeedback.notificationSuccess()
                         Task {
                             await libraryStore.rescanCurrentDirectory()
                         }
                     }) {
-                        Text("RESCAN")
+                        Text(libraryStore.isScanning ? "SCANNING..." : "RESCAN")
                             .font(.system(size: 13, weight: .bold, design: .monospaced))
-                            .foregroundStyle(libraryStore.isScanning ? Color.secondary : Color.primary)
+                            .foregroundStyle(libraryStore.isScanning ? Color.secondary : Color.blue)
                     }
                     .buttonStyle(.plain)
                     .disabled(libraryStore.isScanning)
-                    .simultaneousGesture(
-                        LongPressGesture(minimumDuration: 0.45).onEnded { _ in
-                            HapticFeedback.notificationSuccess()
+                    .contextMenu {
+                        Button("Option Info") {
                             activeDetail = SettingOptionCatalog.rescanFolder
                         }
-                    )
+                    }
 
                     Spacer()
 
-                    Button(action: { showingUnlinkAlert = true }) {
+                    Button(action: {
+                        HapticFeedback.notificationSuccess()
+                        showingUnlinkAlert = true
+                    }) {
                         Text("UNLINK")
                             .font(.system(size: 13, weight: .bold, design: .monospaced))
                             .foregroundStyle(Color.red)
                     }
                     .buttonStyle(.plain)
-                    .simultaneousGesture(
-                        LongPressGesture(minimumDuration: 0.45).onEnded { _ in
-                            HapticFeedback.notificationSuccess()
+                    .contextMenu {
+                        Button("Option Info") {
                             activeDetail = SettingOptionCatalog.unlinkFolder
                         }
-                    )
+                    }
                 }
 
                 // SCAN ALL FOR DUPLICATES BUTTON
                 Button(action: {
+                    HapticFeedback.notificationSuccess()
                     isScanningDuplicates = true
                     Task {
                         await libraryStore.recalculateDuplicates()
@@ -729,25 +735,21 @@ public struct SettingsView: View {
                 .buttonStyle(.plain)
                 .disabled(isScanningDuplicates)
                 .padding(.top, 2)
-                .simultaneousGesture(
-                    LongPressGesture(minimumDuration: 0.45).onEnded { _ in
-                        HapticFeedback.notificationSuccess()
+                .contextMenu {
+                    Button("Option Info") {
                         activeDetail = SettingOptionCatalog.scanDuplicates
                     }
-                )
+                }
             } else {
-                Button(action: { showingFolderPicker = true }) {
+                Button(action: {
+                    HapticFeedback.notificationSuccess()
+                    showingFolderPicker = true
+                }) {
                     Text("LINK FOLDER")
                         .font(.system(size: 14.5, weight: .bold, design: .monospaced))
                         .foregroundStyle(Color.blue)
                 }
                 .buttonStyle(.plain)
-                .simultaneousGesture(
-                    LongPressGesture(minimumDuration: 0.45).onEnded { _ in
-                        HapticFeedback.notificationSuccess()
-                        activeDetail = SettingOptionCatalog.linkFolder
-                    }
-                )
             }
         }
     }

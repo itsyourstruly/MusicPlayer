@@ -31,12 +31,11 @@ public final class ArtworkColorExtractor: @unchecked Sendable {
         }
     }
 
-    // NSCache is thread-safe for read/write but not for conditional check+insert, hence the manual lock
+    // NSCache is inherently thread-safe for concurrent read/write
     private let cache = NSCache<NSString, WrappedPalette>()
-    private let lock = NSLock()
 
     // Thin wrapper so NSCache can hold a value type
-    private final class WrappedPalette {
+    private final class WrappedPalette: @unchecked Sendable {
         let palette: ColorPalette
         // Initialize with configured properties
         init(_ palette: ColorPalette) { self.palette = palette }
@@ -60,12 +59,9 @@ public final class ArtworkColorExtractor: @unchecked Sendable {
         }
 
         // Check cache before doing any async work
-        lock.lock()
         if let cached = cache.object(forKey: key as NSString) {
-            lock.unlock()
             return cached.palette
         }
-        lock.unlock()
 
         // Ensure preconditions are met before proceeding
         guard let data = await ArtworkCacheService.shared.loadArtwork(key: key) else {
@@ -93,10 +89,7 @@ public final class ArtworkColorExtractor: @unchecked Sendable {
             #endif
         }.value
 
-        lock.lock()
         cache.setObject(WrappedPalette(palette), forKey: key as NSString)
-        lock.unlock()
-
         return palette
     }
 

@@ -110,18 +110,14 @@ public struct MiniPlayerView: View {
                         // Swipe Left -> Next Track
                         else if w < -40 && abs(w) > abs(h) {
                             HapticFeedback.selectionChanged()
-                            withAnimation(.spring(response: 0.25, dampingFraction: 0.75)) {
-                                dragOffset = .zero
-                                playerService.next()
-                            }
+                            dragOffset = .zero
+                            playerService.next()
                         }
                         // Swipe Right -> Previous Track
                         else if w > 40 && abs(w) > abs(h) {
                             HapticFeedback.selectionChanged()
-                            withAnimation(.spring(response: 0.25, dampingFraction: 0.75)) {
-                                dragOffset = .zero
-                                playerService.previous()
-                            }
+                            dragOffset = .zero
+                            playerService.previous()
                         } else {
                             withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
                                 dragOffset = .zero

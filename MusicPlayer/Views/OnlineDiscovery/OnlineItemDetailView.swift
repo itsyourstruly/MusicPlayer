@@ -48,9 +48,10 @@ public final class OnlineAudioPreviewManager {
             forInterval: CMTime(seconds: 0.1, preferredTimescale: 600),
             queue: .main
         ) { [weak self] time in
-            // Ensure preconditions are met before proceeding
-            guard let self = self, let duration = self.player?.currentItem?.duration.seconds, duration > 0 else { return }
-            self.progress = min(1.0, time.seconds / duration)
+            Task { @MainActor [weak self] in
+                guard let self = self, let duration = self.player?.currentItem?.duration.seconds, duration > 0 else { return }
+                self.progress = min(1.0, time.seconds / duration)
+            }
         }
 
         NotificationCenter.default.addObserver(
@@ -58,7 +59,9 @@ public final class OnlineAudioPreviewManager {
             object: playerItem,
             queue: .main
         ) { [weak self] _ in
-            self?.stop()
+            Task { @MainActor [weak self] in
+                self?.stop()
+            }
         }
 
         player?.play()
@@ -340,9 +343,8 @@ public struct OnlineAlbumDetailView: View {
     @Environment(\.appTheme) private var appTheme
     @Environment(LibraryStore.self) private var libraryStore: LibraryStore?
 
-    @State private var showingEnrichmentSheet: Bool = false
-    @State private var albumDiffs: [MetadataDiff] = []
-    @State private var isPreparingEnrichment: Bool = false
+    @State private var selectedLocalAlbumForMetadata: Album? = nil
+    @State private var showingLocalAlbumPicker: Bool = false
     @State private var showNoLocalTracksAlert: Bool = false
 
     // Initialize with configured properties
@@ -442,35 +444,38 @@ public struct OnlineAlbumDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
-                Menu {
-                    Button(action: {
-                        prepareEnrichment()
-                    }) {
-                        Label("DOWNLOAD METADATA TO LOCAL FILES", systemImage: "arrow.down.doc.fill")
-                    }
-                } label: {
-                    if isPreparingEnrichment {
-                        ProgressView()
-                            .controlSize(.small)
-                    } else {
-                        Image(systemName: "square.and.arrow.down.fill")
-                            .font(.system(size: 16, weight: .semibold))
-                            .foregroundStyle(appTheme.accentColor)
-                    }
+                Button(action: {
+                    prepareAlbumMetadata()
+                }) {
+                    Image(systemName: "square.and.arrow.down.fill")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(appTheme.accentColor)
                 }
                 .buttonStyle(.plain)
             }
         }
-        // Modal presentation sheet
-        .sheet(isPresented: $showingEnrichmentSheet) {
+        // Side-by-Side Album Metadata Sheet
+        .sheet(item: $selectedLocalAlbumForMetadata) { localAlbum in
             if let store = libraryStore {
-                MetadataComparisonListView(libraryStore: store, customDiffs: albumDiffs)
+                AlbumMetadataSheet(
+                    album: localAlbum,
+                    libraryStore: store,
+                    preselectedOnlineAlbum: currentAlbum
+                )
+                .tint(store.settings.appTheme.accentColor)
+                .environment(\.appTheme, store.settings.appTheme)
+            }
+        }
+        // Local album manual picker sheet
+        .sheet(isPresented: $showingLocalAlbumPicker) {
+            if let store = libraryStore {
+                localAlbumPickerSheet(store: store)
             }
         }
         .alert("NO LOCAL TRACKS FOUND", isPresented: $showNoLocalTracksAlert) {
             Button("OK", role: .cancel) {}
         } message: {
-            Text("No local audio files for \"\(currentAlbum.title)\" by \"\(currentAlbum.artistName)\" were found in your library.")
+            Text("No matching local audio files for \"\(currentAlbum.title)\" by \"\(currentAlbum.artistName)\" were found in your library.")
         }
         // Async lifecycle task
         .task {
@@ -483,24 +488,74 @@ public struct OnlineAlbumDetailView: View {
         }
     }
 
-    // Prepare enrichment
-    private func prepareEnrichment() {
-        // Ensure preconditions are met before proceeding
+    // Prepare album metadata comparison
+    private func prepareAlbumMetadata() {
         guard let store = libraryStore else { return }
-        isPreparingEnrichment = true
-        Task {
-            // Diffs
-            let diffs = await store.checkMetadataForOnlineAlbum(title: currentAlbum.title, artist: currentAlbum.artistName)
-            await MainActor.run {
-                self.isPreparingEnrichment = false
-                if diffs.isEmpty {
-                    self.showNoLocalTracksAlert = true
-                } else {
-                    self.albumDiffs = diffs
-                    self.showingEnrichmentSheet = true
-                }
+        if let matched = findMatchingLocalAlbum(in: store) {
+            selectedLocalAlbumForMetadata = matched
+        } else if !store.albums.isEmpty {
+            showingLocalAlbumPicker = true
+        } else {
+            showNoLocalTracksAlert = true
+        }
+    }
+
+    private func findMatchingLocalAlbum(in store: LibraryStore) -> Album? {
+        if let match = store.findAlbum(title: currentAlbum.title, artist: currentAlbum.artistName) {
+            return match
+        }
+        let cleanTitle = currentAlbum.title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let cleanArtist = currentAlbum.artistName.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if let match = store.albums.first(where: {
+            $0.title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == cleanTitle &&
+            $0.artist.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == cleanArtist
+        }) {
+            return match
+        }
+        if let match = store.albums.first(where: {
+            $0.title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == cleanTitle
+        }) {
+            return match
+        }
+        let onlineTrackTitles = Set(currentAlbum.tracklist.map { $0.title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() })
+        if !onlineTrackTitles.isEmpty {
+            if let match = store.albums.first(where: { album in
+                album.tracks.contains(where: { onlineTrackTitles.contains($0.title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()) })
+            }) {
+                return match
+            }
+
+            // Synthesize provisional album from candidate tracks across library
+            let matchingTracks = store.tracks.filter { track in
+                let normTitle = track.title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                let normFn = track.url.deletingPathExtension().lastPathComponent.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                return onlineTrackTitles.contains(normTitle) || onlineTrackTitles.contains(normFn)
+            }
+            if !matchingTracks.isEmpty {
+                return Album(
+                    title: currentAlbum.title,
+                    artist: currentAlbum.artistName,
+                    year: currentAlbum.releaseYear,
+                    genre: currentAlbum.genre,
+                    artworkKey: matchingTracks.compactMap({ $0.artworkKey }).first,
+                    tracks: matchingTracks
+                )
             }
         }
+        return nil
+    }
+
+    private func localAlbumPickerSheet(store: LibraryStore) -> some View {
+        LocalAlbumPickerSheet(
+            store: store,
+            onSelect: { selectedAlbum in
+                showingLocalAlbumPicker = false
+                selectedLocalAlbumForMetadata = selectedAlbum
+            },
+            onCancel: {
+                showingLocalAlbumPicker = false
+            }
+        )
     }
 
     private var headerView: some View {
@@ -629,6 +684,153 @@ public struct OnlineAlbumDetailView: View {
                 .foregroundStyle(Color.primary)
                 .multilineTextAlignment(.trailing)
         }
+    }
+}
+
+/// Interactive sheet to search and select a local album to match against online metadata.
+public struct LocalAlbumPickerSheet: View {
+    @Bindable var store: LibraryStore
+    let onSelect: (Album) -> Void
+    let onCancel: () -> Void
+    @Environment(\.appTheme) private var appTheme
+    @State private var searchQuery: String = ""
+
+    public init(
+        store: LibraryStore,
+        onSelect: @escaping (Album) -> Void,
+        onCancel: @escaping () -> Void
+    ) {
+        self.store = store
+        self.onSelect = onSelect
+        self.onCancel = onCancel
+    }
+
+    private var filteredAlbums: [Album] {
+        let q = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !q.isEmpty else { return store.albums }
+        return store.albums.filter { album in
+            album.title.localizedCaseInsensitiveContains(q) ||
+            album.artist.localizedCaseInsensitiveContains(q)
+        }
+    }
+
+    public var body: some View {
+        NavigationStack {
+            VStack(spacing: 0) {
+                // Top Search Bar
+                HStack(spacing: 8) {
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(.secondary)
+
+                    TextField("SEARCH LOCAL ALBUMS OR ARTISTS", text: $searchQuery)
+                        .font(.system(size: 13, weight: .medium))
+                        .textFieldStyle(.plain)
+                        .autocorrectionDisabled()
+
+                    if !searchQuery.isEmpty {
+                        Button(action: {
+                            searchQuery = ""
+                        }) {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.system(size: 13))
+                                .foregroundStyle(.tertiary)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(Color.appSecondaryBackground)
+                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
+
+                Divider()
+                    .overlay(appTheme.separatorColor.opacity(0.35))
+
+                if filteredAlbums.isEmpty {
+                    VStack(spacing: 8) {
+                        Image(systemName: "magnifyingglass")
+                            .font(.system(size: 24))
+                            .foregroundStyle(.tertiary)
+                        Text(searchQuery.isEmpty ? "NO LOCAL ALBUMS" : "NO MATCHING ALBUMS")
+                            .font(.system(size: 11, weight: .bold, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                        if !searchQuery.isEmpty {
+                            Text("Try searching by album title or artist name.")
+                                .font(.system(size: 10))
+                                .foregroundStyle(.tertiary)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .padding(.vertical, 40)
+                } else {
+                    List(filteredAlbums) { localAlbum in
+                        Button(action: {
+                            onSelect(localAlbum)
+                        }) {
+                            HStack(spacing: 12) {
+                                AlbumArtworkView(
+                                    artworkKey: localAlbum.artworkKey,
+                                    title: localAlbum.title,
+                                    subtitle: localAlbum.artist,
+                                    cornerRadius: 6
+                                )
+                                .frame(width: 46, height: 46)
+                                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(localAlbum.title)
+                                        .font(.system(size: 13, weight: .bold))
+                                        .foregroundStyle(Color.primary)
+                                        .lineLimit(1)
+
+                                    Text(localAlbum.artist)
+                                        .font(.system(size: 11))
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(1)
+
+                                    HStack(spacing: 4) {
+                                        Text("\(localAlbum.tracks.count) TRACKS")
+                                            .font(.system(size: 9, design: .monospaced))
+                                            .foregroundStyle(.tertiary)
+
+                                        if let year = localAlbum.year, year > 0 {
+                                            Text("• \(String(year))")
+                                                .font(.system(size: 9, design: .monospaced))
+                                                .foregroundStyle(.tertiary)
+                                        }
+                                    }
+                                }
+
+                                Spacer()
+
+                                Text("SELECT")
+                                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+                                    .foregroundStyle(appTheme.accentColor)
+                            }
+                            .padding(.vertical, 4)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .listStyle(.plain)
+                }
+            }
+            .background(appTheme.backgroundColor.ignoresSafeArea())
+            .navigationTitle("SELECT LOCAL ALBUM")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("CANCEL") {
+                        onCancel()
+                    }
+                    .font(.system(size: 13, weight: .bold, design: .monospaced))
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
     }
 }
 

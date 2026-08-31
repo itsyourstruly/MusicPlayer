@@ -49,6 +49,13 @@ public enum HapticFeedback {
         UINotificationFeedbackGenerator().notificationOccurred(.warning)
         #endif
     }
+
+    /// Generates error notification feedback.
+    public static func notificationError() {
+        #if canImport(UIKit)
+        UINotificationFeedbackGenerator().notificationOccurred(.error)
+        #endif
+    }
 }
 
 // AppThemeEnvironmentKey representation
@@ -158,7 +165,7 @@ public extension View {
     }
 }
 
-/// Universal context menu for albums across the application (PIN, PLAY, SHUFFLE, PLAY NEXT, QUEUE NEXT without icons).
+/// Universal context menu for albums across the application (ALBUM METADATA, PIN, PLAY, SHUFFLE, PLAY NEXT, QUEUE NEXT without icons).
 public struct AlbumContextMenuModifier: ViewModifier {
     // Album title
     public let album: Album
@@ -166,11 +173,18 @@ public struct AlbumContextMenuModifier: ViewModifier {
     public let libraryStore: LibraryStore
     // Player service
     public let playerService: AudioPlayerService
+    @State private var showingAlbumMetadataSheet: Bool = false
 
     // Body
     public func body(content: Content) -> some View {
         content
             .contextMenu {
+                Button(action: {
+                    showingAlbumMetadataSheet = true
+                }) {
+                    Text("ALBUM METADATA")
+                }
+
                 Button(action: {
                     HapticFeedback.lightImpact()
                     withAnimation(.spring(response: 0.28, dampingFraction: 0.8)) {
@@ -213,27 +227,21 @@ public struct AlbumContextMenuModifier: ViewModifier {
                     Text("QUEUE NEXT")
                 }
             }
+            .sheet(isPresented: $showingAlbumMetadataSheet) {
+                AlbumMetadataSheet(album: album, libraryStore: libraryStore)
+                    .tint(libraryStore.settings.appTheme.accentColor)
+                    .environment(\.appTheme, libraryStore.settings.appTheme)
+            }
     }
 }
 
 // MARK: - Universal Keyboard Drag-to-Dismiss Helper
 
 public extension View {
-    /// Allows dragging down anywhere on the view or dragging the scroll content to dismiss the software keyboard.
+    /// Allows dragging down anywhere on the scroll content to interactively dismiss the software keyboard.
     func dismissKeyboardOnDrag() -> some View {
         self
             .scrollDismissesKeyboard(.interactively)
-            #if canImport(UIKit)
-            // Interactive drag and touch gesture handling
-            .simultaneousGesture(
-                DragGesture(minimumDistance: 10, coordinateSpace: .local)
-                    .onChanged { value in
-                        if value.translation.height > 20 {
-                            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
-                        }
-                    }
-            )
-            #endif
     }
 }
 

@@ -23,6 +23,8 @@ public struct PlaylistDetailView: View {
     @State private var showingDeleteAlert: Bool = false
     @State private var selectedArtistForNavigation: Artist? = nil
     @State private var selectedAlbumForNavigation: Album? = nil
+    @State private var selectedTrackForInfo: Track? = nil
+    @State private var selectedTrackForPlaylist: Track? = nil
 
     // Initialize with configured properties
     public init(
@@ -307,108 +309,24 @@ public struct PlaylistDetailView: View {
                                 )
                                 .padding(.top, 16)
                             } else {
+                                let currentTrackID = playerService.currentTrack?.id
+                                let isCurrentPlaying = playerService.playbackStatus.isPlaying
+                                let nextTrackID = playerService.nextTrack?.id
+                                let playNextSet = Set(playerService.playNextQueue.map { $0.id })
+                                let isTapToPlayNext = libraryStore.settings.tapToPlayNext
+
                                 LazyVStack(spacing: 4) {
-                                    ForEach(Array(displayedTracks.enumerated()), id: \.element.id) { index, track in
-                                        HStack(spacing: 8) {
-                                            if isEditMode {
-                                                Button(action: {
-                                                    HapticFeedback.lightImpact()
-                                                    withAnimation(.spring(response: 0.25, dampingFraction: 0.8)) {
-                                                        libraryStore.removeTrack(trackID: track.id, fromPlaylistID: playlist.id)
-                                                    }
-                                                }) {
-                                                    Image(systemName: "minus.circle.fill")
-                                                        .font(.system(size: 18))
-                                                        .foregroundStyle(Color.red)
-                                                }
-                                                .buttonStyle(.plain)
-                                                .transition(.scale.combined(with: .opacity))
-                                            }
-
-                                            TrackRowView(
-                                                track: track,
-                                                indexNumber: index + 1,
-                                                isCurrentTrack: track.id == playerService.currentTrack?.id,
-                                                isPlaying: playerService.playbackStatus.isPlaying && track.id == playerService.currentTrack?.id,
-                                                isNextTrack: playerService.nextTrack?.id == track.id,
-                                                isInPlayNext: playerService.playNextQueue.contains(where: { $0.id == track.id }),
-                                                isTapToPlayNextEnabled: libraryStore.settings.tapToPlayNext,
-                                                isSwipeDisabled: isEditMode,
-                                                onPlay: {
-                                                    // Original index
-                                                    let originalIndex = playlistTracks.firstIndex(where: { $0.id == track.id }) ?? index
-                                                    playerService.play(track: track, inQueue: playlistTracks, startIndex: originalIndex)
-                                                },
-                                                onPlayNext: {
-                                                    playerService.insertPlayNextFront(track: track)
-                                                },
-                                                onQueueNext: {
-                                                    playerService.playNext(track: track)
-                                                },
-                                                onAddToQueue: {
-                                                    playerService.appendToQueue(track: track)
-                                                },
-                                                onRemoveFromPlaylist: {
-                                                    HapticFeedback.lightImpact()
-                                                    withAnimation(.spring(response: 0.25, dampingFraction: 0.8)) {
-                                                        libraryStore.removeTrack(trackID: track.id, fromPlaylistID: playlist.id)
-                                                    }
-                                                },
-                                                onSelectArtist: { artistName in
-                                                    if let artistObj = libraryStore.findArtist(name: artistName) {
-                                                        selectedArtistForNavigation = artistObj
-                                                    }
-                                                },
-                                                onSelectAlbum: {
-                                                    if let albumObj = libraryStore.findAlbum(title: track.album, artist: track.artist) {
-                                                        selectedAlbumForNavigation = albumObj
-                                                    }
-                                                }
-                                            )
-
-                                            if isEditMode && selectedSortCriteria == .custom {
-                                                Image(systemName: "line.3.horizontal")
-                                                    .font(.system(size: 16, weight: .semibold))
-                                                    .foregroundStyle(draggingTrackID == track.id ? Color.blue : .secondary)
-                                                    .frame(width: 44, height: 44)
-                                                    .contentShape(Rectangle())
-                                                    // Interactive drag and touch gesture handling
-                                                    .gesture(
-                                                        DragGesture(coordinateSpace: .global)
-                                                            .onChanged { gesture in
-                                                                handleDragChanged(for: track, at: index, translationY: gesture.translation.height)
-                                                            }
-                                                            .onEnded { _ in
-                                                                handleDragEnded()
-                                                            }
-                                                    )
-                                                    .transition(.scale.combined(with: .opacity))
-                                            }
-                                        }
-                                        .scaleEffect(draggingTrackID == track.id ? 1.02 : 1.0)
-                                        .shadow(
-                                            color: draggingTrackID == track.id ? Color.black.opacity(0.2) : Color.clear,
-                                            radius: 6,
-                                            x: 0,
-                                            y: 3
-                                        )
-                                        .zIndex(draggingTrackID == track.id ? 10 : 1)
-                                        .onDrag {
-                                            // Ensure preconditions are met before proceeding
-                                            guard isEditMode && selectedSortCriteria == .custom else {
-                                                return NSItemProvider()
-                                            }
-                                            self.draggedTrack = track
-                                            return NSItemProvider(object: track.id.uuidString as NSString)
-                                        }
-                                        .onDrop(
-                                            of: [UTType.text],
-                                            delegate: PlaylistDropDelegate(
-                                                item: track,
-                                                playlistID: playlist.id,
-                                                draggedTrack: $draggedTrack,
-                                                libraryStore: libraryStore
-                                            )
+                                    ForEach(0..<displayedTracks.count, id: \.self) { index in
+                                        let track = displayedTracks[index]
+                                        playlistTrackRowView(
+                                            track: track,
+                                            index: index,
+                                            currentTrackID: currentTrackID,
+                                            isCurrentPlaying: isCurrentPlaying,
+                                            nextTrackID: nextTrackID,
+                                            playNextSet: playNextSet,
+                                            isTapToPlayNext: isTapToPlayNext,
+                                            playlist: playlist
                                         )
                                     }
                                 }
@@ -449,6 +367,14 @@ public struct PlaylistDetailView: View {
             // Modal presentation sheet
             .sheet(isPresented: $showingEditSheet) {
                 editPlaylistSheet(for: playlist)
+            }
+            .sheet(item: $selectedTrackForInfo) { track in
+                TrackInfoSheetView(track: track, libraryStore: libraryStore)
+                    .tint(libraryStore.settings.appTheme.accentColor)
+                    .environment(\.appTheme, libraryStore.settings.appTheme)
+            }
+            .sheet(item: $selectedTrackForPlaylist) { track in
+                playlistPickerSheet(for: [track])
             }
             .navigationDestination(item: $selectedArtistForNavigation) { artist in
                 ArtistDetailView(artist: artist, libraryStore: libraryStore, playerService: playerService)
@@ -598,6 +524,181 @@ public struct PlaylistDetailView: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+    }
+
+    // Playlist track row view helper
+    @ViewBuilder
+    private func playlistTrackRowView(
+        track: Track,
+        index: Int,
+        currentTrackID: UUID?,
+        isCurrentPlaying: Bool,
+        nextTrackID: UUID?,
+        playNextSet: Set<UUID>,
+        isTapToPlayNext: Bool,
+        playlist: Playlist
+    ) -> some View {
+        HStack(spacing: 8) {
+            if isEditMode {
+                Button(action: {
+                    HapticFeedback.lightImpact()
+                    withAnimation(.spring(response: 0.25, dampingFraction: 0.8)) {
+                        libraryStore.removeTrack(trackID: track.id, fromPlaylistID: playlist.id)
+                    }
+                }) {
+                    Image(systemName: "minus.circle.fill")
+                        .font(.system(size: 18))
+                        .foregroundStyle(Color.red)
+                }
+                .buttonStyle(.plain)
+                .transition(.scale.combined(with: .opacity))
+            }
+
+            TrackRowView(
+                track: track,
+                indexNumber: index + 1,
+                isCurrentTrack: track.id == currentTrackID,
+                isPlaying: isCurrentPlaying && track.id == currentTrackID,
+                isNextTrack: track.id == nextTrackID,
+                isInPlayNext: playNextSet.contains(track.id),
+                isTapToPlayNextEnabled: isTapToPlayNext,
+                isSwipeDisabled: isEditMode,
+                onPlay: {
+                    let originalIndex = playlistTracks.firstIndex(where: { $0.id == track.id }) ?? index
+                    playerService.play(track: track, inQueue: playlistTracks, startIndex: originalIndex)
+                },
+                onPlayNext: {
+                    playerService.insertPlayNextFront(track: track)
+                },
+                onQueueNext: {
+                    playerService.playNext(track: track)
+                },
+                onAddToQueue: {
+                    playerService.appendToQueue(track: track)
+                },
+                onAddToPlaylist: {
+                    selectedTrackForPlaylist = track
+                },
+                onRemoveFromPlaylist: {
+                    HapticFeedback.lightImpact()
+                    withAnimation(.spring(response: 0.25, dampingFraction: 0.8)) {
+                        libraryStore.removeTrack(trackID: track.id, fromPlaylistID: playlist.id)
+                    }
+                },
+                onShowInfo: {
+                    selectedTrackForInfo = track
+                },
+                onSelectArtist: { artistName in
+                    if let artistObj = libraryStore.findArtist(name: artistName) {
+                        selectedArtistForNavigation = artistObj
+                    }
+                },
+                onSelectAlbum: {
+                    if let albumObj = libraryStore.findAlbum(title: track.album, artist: track.artist) {
+                        selectedAlbumForNavigation = albumObj
+                    }
+                }
+            )
+
+            if isEditMode && selectedSortCriteria == .custom {
+                Image(systemName: "line.3.horizontal")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(draggingTrackID == track.id ? Color.blue : .secondary)
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
+                    .gesture(
+                        DragGesture(coordinateSpace: .global)
+                            .onChanged { gesture in
+                                handleDragChanged(for: track, at: index, translationY: gesture.translation.height)
+                            }
+                            .onEnded { _ in
+                                handleDragEnded()
+                            }
+                    )
+                    .transition(.scale.combined(with: .opacity))
+            }
+        }
+        .scaleEffect(draggingTrackID == track.id ? 1.02 : 1.0)
+        .shadow(
+            color: draggingTrackID == track.id ? Color.black.opacity(0.2) : Color.clear,
+            radius: 6,
+            x: 0,
+            y: 3
+        )
+        .zIndex(draggingTrackID == track.id ? 10 : 1)
+        .onDrag {
+            guard isEditMode && selectedSortCriteria == .custom else {
+                return NSItemProvider()
+            }
+            self.draggedTrack = track
+            return NSItemProvider(object: track.id.uuidString as NSString)
+        }
+        .onDrop(
+            of: [UTType.text],
+            delegate: PlaylistDropDelegate(
+                item: track,
+                playlistID: playlist.id,
+                draggedTrack: $draggedTrack,
+                libraryStore: libraryStore
+            )
+        )
+    }
+
+    // Playlist picker sheet
+    private func playlistPickerSheet(for tracks: [Track]) -> some View {
+        NavigationStack {
+            List {
+                if libraryStore.playlists.isEmpty {
+                    EmptyStateView(
+                        title: "NO PLAYLISTS FOUND",
+                        message: "Create a playlist first from the Library tab."
+                    )
+                    .padding(.top, 40)
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
+                } else {
+                    ForEach(libraryStore.playlists) { targetPlaylist in
+                        Button(action: {
+                            for track in tracks {
+                                libraryStore.addTrack(track, toPlaylistID: targetPlaylist.id)
+                            }
+                            selectedTrackForPlaylist = nil
+                        }) {
+                            HStack {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(targetPlaylist.name)
+                                        .font(.system(size: 15, weight: .bold))
+                                        .foregroundStyle(Color.primary)
+
+                                    Text(targetPlaylist.formattedTrackCount)
+                                        .font(.system(size: 12, design: .monospaced))
+                                        .foregroundStyle(.secondary)
+                                }
+
+                                Spacer()
+
+                                Text("ADD")
+                                    .font(.system(size: 12, weight: .bold, design: .monospaced))
+                                    .foregroundStyle(Color.primary)
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+            .navigationTitle("ADD TO PLAYLIST")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("DONE") {
+                        selectedTrackForPlaylist = nil
+                    }
+                    .font(.system(size: 13, weight: .bold, design: .monospaced))
+                }
+            }
+        }
+        .presentationDetents([.medium])
     }
 
     // Edit playlist sheet

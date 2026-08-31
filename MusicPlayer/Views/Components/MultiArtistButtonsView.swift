@@ -78,8 +78,8 @@ public struct MultiArtistButtonsView: View {
     public let separatorColor: Color
     // Line limit
     public let lineLimit: Int?
-    // On select artist
     public let onSelectArtist: (String) -> Void
+    private let segments: [ArtistSegment]
 
     // Initialize with configured properties
     public init(
@@ -98,35 +98,32 @@ public struct MultiArtistButtonsView: View {
         self.separatorColor = separatorColor
         self.lineLimit = lineLimit
         self.onSelectArtist = onSelectArtist
-    }
 
-    private var matchedJoinedName: String? {
-        // Clean
+        // Precompute segments once at init
         let clean = rawArtist.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        // Ensure preconditions are met before proceeding
-        guard !clean.isEmpty else { return nil }
-        for joined in joinedArtists {
-            // Joined clean
-            let joinedClean = joined.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-            if clean == joinedClean { return joined }
-            // Joined parts
-            let joinedParts = ArtistParser.parseArtists(from: joined).map { $0.lowercased() }
-            if joinedParts.count > 1 {
-                // Raw parts
-                let rawParts = ArtistParser.parseArtists(from: rawArtist).map { $0.lowercased() }
-                if Set(joinedParts).isSubset(of: Set(rawParts)) {
-                    return joined
+        var matched: String? = nil
+        if !clean.isEmpty {
+            for joined in joinedArtists {
+                let joinedClean = joined.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                if clean == joinedClean {
+                    matched = joined
+                    break
+                }
+                let joinedParts = ArtistParser.parseArtists(from: joined).map { $0.lowercased() }
+                if joinedParts.count > 1 {
+                    let rawParts = ArtistParser.parseArtists(from: rawArtist).map { $0.lowercased() }
+                    if Set(joinedParts).isSubset(of: Set(rawParts)) {
+                        matched = joined
+                        break
+                    }
                 }
             }
         }
-        return nil
-    }
-
-    private var segments: [ArtistSegment] {
-        if let joinedName = matchedJoinedName {
-            return [ArtistSegment(name: joinedName)]
+        if let joinedName = matched {
+            self.segments = [ArtistSegment(name: joinedName)]
+        } else {
+            self.segments = ArtistParser.parse(rawArtist: rawArtist)
         }
-        return ArtistParser.parse(rawArtist: rawArtist)
     }
 
     // Main view layout structure

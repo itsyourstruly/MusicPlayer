@@ -15,8 +15,8 @@ public struct ContentView: View {
     @State private var selectedTab: Int = 0
     @State private var isPlayerExpanded: Bool = false
     @State private var showingSettings: Bool = false
-    @State private var navigationPathHome = NavigationPath()
-    @State private var navigationPathLibrary = NavigationPath()
+    @State private var homeStackID = UUID()
+    @State private var libraryStackID = UUID()
 
     /// Custom tab binding so re-tapping the active tab pops its navigation stack
     /// rather than re-creating the view — mirrors the behaviour of the native Music app.
@@ -28,17 +28,14 @@ public struct ContentView: View {
                     // Re-tap on Library: haptic feedback and reset to default category
                     HapticFeedback.selectionChanged()
                     withAnimation(.spring(response: 0.25, dampingFraction: 0.8)) {
-                        if !navigationPathLibrary.isEmpty {
-                            navigationPathLibrary.removeLast(navigationPathLibrary.count)
-                        }
+                        libraryStackID = UUID()
                         libraryStore.selectedCategory = libraryStore.settings.defaultLibraryCategory
                     }
                 } else if newTab == 0 && selectedTab == 0 {
-                    // Re-tap on Home: pop back to root without touching the category state
-                    if !navigationPathHome.isEmpty {
-                        withAnimation(.spring(response: 0.25, dampingFraction: 0.8)) {
-                            navigationPathHome.removeLast(navigationPathHome.count)
-                        }
+                    // Re-tap on Home: pop back to root
+                    HapticFeedback.selectionChanged()
+                    withAnimation(.spring(response: 0.25, dampingFraction: 0.8)) {
+                        homeStackID = UUID()
                     }
                 }
                 selectedTab = newTab
@@ -73,37 +70,34 @@ public struct ContentView: View {
         .onChange(of: libraryStore.settings.crossfadeDuration) { _, duration in
             playerService.crossfadeDuration = duration
         }
+        .onChange(of: libraryStore.settings.rememberPlaybackPosition) { _, isRemember in
+            playerService.rememberPlaybackPosition = isRemember
+        }
+        .onChange(of: libraryStore.settings.rememberPlaybackPositionMinMinutes) { _, minMinutes in
+            playerService.rememberPlaybackPositionMinMinutes = minMinutes
+        }
         #else
         ZStack(alignment: .bottom) {
             // Main Tab View (100% interactive - tabs and navigation are NEVER blocked)
             TabView(selection: tabBinding) {
                 // Home Tab
-                NavigationStack(path: $navigationPathHome) {
+                NavigationStack {
                     HomeView(
                         libraryStore: libraryStore,
                         playerService: playerService,
-                        onNavigateToPlaylist: { playlist in
-                            navigationPathHome.append(playlist.id)
-                        },
                         onOpenSettings: {
                             showingSettings = true
                         }
                     )
-                    .navigationDestination(for: UUID.self) { playlistID in
-                        PlaylistDetailView(
-                            playlistID: playlistID,
-                            libraryStore: libraryStore,
-                            playerService: playerService
-                        )
-                    }
                 }
+                .id(homeStackID)
                 .tabItem {
                     Label("Home", systemImage: "house.fill")
                 }
                 .tag(0)
 
                 // Library Tab
-                NavigationStack(path: $navigationPathLibrary) {
+                NavigationStack {
                     LibraryView(
                         libraryStore: libraryStore,
                         playerService: playerService,
@@ -112,6 +106,7 @@ public struct ContentView: View {
                         }
                     )
                 }
+                .id(libraryStackID)
                 .tabItem {
                     Label("Library", systemImage: "music.note.list")
                 }
@@ -163,6 +158,12 @@ public struct ContentView: View {
         .onChange(of: libraryStore.settings.tapToPlayNext) { _, tapNext in
             playerService.tapToPlayNext = tapNext
         }
+        .onChange(of: libraryStore.settings.rememberPlaybackPosition) { _, isRemember in
+            playerService.rememberPlaybackPosition = isRemember
+        }
+        .onChange(of: libraryStore.settings.rememberPlaybackPositionMinMinutes) { _, minMinutes in
+            playerService.rememberPlaybackPositionMinMinutes = minMinutes
+        }
         #endif
     }
 
@@ -175,13 +176,20 @@ public struct ContentView: View {
         playerService.crossfadeDuration = libraryStore.settings.crossfadeDuration
         playerService.playTrackInCurrentQueue = libraryStore.settings.playTrackInCurrentQueue
         playerService.tapToPlayNext = libraryStore.settings.tapToPlayNext
+        playerService.rememberPlaybackPosition = libraryStore.settings.rememberPlaybackPosition
+        playerService.rememberPlaybackPositionMinMinutes = libraryStore.settings.rememberPlaybackPositionMinMinutes
         // Weak capture prevents a retain cycle between the service and the store
         playerService.onTrackPlay = { [weak libraryStore] trackID in
             libraryStore?.incrementPlayCount(for: trackID)
         }
+        playerService.onSavePlaybackPosition = { [weak libraryStore] trackID, position in
+            libraryStore?.setPlaybackPosition(position, for: trackID)
+        }
+        playerService.onGetPlaybackPosition = { [weak libraryStore] trackID in
+            libraryStore?.playbackPosition(for: trackID)
+        }
+        playerService.onClearPlaybackPosition = { [weak libraryStore] trackID in
+            libraryStore?.removePlaybackPosition(for: trackID)
+        }
     }
-}
-
-#Preview {
-    ContentView()
 }

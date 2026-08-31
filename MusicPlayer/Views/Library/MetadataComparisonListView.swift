@@ -25,6 +25,7 @@ public struct MetadataComparisonListView: View {
     @State private var enrichProgress: Double = 0.0
     @State private var enrichStatusText: String = ""
     @State private var searchText: String = ""
+    @State private var selectedTrackForCustomSearch: Track? = nil
 
     // Custom diffs
     private let customDiffs: [MetadataDiff]?
@@ -77,6 +78,11 @@ public struct MetadataComparisonListView: View {
                         .font(.system(size: 13, weight: .bold, design: .monospaced))
                     }
                 }
+            }
+            .sheet(item: $selectedTrackForCustomSearch) { track in
+                OnlineMetadataMatchSheet(track: track, libraryStore: libraryStore)
+                    .tint(appTheme.accentColor)
+                    .environment(\.appTheme, appTheme)
             }
         }
     }
@@ -204,6 +210,9 @@ public struct MetadataComparisonListView: View {
                             },
                             onKeepLocal: {
                                 keepLocalDiff(diff)
+                            },
+                            onCustomSearch: {
+                                selectedTrackForCustomSearch = diff.localTrack
                             }
                         )
 
@@ -440,6 +449,7 @@ public struct SwipeableMetadataTrackCard: View {
     public let preserveFeatures: Bool
     public let onApply: (Set<MetadataField>) -> Void
     public let onKeepLocal: () -> Void
+    public let onCustomSearch: (() -> Void)?
 
     @State private var selectedPage: Int = 0 // 0 = Online, 1 = Local
     @State private var lockedFields: Set<MetadataField> = []
@@ -449,12 +459,14 @@ public struct SwipeableMetadataTrackCard: View {
         diff: MetadataDiff,
         preserveFeatures: Bool,
         onApply: @escaping (Set<MetadataField>) -> Void,
-        onKeepLocal: @escaping () -> Void
+        onKeepLocal: @escaping () -> Void,
+        onCustomSearch: (() -> Void)? = nil
     ) {
         self.diff = diff
         self.preserveFeatures = preserveFeatures
         self.onApply = onApply
         self.onKeepLocal = onKeepLocal
+        self.onCustomSearch = onCustomSearch
     }
 
     public var body: some View {
@@ -498,11 +510,13 @@ public struct SwipeableMetadataTrackCard: View {
                 localPageView
                     .tag(1)
             }
+            #if os(iOS)
             .tabViewStyle(.page(indexDisplayMode: .never))
+            #endif
             .frame(height: 410)
 
-            // Dynamic Action Button
-            HStack {
+            // Dynamic Action Buttons
+            HStack(spacing: 20) {
                 Spacer()
                 if selectedPage == 0 {
                     Button(action: {
@@ -513,6 +527,15 @@ public struct SwipeableMetadataTrackCard: View {
                             .foregroundStyle(Color.blue)
                     }
                     .buttonStyle(.plain)
+
+                    if let onCustomSearch = onCustomSearch {
+                        Button(action: onCustomSearch) {
+                            Text("CUSTOM SEARCH")
+                                .font(.system(size: 13, weight: .bold, design: .monospaced))
+                                .foregroundStyle(Color.primary)
+                        }
+                        .buttonStyle(.plain)
+                    }
                 } else {
                     Button(action: {
                         onKeepLocal()
@@ -522,15 +545,26 @@ public struct SwipeableMetadataTrackCard: View {
                             .foregroundStyle(Color.orange)
                     }
                     .buttonStyle(.plain)
+
+                    if let onCustomSearch = onCustomSearch {
+                        Button(action: onCustomSearch) {
+                            Text("CUSTOM SEARCH")
+                                .font(.system(size: 13, weight: .bold, design: .monospaced))
+                                .foregroundStyle(Color.primary)
+                        }
+                        .buttonStyle(.plain)
+                    }
                 }
                 Spacer()
             }
         }
         .padding(.vertical, 8)
         .onAppear {
-            if preserveFeatures && diff.hasLocalFeatureCredit {
-                lockedFields.insert(.title)
+            if (preserveFeatures && diff.hasLocalFeatureCredit) || diff.hasMultipleLocalArtists || diff.shouldPreserveLocalArtist {
                 lockedFields.insert(.artist)
+            }
+            if (preserveFeatures && diff.hasLocalFeatureCredit) || diff.shouldPreserveLocalTitle {
+                lockedFields.insert(.title)
             }
         }
     }
@@ -538,12 +572,14 @@ public struct SwipeableMetadataTrackCard: View {
     // MARK: - Online Page View
     private var onlinePageView: some View {
         VStack(alignment: .center, spacing: 10) {
+            let isUsingLocalArtwork = lockedFields.contains(.artwork) || !diff.artworkUpgraded
+
             // Album Artwork on Top
             Button(action: {
                 toggleFieldLock(.artwork)
             }) {
                 VStack(spacing: 6) {
-                    if lockedFields.contains(.artwork) {
+                    if isUsingLocalArtwork {
                         AlbumArtworkView(
                             artworkKey: diff.localTrack.artworkKey,
                             title: diff.localTrack.album,
@@ -552,6 +588,10 @@ public struct SwipeableMetadataTrackCard: View {
                         )
                         .frame(width: 150, height: 150)
                         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .stroke(Color.orange, lineWidth: 1.5)
+                        )
                     } else {
                         AsyncImage(url: diff.onlineMetadata.artworkURL) { phase in
                             switch phase {
@@ -570,17 +610,24 @@ public struct SwipeableMetadataTrackCard: View {
                         }
                         .frame(width: 150, height: 150)
                         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .stroke(Color.green, lineWidth: 1.5)
+                        )
                     }
 
                     // Sub-Artwork Status Label
-                    if lockedFields.contains(.artwork) {
-                        Text("KEEPING LOCAL ARTWORK [KEEP LOCAL]")
+                    if isUsingLocalArtwork {
+                        Text(lockedFields.contains(.artwork) ? "KEEPING LOCAL ARTWORK [KEEP LOCAL]" : "USING LOCAL ARTWORK")
                             .font(.system(size: 9, weight: .bold, design: .monospaced))
                             .foregroundStyle(Color.orange)
                     } else {
-                        Text("USING ONLINE METADATA")
-                            .font(.system(size: 9, weight: .bold, design: .monospaced))
-                            .foregroundStyle(Color.blue)
+                        HStack(spacing: 4) {
+                            Text("USING ONLINE ARTWORK")
+                            Text("• \(diff.onlineMetadata.sourceAPI.uppercased())")
+                        }
+                        .font(.system(size: 9, weight: .bold, design: .monospaced))
+                        .foregroundStyle(Color.green)
                     }
                 }
             }
@@ -588,77 +635,96 @@ public struct SwipeableMetadataTrackCard: View {
 
             // Centered Metadata Rows Below
             VStack(alignment: .center, spacing: 6) {
+                let titleChanged = diff.titleChanged
+                let isUsingLocalTitle = diff.shouldPreserveLocalTitle || !titleChanged
                 centeredMetadataRow(
                     field: .title,
                     onlineValue: diff.onlineMetadata.title,
                     localValue: diff.localTrack.title,
-                    isChanged: diff.titleChanged
+                    isChanged: titleChanged,
+                    isUsingLocal: isUsingLocalTitle
                 )
 
+                let artistChanged = diff.artistChanged
+                let isUsingLocalArtist = diff.shouldPreserveLocalArtist || !artistChanged
                 centeredMetadataRow(
                     field: .artist,
                     onlineValue: diff.onlineMetadata.artist,
                     localValue: diff.localTrack.artist,
-                    isChanged: diff.artistChanged
+                    isChanged: artistChanged,
+                    isUsingLocal: isUsingLocalArtist
                 )
 
+                let onlineAlbumName = diff.effectiveOnlineAlbum.isEmpty ? diff.onlineMetadata.album : diff.effectiveOnlineAlbum
+                let albumChanged = diff.albumChanged
+                let isUsingLocalAlbum = diff.isAlbumOverrideIgnoredToPreserveLocalAlbum || !albumChanged
                 centeredMetadataRow(
                     field: .album,
-                    onlineValue: diff.effectiveOnlineAlbum.isEmpty ? diff.localTrack.album : diff.effectiveOnlineAlbum,
-                    localValue: diff.localTrack.album,
-                    isChanged: diff.albumChanged
+                    onlineValue: onlineAlbumName.isEmpty ? diff.localTrack.album : onlineAlbumName,
+                    localValue: diff.localTrack.album.isEmpty ? "—" : diff.localTrack.album,
+                    isChanged: albumChanged,
+                    isUsingLocal: isUsingLocalAlbum
                 )
 
-                if let y = diff.onlineMetadata.releaseYear, y > 0 {
+                let onlineYear = diff.onlineMetadata.releaseYear ?? 0
+                let localYear = diff.localTrack.year ?? 0
+                let yearChanged = diff.yearChanged
+                let isUsingLocalYear = diff.isYearTransferredFromLocal || !yearChanged
+                if onlineYear > 0 || localYear > 0 {
                     centeredMetadataRow(
                         field: .year,
-                        onlineValue: String(y),
-                        localValue: diff.localTrack.year.map { String($0) } ?? "—",
-                        isChanged: diff.yearChanged
-                    )
-                } else if let ly = diff.localTrack.year, ly > 0 {
-                    centeredMetadataRow(
-                        field: .year,
-                        onlineValue: String(ly),
-                        localValue: String(ly),
-                        isChanged: false
+                        onlineValue: onlineYear > 0 ? String(onlineYear) : (localYear > 0 ? String(localYear) : "—"),
+                        localValue: localYear > 0 ? String(localYear) : "—",
+                        isChanged: yearChanged,
+                        isUsingLocal: isUsingLocalYear
                     )
                 }
 
-                if let g = diff.onlineMetadata.genre ?? diff.localTrack.genre, !g.isEmpty && g != "—" {
+                let onlineGenre = diff.onlineMetadata.genre?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                let localGenre = diff.localTrack.genre?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                let genreChanged = diff.genreChanged
+                let isUsingLocalGenre = diff.isGenreTransferredFromLocal || !genreChanged
+                if !onlineGenre.isEmpty || !localGenre.isEmpty {
                     centeredMetadataRow(
                         field: .genre,
-                        onlineValue: g,
-                        localValue: diff.localTrack.genre ?? "—",
-                        isChanged: diff.genreChanged
+                        onlineValue: !onlineGenre.isEmpty ? onlineGenre : localGenre,
+                        localValue: !localGenre.isEmpty ? localGenre : "—",
+                        isChanged: genreChanged,
+                        isUsingLocal: isUsingLocalGenre
                     )
                 }
 
-                let onlineTrackNum: String = {
-                    if let t = diff.onlineMetadata.trackNumber, t > 0 {
+                let onlineTrackNum = diff.onlineMetadata.trackNumber ?? 0
+                let localTrackNum = diff.localTrack.trackNumber ?? 0
+                let trackNumChanged = diff.trackNumberChanged
+                let isUsingLocalTrackNum = diff.isTrackNumberTransferredFromLocal || !trackNumChanged
+
+                let onlineTrackNumStr: String = {
+                    if localTrackNum > 0 {
+                        let total = diff.localTrack.totalTracks.map { " of \($0)" } ?? diff.onlineMetadata.totalTracks.map { " of \($0)" } ?? ""
+                        return "\(localTrackNum)\(total)"
+                    } else if onlineTrackNum > 0 {
                         let total = diff.onlineMetadata.totalTracks.map { " of \($0)" } ?? ""
-                        return "\(t)\(total)"
-                    } else if let lt = diff.localTrack.trackNumber, lt > 0 {
-                        let total = diff.localTrack.totalTracks.map { " of \($0)" } ?? ""
-                        return "\(lt)\(total)"
+                        return "\(onlineTrackNum)\(total)"
                     }
                     return "—"
                 }()
 
-                let localTrackNum: String = {
-                    if let lt = diff.localTrack.trackNumber, lt > 0 {
+                let localTrackNumStr: String = {
+                    if localTrackNum > 0 {
                         let total = diff.localTrack.totalTracks.map { " of \($0)" } ?? ""
-                        return "\(lt)\(total)"
+                        return "\(localTrackNum)\(total)"
                     }
                     return "—"
                 }()
 
-                if onlineTrackNum != "—" || localTrackNum != "—" {
+                if onlineTrackNum > 0 || localTrackNum > 0 {
                     centeredMetadataRow(
                         field: .trackNumber,
-                        onlineValue: onlineTrackNum,
-                        localValue: localTrackNum,
-                        isChanged: diff.trackNumberChanged
+                        onlineValue: onlineTrackNumStr,
+                        localValue: localTrackNumStr,
+                        isChanged: trackNumChanged,
+                        isUsingLocal: isUsingLocalTrackNum
                     )
                 }
             }
@@ -679,11 +745,15 @@ public struct SwipeableMetadataTrackCard: View {
                 )
                 .frame(width: 150, height: 150)
                 .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(Color.orange, lineWidth: 1.5)
+                )
 
                 // Sub-Artwork Status Label
                 Text("ORIGINAL LOCAL METADATA")
                     .font(.system(size: 9, weight: .bold, design: .monospaced))
-                    .foregroundStyle(Color.secondary)
+                    .foregroundStyle(Color.orange)
             }
 
             // Centered Local Metadata Rows
@@ -722,16 +792,18 @@ public struct SwipeableMetadataTrackCard: View {
         }
     }
 
-    // Centered Metadata Row with interactive lock toggle and Green for overwritten/new metadata
+    // Centered Metadata Row with interactive lock toggle: Green for new metadata, Orange for local metadata
     private func centeredMetadataRow(
         field: MetadataField,
         onlineValue: String,
         localValue: String,
-        isChanged: Bool
+        isChanged: Bool,
+        isUsingLocal: Bool
     ) -> some View {
         let isLocked = lockedFields.contains(field)
-        let displayValue = isLocked ? localValue : onlineValue
-        let textColor: Color = isLocked ? Color.orange : (isChanged ? Color.green : Color.primary)
+        let isEffectiveLocal = isLocked || isUsingLocal
+        let displayValue = isEffectiveLocal ? localValue : onlineValue
+        let color: Color = isEffectiveLocal ? Color.orange : Color.green
 
         return Button(action: {
             toggleFieldLock(field)
@@ -739,11 +811,11 @@ public struct SwipeableMetadataTrackCard: View {
             HStack(spacing: 6) {
                 Text(field.rawValue)
                     .font(.system(size: 10, weight: .bold, design: .monospaced))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(color.opacity(0.85))
 
                 Text(displayValue)
                     .font(.system(size: 13, weight: .bold, design: .monospaced))
-                    .foregroundStyle(textColor)
+                    .foregroundStyle(color)
                     .lineLimit(1)
 
                 if isLocked {
@@ -766,11 +838,11 @@ public struct SwipeableMetadataTrackCard: View {
             HStack(spacing: 6) {
                 Text(field.rawValue)
                     .font(.system(size: 10, weight: .bold, design: .monospaced))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Color.orange.opacity(0.85))
 
                 Text(value)
                     .font(.system(size: 13, weight: .bold, design: .monospaced))
-                    .foregroundStyle(isLocked ? Color.orange : Color.primary)
+                    .foregroundStyle(Color.orange)
                     .lineLimit(1)
 
                 if isLocked {

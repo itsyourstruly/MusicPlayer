@@ -7,6 +7,7 @@ public struct VerifiedGoodTracksListView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.appTheme) private var appTheme
 
+    @State private var selectedTrackForCustomSearch: Track? = nil
     @State private var recheckingTrackID: UUID? = nil
     @State private var searchText: String = ""
 
@@ -64,8 +65,8 @@ public struct VerifiedGoodTracksListView: View {
                                     VerifiedGoodTrackCard(
                                         diff: diff,
                                         isRechecking: recheckingTrackID == diff.localTrack.id,
-                                        onApplyOnline: {
-                                            applyOnlineTags(diff)
+                                        onCustomSearch: {
+                                            selectedTrackForCustomSearch = diff.localTrack
                                         },
                                         onRescan: {
                                             rescanSingleTrack(diff.localTrack)
@@ -92,6 +93,11 @@ public struct VerifiedGoodTracksListView: View {
                     }
                     .font(.system(size: 13, weight: .bold, design: .monospaced))
                 }
+            }
+            .sheet(item: $selectedTrackForCustomSearch) { track in
+                OnlineMetadataMatchSheet(track: track, libraryStore: libraryStore)
+                    .tint(appTheme.accentColor)
+                    .environment(\.appTheme, appTheme)
             }
         }
     }
@@ -138,15 +144,16 @@ public struct VerifiedGoodTracksListView: View {
                 Spacer()
 
                 Button("RESCAN ALL") {
-                    libraryStore.recheckAllVerifiedGoodTracks()
                     HapticFeedback.notificationSuccess()
+                    libraryStore.recheckAllVerifiedGoodTracks()
+                    dismiss()
                 }
                 .font(.system(size: 12, weight: .bold, design: .monospaced))
                 .foregroundStyle(Color.blue)
                 .buttonStyle(.plain)
             }
 
-            Text("YOUR LOCAL AUDIO TAGS MATCH OFFICIAL ONLINE RECORDS. YOU CAN REVIEW THE ONLINE MATCH, RE-EMBED HIGH-RESOLUTION ARTWORK, OR RESCAN.")
+            Text("YOUR LOCAL AUDIO TAGS MATCH OFFICIAL ONLINE RECORDS. YOU CAN REVIEW THE ONLINE MATCH, CUSTOM SEARCH, OR RESCAN.")
                 .font(.system(size: 11, design: .monospaced))
                 .foregroundStyle(.secondary)
         }
@@ -170,35 +177,27 @@ public struct VerifiedGoodTracksListView: View {
 
     // MARK: - Actions
 
-    private func applyOnlineTags(_ diff: MetadataDiff) {
-        Task {
-            _ = await libraryStore.applyOnlineMetadata(
-                trackID: diff.localTrack.id,
-                onlineMetadata: diff.onlineMetadata,
-                preserveLocalTitleAndArtist: true
-            )
-            HapticFeedback.notificationSuccess()
-        }
-    }
-
     private func rescanSingleTrack(_ track: Track) {
         recheckingTrackID = track.id
         Task {
             _ = await libraryStore.recheckVerifiedGoodTrack(track)
-            recheckingTrackID = nil
+            await MainActor.run {
+                recheckingTrackID = nil
+            }
             HapticFeedback.notificationSuccess()
         }
     }
 }
 
 /// Centered, swipeable card displaying local track vs verified online match with sub-artwork status label.
+/// Defaults to displaying original local metadata.
 private struct VerifiedGoodTrackCard: View {
     let diff: MetadataDiff
     let isRechecking: Bool
-    let onApplyOnline: () -> Void
+    let onCustomSearch: () -> Void
     let onRescan: () -> Void
 
-    @State private var selectedPage: Int = 0 // 0 = Online, 1 = Local
+    @State private var selectedPage: Int = 1 // Default to 1 (ORIGINAL LOCAL)
     @Environment(\.appTheme) private var appTheme
 
     var body: some View {
@@ -238,28 +237,30 @@ private struct VerifiedGoodTrackCard: View {
                 onlinePageView
                     .tag(0)
 
-                // Page 1: Original Local Metadata
+                // Page 1: Original Local Metadata (Default)
                 localPageView
                     .tag(1)
             }
+            #if os(iOS)
             .tabViewStyle(.page(indexDisplayMode: .never))
+            #endif
             .frame(height: 380)
 
             // Action Buttons
             HStack(spacing: 24) {
                 Spacer()
 
-                Button(action: onApplyOnline) {
-                    Text("RE-APPLY TAGS & ART")
+                Button(action: onCustomSearch) {
+                    Text("CUSTOM SEARCH")
                         .font(.system(size: 12, weight: .bold, design: .monospaced))
-                        .foregroundStyle(Color.blue)
+                        .foregroundStyle(Color.primary)
                 }
                 .buttonStyle(.plain)
 
                 Button(action: onRescan) {
                     Text(isRechecking ? "RESCANNING..." : "RESCAN")
                         .font(.system(size: 12, weight: .bold, design: .monospaced))
-                        .foregroundStyle(isRechecking ? Color.secondary : Color.primary)
+                        .foregroundStyle(isRechecking ? Color.secondary : Color.blue)
                 }
                 .buttonStyle(.plain)
                 .disabled(isRechecking)
@@ -273,30 +274,60 @@ private struct VerifiedGoodTrackCard: View {
     // MARK: - Online Page View
     private var onlinePageView: some View {
         VStack(alignment: .center, spacing: 10) {
+            let isUsingLocalArtwork = !diff.artworkUpgraded
+
             // Album Artwork on Top
             VStack(spacing: 6) {
-                AsyncImage(url: diff.onlineMetadata.artworkURL) { phase in
-                    switch phase {
-                    case .success(let image):
-                        image
-                            .resizable()
-                            .aspectRatio(contentMode: .fill)
-                    default:
-                        AlbumArtworkView(
-                            artworkKey: diff.localTrack.artworkKey,
-                            title: diff.localTrack.album,
-                            subtitle: diff.localTrack.artist,
-                            cornerRadius: 8
-                        )
+                if isUsingLocalArtwork {
+                    AlbumArtworkView(
+                        artworkKey: diff.localTrack.artworkKey,
+                        title: diff.localTrack.album,
+                        subtitle: diff.localTrack.artist,
+                        cornerRadius: 8
+                    )
+                    .frame(width: 150, height: 150)
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .stroke(Color.orange, lineWidth: 1.5)
+                    )
+                } else {
+                    AsyncImage(url: diff.onlineMetadata.artworkURL) { phase in
+                        switch phase {
+                        case .success(let image):
+                            image
+                                .resizable()
+                                .aspectRatio(contentMode: .fill)
+                        default:
+                            AlbumArtworkView(
+                                artworkKey: diff.localTrack.artworkKey,
+                                title: diff.localTrack.album,
+                                subtitle: diff.localTrack.artist,
+                                cornerRadius: 8
+                            )
+                        }
                     }
+                    .frame(width: 150, height: 150)
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .stroke(Color.green, lineWidth: 1.5)
+                    )
                 }
-                .frame(width: 150, height: 150)
-                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
 
                 // Sub-Artwork Status Label
-                Text("USING ONLINE METADATA")
+                if isUsingLocalArtwork {
+                    Text("USING LOCAL ARTWORK")
+                        .font(.system(size: 9, weight: .bold, design: .monospaced))
+                        .foregroundStyle(Color.orange)
+                } else {
+                    HStack(spacing: 4) {
+                        Text("USING ONLINE ARTWORK")
+                        Text("• \(diff.onlineMetadata.sourceAPI.uppercased())")
+                    }
                     .font(.system(size: 9, weight: .bold, design: .monospaced))
-                    .foregroundStyle(Color.blue)
+                    .foregroundStyle(Color.green)
+                }
             }
 
             // Centered Metadata Rows Below
@@ -310,7 +341,7 @@ private struct VerifiedGoodTrackCard: View {
                 }
 
                 if let g = diff.onlineMetadata.genre, !g.isEmpty && g != "—" {
-                    centeredRow(label: "GENRE", value: g, isGreen: false)
+                    centeredRow(label: "GENRE", value: g, isGreen: diff.genreChanged)
                 }
 
                 if let t = diff.onlineMetadata.trackNumber, t > 0 {
@@ -335,11 +366,15 @@ private struct VerifiedGoodTrackCard: View {
                 )
                 .frame(width: 150, height: 150)
                 .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(Color.orange, lineWidth: 1.5)
+                )
 
                 // Sub-Artwork Status Label
                 Text("ORIGINAL LOCAL METADATA")
                     .font(.system(size: 9, weight: .bold, design: .monospaced))
-                    .foregroundStyle(Color.secondary)
+                    .foregroundStyle(Color.orange)
             }
 
             // Centered Local Metadata Rows
@@ -364,11 +399,11 @@ private struct VerifiedGoodTrackCard: View {
         HStack(spacing: 6) {
             Text(label)
                 .font(.system(size: 10, weight: .bold, design: .monospaced))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(isGreen ? Color.green.opacity(0.85) : Color.orange.opacity(0.85))
 
             Text(value)
                 .font(.system(size: 13, weight: .bold, design: .monospaced))
-                .foregroundStyle(isGreen ? Color.green : Color.primary)
+                .foregroundStyle(isGreen ? Color.green : Color.orange)
                 .lineLimit(1)
         }
         .padding(.vertical, 1)

@@ -54,7 +54,7 @@ public struct DuplicateCandidate: Identifiable, Codable, Sendable, Hashable {
 
     /// Indicates whether embedded artwork is available.
     public var hasArtwork: Bool {
-        track.artworkKey != nil && !track.artworkKey!.isEmpty
+        track.artworkKey?.isEmpty == false
     }
 }
 

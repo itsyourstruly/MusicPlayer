@@ -1,5 +1,7 @@
 import Foundation
 import AVFoundation
+import ImageIO
+import CoreGraphics
 import os
 
 /// Production-grade thread-safe metadata persistence engine directly into audio files on local disk and iCloud Drive.
@@ -13,6 +15,25 @@ public struct AudioFileMetadataWriter: Sendable {
 
     // Initialize with configured properties
     public init() {}
+
+    /// Downsamples and optimizes image data (max 1000x1000, 85% JPEG compression) to prevent audio file container bloat.
+    public static func optimizeArtworkForEmbedding(data: Data, maxDimension: CGFloat = 1000.0) -> Data {
+        guard let imageSource = CGImageSourceCreateWithData(data as CFData, nil) else { return data }
+        let options: [CFString: Any] = [
+            kCGImageSourceThumbnailMaxPixelSize: maxDimension,
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true
+        ]
+        guard let thumbnail = CGImageSourceCreateThumbnailAtIndex(imageSource, 0, options as CFDictionary) else { return data }
+        let mutableData = NSMutableData()
+        guard let destination = CGImageDestinationCreateWithData(mutableData as CFMutableData, "public.jpeg" as CFString, 1, nil) else { return data }
+        let compressionOptions: [CFString: Any] = [
+            kCGImageDestinationLossyCompressionQuality: 0.85
+        ]
+        CGImageDestinationAddImage(destination, thumbnail, compressionOptions as CFDictionary)
+        guard CGImageDestinationFinalize(destination) else { return data }
+        return mutableData as Data
+    }
 
     /// Safely writes updated metadata and artwork into the target audio file on disk without re-encoding audio samples.
     ///
@@ -42,6 +63,9 @@ public struct AudioFileMetadataWriter: Sendable {
         discNumber: Int? = nil,
         artworkData: Data? = nil
     ) async -> Bool {
+        // Optimize artwork data if provided
+        let optimizedArtwork = artworkData.flatMap { Self.optimizeArtworkForEmbedding(data: $0) }
+
         // Ensure root linked folder security-scoped access is active along with target file access
         let rootURL = SecurityScopedBookmark.shared.currentFolderURL ?? SecurityScopedBookmark.shared.resolveAndAccessBookmark()
         // Flag indicating if root accessing
@@ -81,7 +105,7 @@ public struct AudioFileMetadataWriter: Sendable {
                 trackNumber: trackNumber,
                 totalTracks: totalTracks,
                 discNumber: discNumber,
-                artworkData: artworkData
+                artworkData: optimizedArtwork
             )
 
         case "mp3":
@@ -96,7 +120,7 @@ public struct AudioFileMetadataWriter: Sendable {
                 trackNumber: trackNumber,
                 totalTracks: totalTracks,
                 discNumber: discNumber,
-                artworkData: artworkData
+                artworkData: optimizedArtwork
             )
 
         case "flac":
@@ -111,7 +135,7 @@ public struct AudioFileMetadataWriter: Sendable {
                 trackNumber: trackNumber,
                 totalTracks: totalTracks,
                 discNumber: discNumber,
-                artworkData: artworkData
+                artworkData: optimizedArtwork
             )
 
         default:
@@ -237,7 +261,7 @@ public struct AudioFileMetadataWriter: Sendable {
             // Total
             let total = totalTracks ?? 0
             // Track bytes
-            var trackBytes: [UInt8] = [0, 0, 0, UInt8(min(255, trackNum)), 0, UInt8(min(255, total)), 0, 0]
+            let trackBytes: [UInt8] = [0, 0, 0, UInt8(min(255, trackNum)), 0, UInt8(min(255, total)), 0, 0]
             // Item
             let item = AVMutableMetadataItem()
             item.keySpace = .iTunes
@@ -250,7 +274,7 @@ public struct AudioFileMetadataWriter: Sendable {
         // Disc Number (disk: 6-byte big-endian payload)
         if let discNum = discNumber, discNum > 0 {
             // Disc bytes
-            var discBytes: [UInt8] = [0, 0, 0, UInt8(min(255, discNum)), 0, 0]
+            let discBytes: [UInt8] = [0, 0, 0, UInt8(min(255, discNum)), 0, 0]
             // Item
             let item = AVMutableMetadataItem()
             item.keySpace = .iTunes
@@ -377,8 +401,12 @@ public struct AudioFileMetadataWriter: Sendable {
 
         // TRCK - Track Number (e.g. "5" or "5/12")
         if let trackNum = trackNumber, trackNum > 0 {
-            // Str
-            let str = (totalTracks != nil && totalTracks! > 0) ? "\(trackNum)/\(totalTracks!)" : "\(trackNum)"
+            let str: String
+            if let tot = totalTracks, tot > 0 {
+                str = "\(trackNum)/\(tot)"
+            } else {
+                str = "\(trackNum)"
+            }
             frameData.append(buildID3TextFrame(id: "TRCK", text: str))
         }
 
@@ -582,7 +610,7 @@ public struct AudioFileMetadataWriter: Sendable {
         // Vorbis payload
         let vorbisPayload = buildVorbisCommentPayload(comments: comments)
         // Flag indicating if artwork
-        let hasArtwork = (artworkData != nil && !artworkData!.isEmpty)
+        let hasArtwork = artworkData?.isEmpty == false
 
         // Vorbis header
         var vorbisHeader = Data()

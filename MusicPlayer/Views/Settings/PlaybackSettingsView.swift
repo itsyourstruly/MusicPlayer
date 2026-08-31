@@ -44,6 +44,8 @@ public struct PlaybackSettingsView: View {
             playerService.playTrackInCurrentQueue = libraryStore.settings.playTrackInCurrentQueue
             playerService.tapToPlayNext = libraryStore.settings.tapToPlayNext
             playerService.smoothSkippingEnabled = libraryStore.settings.smoothSkippingEnabled
+            playerService.rememberPlaybackPosition = libraryStore.settings.rememberPlaybackPosition
+            playerService.rememberPlaybackPositionMinMinutes = libraryStore.settings.rememberPlaybackPositionMinMinutes
         }
         .sheet(item: $activeDetail) { detail in
             SettingOptionDetailSheet(detail: detail)
@@ -133,12 +135,48 @@ public struct PlaybackSettingsView: View {
                 onLongPress: { activeDetail = SettingOptionCatalog.autoPlayNext }
             )
 
-            TypographicToggleRow(
-                title: "REMEMBER PLAYBACK POSITION",
-                isOn: $libraryStore.settings.rememberPlaybackPosition,
-                onToggle: { libraryStore.saveSettings() },
-                onLongPress: { activeDetail = SettingOptionCatalog.rememberPlaybackPosition }
-            )
+            VStack(alignment: .leading, spacing: 12) {
+                TypographicToggleRow(
+                    title: "REMEMBER PLAYBACK POSITION",
+                    isOn: $libraryStore.settings.rememberPlaybackPosition,
+                    onToggle: {
+                        withAnimation(.easeInOut(duration: 0.25)) {
+                            libraryStore.saveSettings()
+                            playerService.rememberPlaybackPosition = libraryStore.settings.rememberPlaybackPosition
+                        }
+                    },
+                    onLongPress: { activeDetail = SettingOptionCatalog.rememberPlaybackPosition }
+                )
+
+                if libraryStore.settings.rememberPlaybackPosition {
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Text("MIN TRACK LENGTH")
+                                .font(.system(size: 13, weight: .bold, design: .monospaced))
+                                .foregroundStyle(.secondary)
+
+                            Spacer()
+
+                            Text("\(Int(libraryStore.settings.rememberPlaybackPositionMinMinutes)) MIN")
+                                .font(.system(size: 13, weight: .bold, design: .monospaced))
+                                .foregroundStyle(Color.blue)
+                        }
+
+                        Slider(
+                            value: $libraryStore.settings.rememberPlaybackPositionMinMinutes,
+                            in: 10.0...60.0,
+                            step: 1.0
+                        )
+                        .tint(Color.blue)
+                        .onChange(of: libraryStore.settings.rememberPlaybackPositionMinMinutes) { _, _ in
+                            libraryStore.saveSettings()
+                            playerService.rememberPlaybackPositionMinMinutes = libraryStore.settings.rememberPlaybackPositionMinMinutes
+                        }
+                    }
+                    .padding(.top, 4)
+                    .transition(.opacity)
+                }
+            }
 
             TypographicToggleRow(
                 title: "SHOW AUDIO SPECS",

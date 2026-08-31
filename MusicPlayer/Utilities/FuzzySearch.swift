@@ -7,46 +7,41 @@ public enum FuzzyMatcher {
 
     // MARK: - Normalization & Token Preparation
 
-    /// Fast punctuation set: converts punctuation and special symbols to space delimiters.
-    private static let punctuationCharacters: CharacterSet = {
-        // Set
-        var set = CharacterSet.punctuationCharacters
-        set.formUnion(CharacterSet.symbols)
-        set.formUnion(CharacterSet(charactersIn: ",:;-_'\"\"''.!?()[]/\\|~*#@%+=<>$`^{}"))
-        set.remove(charactersIn: "")
-        return set
-    }()
-
-    /// Thoroughly normalizes strings for searching:
-    /// 1. Strips diacritics and lowercases.
-    /// 2. Normalizes `&` and `+` to `and`.
-    /// 3. Replaces punctuation with space delimiters so `Spider-Man` matches `Spider Man` and `Earth, Wind & Fire` matches `Earth Wind and Fire`.
-    /// 4. Trims and collapses multiple whitespace characters.
+    /// Thoroughly normalizes strings for searching with zero unnecessary allocations:
+    /// 1. Lowercases and replaces diacritics/conjunctions.
+    /// 2. Converts all punctuation, symbols, and special characters into space delimiters.
+    /// 3. Collapses multiple whitespace characters.
     @inline(__always)
     public static func normalize(_ str: String) -> String {
-        // Ensure preconditions are met before proceeding
         guard !str.isEmpty else { return "" }
+        let folded = str.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
 
-        // Strip diacritics & lowercase
-        let folded = str.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current).lowercased()
+        var result = ""
+        result.reserveCapacity(folded.count + 8)
 
-        // Normalize conjunctions & symbols to space-padded words
-        var replaced = folded.replacingOccurrences(of: "&", with: " and ")
-        replaced = replaced.replacingOccurrences(of: "+", with: " and ")
-
-        // Replace all punctuation with spaces
-        let scalars = replaced.unicodeScalars.map { scalar -> Unicode.Scalar in
-            if punctuationCharacters.contains(scalar) {
-                return Unicode.Scalar(32) // ' ' space
+        var lastWasSpace = true
+        for scalar in folded.unicodeScalars {
+            if (scalar >= "a" && scalar <= "z") || (scalar >= "0" && scalar <= "9") {
+                result.unicodeScalars.append(scalar)
+                lastWasSpace = false
+            } else if scalar == "$" {
+                result.append("s")
+                lastWasSpace = false
+            } else if scalar == "@" {
+                result.append("a")
+                lastWasSpace = false
+            } else if scalar == "&" || scalar == "+" {
+                if !lastWasSpace { result.append(" ") }
+                result.append("and ")
+                lastWasSpace = true
+            } else {
+                if !lastWasSpace {
+                    result.append(" ")
+                    lastWasSpace = true
+                }
             }
-            return scalar
         }
-
-        // Cleaned
-        let cleaned = String(String.UnicodeScalarView(scalars))
-        // Fast whitespace collapse
-        let tokens = cleaned.split(separator: " ", omittingEmptySubsequences: true)
-        return tokens.joined(separator: " ")
+        return result.trimmingCharacters(in: .whitespaces)
     }
 
     // MARK: - Core Public API
@@ -55,13 +50,9 @@ public enum FuzzyMatcher {
     /// Returns 0 for no match, or a positive integer reflecting match quality (higher = better).
     @inline(__always)
     public static func score(text: String, query: String) -> Int {
-        // Clean query
         let cleanQuery = normalize(query)
-        // Ensure preconditions are met before proceeding
         guard !cleanQuery.isEmpty else { return 0 }
-        // Clean text
         let cleanText = normalize(text)
-        // Ensure preconditions are met before proceeding
         guard !cleanText.isEmpty else { return 0 }
 
         return evaluateScore(cleanText: cleanText, cleanQuery: cleanQuery)
@@ -76,7 +67,6 @@ public enum FuzzyMatcher {
         searchTokens: String,
         cleanQuery: String
     ) -> Int {
-        // Ensure preconditions are met before proceeding
         guard !cleanQuery.isEmpty else { return 0 }
 
         // Fast rejection: if the pre-joined search token string does not match anywhere and query has no multi-tokens
@@ -108,19 +98,13 @@ public enum FuzzyMatcher {
     /// Fallback scoreTrack taking raw strings (normalizes on the fly if pre-normalized tokens not available).
     @inline(__always)
     public static func scoreTrack(title: String, artist: String, album: String, genre: String? = nil, query: String) -> Int {
-        // Clean query
         let cleanQuery = normalize(query)
-        // Ensure preconditions are met before proceeding
         guard !cleanQuery.isEmpty else { return 0 }
 
-        // Clean title
         let cleanTitle = normalize(title)
-        // Clean artist
         let cleanArtist = normalize(artist)
-        // Clean album
         let cleanAlbum = normalize(album)
-        // Clean genre
-        let cleanGenre = genre != nil ? normalize(genre!) : ""
+        let cleanGenre = genre.map { normalize($0) } ?? ""
         let tokens = "\(cleanTitle) \(cleanArtist) \(cleanAlbum) \(cleanGenre)"
 
         return scoreTrack(
@@ -135,12 +119,9 @@ public enum FuzzyMatcher {
     /// Evaluates album relevance prioritizing album title match, then artist.
     @inline(__always)
     public static func scoreAlbum(normalizedTitle: String, normalizedArtist: String, cleanQuery: String) -> Int {
-        // Ensure preconditions are met before proceeding
         guard !cleanQuery.isEmpty else { return 0 }
 
-        // Title score
         let titleScore = evaluateScore(cleanText: normalizedTitle, cleanQuery: cleanQuery)
-        // Artist score
         let artistScore = evaluateScore(cleanText: normalizedArtist, cleanQuery: cleanQuery)
 
         return max(titleScore * 2, Int(Double(artistScore) * 1.2))
@@ -149,9 +130,7 @@ public enum FuzzyMatcher {
     /// Fallback scoreAlbum taking raw strings.
     @inline(__always)
     public static func scoreAlbum(title: String, artist: String, query: String) -> Int {
-        // Clean query
         let cleanQuery = normalize(query)
-        // Ensure preconditions are met before proceeding
         guard !cleanQuery.isEmpty else { return 0 }
 
         return scoreAlbum(
@@ -164,7 +143,6 @@ public enum FuzzyMatcher {
     /// Evaluates artist relevance.
     @inline(__always)
     public static func scoreArtist(normalizedName: String, cleanQuery: String) -> Int {
-        // Ensure preconditions are met before proceeding
         guard !cleanQuery.isEmpty else { return 0 }
         return evaluateScore(cleanText: normalizedName, cleanQuery: cleanQuery)
     }
@@ -172,19 +150,16 @@ public enum FuzzyMatcher {
     /// Fallback scoreArtist taking raw strings.
     @inline(__always)
     public static func scoreArtist(name: String, query: String) -> Int {
-        // Clean query
         let cleanQuery = normalize(query)
-        // Ensure preconditions are met before proceeding
         guard !cleanQuery.isEmpty else { return 0 }
         return scoreArtist(normalizedName: normalize(name), cleanQuery: cleanQuery)
     }
 
     // MARK: - Core Matching Engine
 
-    /// Evaluates match score between pre-normalized strings.
+    /// Evaluates match score between pre-normalized strings with zero per-call heap allocations.
     @inline(__always)
     public static func evaluateScore(cleanText: String, cleanQuery: String) -> Int {
-        // Ensure preconditions are met before proceeding
         guard !cleanText.isEmpty, !cleanQuery.isEmpty else { return 0 }
 
         // 1. Exact match (1200)
@@ -192,59 +167,46 @@ public enum FuzzyMatcher {
             return 1200
         }
 
+        let queryCount = cleanQuery.count
+        let textCount = cleanText.count
+
         // 2. Full Prefix Match (900 - 1050)
         if cleanText.hasPrefix(cleanQuery) {
-            // Ratio
-            let ratio = Double(cleanQuery.count) / Double(max(cleanText.count, 1))
+            let ratio = Double(queryCount) / Double(max(textCount, 1))
             return 900 + Int(ratio * 150)
         }
 
-        // Fast word-boundary check
-        let paddedText = " " + cleanText
-        // Padded query
-        let paddedQuery = " " + cleanQuery
-        if paddedText.contains(paddedQuery) {
-            // Ratio
-            let ratio = Double(cleanQuery.count) / Double(max(cleanText.count, 1))
+        // 3. Fast word-boundary check (e.g. "california" inside "hotel california")
+        let spaceQuery = " " + cleanQuery
+        if cleanText.contains(spaceQuery) {
+            let ratio = Double(queryCount) / Double(max(textCount, 1))
             return 750 + Int(ratio * 120)
         }
 
-        // 3. Exact Substring Containment (550 - 700)
+        // 4. Exact Substring Containment (550 - 700)
         if cleanText.contains(cleanQuery) {
-            // Ratio
-            let ratio = Double(cleanQuery.count) / Double(max(cleanText.count, 1))
+            let ratio = Double(queryCount) / Double(max(textCount, 1))
             return 550 + Int(ratio * 150)
         }
 
-        // 4. Multi-word Query: All query tokens present in text (400 - 520)
-        let queryTokens = cleanQuery.split(separator: " ", omittingEmptySubsequences: true)
-        if queryTokens.count > 1 {
-            // All match
-            let allMatch = queryTokens.allSatisfy { qToken in
-                paddedText.contains(" " + qToken) || cleanText.contains(qToken)
-            }
-            if allMatch {
-                // Ratio
-                let ratio = Double(cleanQuery.count) / Double(max(cleanText.count, 1))
-                return 420 + Int(ratio * 120)
+        // 5. Multi-word Query: All query tokens present in text (400 - 520)
+        if cleanQuery.contains(" ") {
+            let queryTokens = cleanQuery.split(separator: " ", omittingEmptySubsequences: true)
+            if queryTokens.count > 1 {
+                let allMatch = queryTokens.allSatisfy { qToken in
+                    cleanText.hasPrefix(qToken) || cleanText.contains(" " + qToken) || cleanText.contains(qToken)
+                }
+                if allMatch {
+                    let ratio = Double(queryCount) / Double(max(textCount, 1))
+                    return 420 + Int(ratio * 120)
+                }
             }
         }
 
-        // 5. Subsequence / Acronym match (250 - 380)
-        if cleanQuery.count >= 2 {
-            // Words
-            let words = cleanText.split(separator: " ", omittingEmptySubsequences: true)
-            if cleanQuery.count <= words.count {
-                // Acronym
-                let acronym = String(words.compactMap { $0.first })
-                if acronym.hasPrefix(cleanQuery) || acronym.contains(cleanQuery) {
-                    return 360
-                }
-            }
-
+        // 6. Subsequence / Acronym match (250 - 380)
+        if queryCount >= 2 && queryCount <= textCount {
             if isSubsequence(query: cleanQuery, in: cleanText) {
-                // Ratio
-                let ratio = Double(cleanQuery.count) / Double(max(cleanText.count, 1))
+                let ratio = Double(queryCount) / Double(max(textCount, 1))
                 return 250 + Int(ratio * 80)
             }
         }
@@ -252,22 +214,24 @@ public enum FuzzyMatcher {
         return 0
     }
 
-    // MARK: - Subsequence Matching
-
     @inline(__always)
     private static func isSubsequence(query: String, in text: String) -> Bool {
-        // Query idx
-        var queryIdx = query.startIndex
-        // Text idx
-        var textIdx = text.startIndex
+        guard !query.isEmpty else { return true }
+        guard query.count <= text.count else { return false }
 
-        while queryIdx < query.endIndex && textIdx < text.endIndex {
-            if query[queryIdx] == text[textIdx] {
-                queryIdx = query.index(after: queryIdx)
+        var queryIterator = query.makeIterator()
+        guard var currentQueryChar = queryIterator.next() else { return true }
+
+        for textChar in text {
+            if textChar == currentQueryChar {
+                if let nextChar = queryIterator.next() {
+                    currentQueryChar = nextChar
+                } else {
+                    return true
+                }
             }
-            textIdx = text.index(after: textIdx)
         }
-        return queryIdx == query.endIndex
+        return false
     }
 
     /// Normalized Levenshtein similarity score between 0.0 (completely different) and 1.0 (exact match).
@@ -317,6 +281,85 @@ public enum FuzzyMatcher {
             v0 = v1
         }
         return v0[n]
+    }
+
+    /// Token-Sort Levenshtein similarity: normalizes, splits into tokens, sorts alphabetically, and computes maximum similarity (0.0 to 1.0).
+    @inline(__always)
+    public static func tokenSortLevenshteinSimilarity(_ s1: String, _ s2: String) -> Double {
+        let clean1 = normalize(s1)
+        let clean2 = normalize(s2)
+        if clean1 == clean2 { return 1.0 }
+
+        let tokens1 = clean1.split(separator: " ", omittingEmptySubsequences: true).sorted().joined(separator: " ")
+        let tokens2 = clean2.split(separator: " ", omittingEmptySubsequences: true).sorted().joined(separator: " ")
+        if tokens1 == tokens2 { return 1.0 }
+
+        let directSim = levenshteinSimilarity(clean1, clean2)
+        let sortedSim = levenshteinSimilarity(tokens1, tokens2)
+        return max(directSim, sortedSim)
+    }
+
+    /// Jaro-Winkler string similarity distance between 0.0 (completely dissimilar) and 1.0 (identical).
+    @inline(__always)
+    public static func jaroWinklerSimilarity(_ s1: String, _ s2: String, prefixWeight: Double = 0.1) -> Double {
+        let a = Array(normalize(s1).utf8)
+        let b = Array(normalize(s2).utf8)
+
+        if a.isEmpty && b.isEmpty { return 1.0 }
+        if a.isEmpty || b.isEmpty { return 0.0 }
+        if a == b { return 1.0 }
+
+        let aLen = a.count
+        let bLen = b.count
+        let matchDistance = max(0, max(aLen, bLen) / 2 - 1)
+
+        var aMatches = [Bool](repeating: false, count: aLen)
+        var bMatches = [Bool](repeating: false, count: bLen)
+        var matches = 0
+
+        for i in 0..<aLen {
+            let start = max(0, i - matchDistance)
+            let end = min(i + matchDistance + 1, bLen)
+            guard start < end else { continue }
+            for j in start..<end {
+                if bMatches[j] { continue }
+                if a[i] == b[j] {
+                    aMatches[i] = true
+                    bMatches[j] = true
+                    matches += 1
+                    break
+                }
+            }
+        }
+
+        if matches == 0 { return 0.0 }
+
+        var transpositions = 0.0
+        var k = 0
+        for i in 0..<aLen {
+            if !aMatches[i] { continue }
+            while k < bLen && !bMatches[k] { k += 1 }
+            if k < bLen {
+                if a[i] != b[k] {
+                    transpositions += 1.0
+                }
+                k += 1
+            }
+        }
+        transpositions /= 2.0
+
+        let m = Double(matches)
+        let jaro = ((m / Double(aLen)) + (m / Double(bLen)) + ((m - transpositions) / m)) / 3.0
+
+        // Winkler prefix scaling (up to 4 matching initial characters)
+        var prefix = 0
+        let maxPrefix = min(4, min(aLen, bLen))
+        while prefix < maxPrefix && a[prefix] == b[prefix] {
+            prefix += 1
+        }
+
+        let clampedPrefixWeight = min(0.25, max(0.0, prefixWeight))
+        return min(1.0, max(0.0, jaro + (Double(prefix) * clampedPrefixWeight * (1.0 - jaro))))
     }
 }
 

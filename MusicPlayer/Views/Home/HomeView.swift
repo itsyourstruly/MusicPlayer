@@ -4,19 +4,20 @@ import SwiftUI
 public struct HomeView: View {
     @Bindable var libraryStore: LibraryStore
     @Bindable var playerService: AudioPlayerService
-    public let onNavigateToPlaylist: (Playlist) -> Void
+    public let onNavigateToPlaylist: ((Playlist) -> Void)?
     // On open settings
     public let onOpenSettings: () -> Void
 
     @State private var isStatsExpanded: Bool = false
     @State private var selectedAlbumForNavigation: Album? = nil
+    @State private var selectedPlaylistForNavigation: Playlist? = nil
     @State private var showingShuffleTargetPicker: Bool = false
 
     // Initialize with configured properties
     public init(
         libraryStore: LibraryStore,
         playerService: AudioPlayerService,
-        onNavigateToPlaylist: @escaping (Playlist) -> Void,
+        onNavigateToPlaylist: ((Playlist) -> Void)? = nil,
         onOpenSettings: @escaping () -> Void
     ) {
         self.libraryStore = libraryStore
@@ -40,7 +41,13 @@ public struct HomeView: View {
                 PinnedSection(
                     libraryStore: libraryStore,
                     playerService: playerService,
-                    onSelectPlaylist: onNavigateToPlaylist,
+                    onSelectPlaylist: { playlist in
+                        if let customNav = onNavigateToPlaylist {
+                            customNav(playlist)
+                        } else {
+                            selectedPlaylistForNavigation = playlist
+                        }
+                    },
                     onSelectAlbum: { album in
                         selectedAlbumForNavigation = album
                     }
@@ -65,6 +72,13 @@ public struct HomeView: View {
         .navigationDestination(item: $selectedAlbumForNavigation) { album in
             AlbumDetailView(
                 album: album,
+                libraryStore: libraryStore,
+                playerService: playerService
+            )
+        }
+        .navigationDestination(item: $selectedPlaylistForNavigation) { playlist in
+            PlaylistDetailView(
+                playlistID: playlist.id,
                 libraryStore: libraryStore,
                 playerService: playerService
             )

@@ -14,9 +14,7 @@ public struct AlbumDetailView: View {
     @State private var showingPlaylistPicker: Bool = false
     @State private var selectedTrackForInfo: Track? = nil
     @State private var selectedTrackForPlaylist: Track? = nil
-    @State private var showingMetadataSheet: Bool = false
-    @State private var isCheckingMetadata: Bool = false
-    @State private var albumDiffs: [MetadataDiff] = []
+    @State private var showingAlbumMetadataSheet: Bool = false
     @State private var navigateToOnlineSearch: Bool = false
 
     // Initialize with configured properties
@@ -114,18 +112,18 @@ public struct AlbumDetailView: View {
 
                         Spacer()
 
-                        // Music note icon button with Search Online, Check Metadata & Playlist Actions
+                        // Music note icon button with Album Metadata, Search Online & Playlist Actions
                         Menu {
                             Button(action: {
-                                navigateToOnlineSearch = true
+                                showingAlbumMetadataSheet = true
                             }) {
-                                Label("SEARCH ONLINE", systemImage: "network")
+                                Text("ALBUM METADATA")
                             }
 
                             Button(action: {
-                                checkAlbumMetadata()
+                                navigateToOnlineSearch = true
                             }) {
-                                Label("CHECK METADATA", systemImage: "arrow.triangle.2.circlepath")
+                                Text("SEARCH ONLINE")
                             }
 
                             Divider()
@@ -133,7 +131,7 @@ public struct AlbumDetailView: View {
                             Button(action: {
                                 showingPlaylistPicker = true
                             }) {
-                                Label("ADD TO PLAYLIST", systemImage: "plus.rectangle.on.folder")
+                                Text("ADD TO PLAYLIST")
                             }
 
                             if !libraryStore.playlists.isEmpty {
@@ -147,7 +145,7 @@ public struct AlbumDetailView: View {
                                         }
                                     }
                                 } label: {
-                                    Label("QUICK ADD TO...", systemImage: "bolt.fill")
+                                    Text("QUICK ADD TO...")
                                 }
                             }
                         } label: {
@@ -174,21 +172,25 @@ public struct AlbumDetailView: View {
                             )
                             .padding(.top, 16)
                         } else {
+                            let currentTrackID = playerService.currentTrack?.id
+                            let isCurrentPlaying = playerService.playbackStatus.isPlaying
+                            let nextTrackID = playerService.nextTrack?.id
+                            let playNextSet = Set(playerService.playNextQueue.map { $0.id })
+                            let isTapToPlayNext = libraryStore.settings.tapToPlayNext
+
                             LazyVStack(spacing: 4) {
-                                ForEach(Array(displayedTracks.enumerated()), id: \.element.id) { index, track in
+                                ForEach(0..<displayedTracks.count, id: \.self) { index in
+                                    let track = displayedTracks[index]
                                     TrackRowView(
                                         track: track,
-                                        indexNumber: nil,
-                                        isCurrentTrack: track.id == playerService.currentTrack?.id,
-                                        isPlaying: playerService.playbackStatus.isPlaying && track.id == playerService.currentTrack?.id,
-                                        isNextTrack: playerService.nextTrack?.id == track.id,
-                                        isInPlayNext: playerService.playNextQueue.contains(where: { $0.id == track.id }),
-                                        isTapToPlayNextEnabled: libraryStore.settings.tapToPlayNext,
-                                        showAlbumSubtitle: false,
+                                        indexNumber: index + 1,
+                                        isCurrentTrack: track.id == currentTrackID,
+                                        isPlaying: isCurrentPlaying && track.id == currentTrackID,
+                                        isNextTrack: track.id == nextTrackID,
+                                        isInPlayNext: playNextSet.contains(track.id),
+                                        isTapToPlayNextEnabled: isTapToPlayNext,
                                         onPlay: {
-                                            // Original index
-                                            let originalIndex = album.tracks.firstIndex(where: { $0.id == track.id }) ?? index
-                                            playerService.play(track: track, inQueue: album.tracks, startIndex: originalIndex)
+                                            playerService.play(track: track, inQueue: displayedTracks, startIndex: index)
                                         },
                                         onPlayNext: {
                                             playerService.insertPlayNextFront(track: track)
@@ -209,6 +211,9 @@ public struct AlbumDetailView: View {
                                             if let artistObj = libraryStore.findArtist(name: artistName) {
                                                 selectedArtistForNavigation = artistObj
                                             }
+                                        },
+                                        onSelectAlbum: {
+                                            // Already in album view
                                         }
                                     )
                                 }
@@ -216,7 +221,8 @@ public struct AlbumDetailView: View {
                         }
                     }
                 }
-                .padding(16)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
                 .padding(.bottom, 64)
             }
             .dismissKeyboardOnDrag()
@@ -227,31 +233,31 @@ public struct AlbumDetailView: View {
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button(action: toggleSearch) {
-                    Image(systemName: isSearching ? "xmark" : "magnifyingglass")
-                        .font(.system(size: 14, weight: .semibold))
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(Color.primary)
                 }
+                .buttonStyle(.plain)
             }
         }
         // Modal presentation sheet
         .sheet(item: $selectedTrackForInfo) { track in
             TrackInfoSheetView(track: track, libraryStore: libraryStore)
+                .tint(libraryStore.settings.appTheme.accentColor)
+                .environment(\.appTheme, libraryStore.settings.appTheme)
+        }
+        .sheet(item: $selectedTrackForPlaylist) { track in
+            playlistPickerSheet(for: [track])
         }
         // Modal presentation sheet
         .sheet(isPresented: $showingPlaylistPicker) {
             playlistPickerSheet(for: album.tracks)
         }
-        // Modal presentation sheet
-        .sheet(isPresented: $showingMetadataSheet) {
-            AlbumMetadataReviewSheet(
-                album: album,
-                libraryStore: libraryStore,
-                diffs: albumDiffs,
-                isLoading: isCheckingMetadata,
-                onRecheck: {
-                    checkAlbumMetadata()
-                }
-            )
+        // Dedicated Album Metadata Online Search & Apply Sheet
+        .sheet(isPresented: $showingAlbumMetadataSheet) {
+            AlbumMetadataSheet(album: album, libraryStore: libraryStore)
+                .tint(libraryStore.settings.appTheme.accentColor)
+                .environment(\.appTheme, libraryStore.settings.appTheme)
         }
         .navigationDestination(item: $selectedArtistForNavigation) { artist in
             ArtistDetailView(artist: artist, libraryStore: libraryStore, playerService: playerService)
@@ -263,20 +269,6 @@ public struct AlbumDetailView: View {
                 initialQuery: "\(album.artist) \(album.title)",
                 initialOnlineMode: true
             )
-        }
-    }
-
-    // Check album metadata
-    private func checkAlbumMetadata() {
-        isCheckingMetadata = true
-        showingMetadataSheet = true
-        Task {
-            // Diffs
-            let diffs = await libraryStore.checkMetadataForAlbum(album: album)
-            await MainActor.run {
-                self.albumDiffs = diffs
-                self.isCheckingMetadata = false
-            }
         }
     }
 
@@ -426,191 +418,6 @@ public struct AlbumDetailView: View {
                 .padding(.top, 2)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-        }
-    }
-}
-
-/// Dedicated side-by-side metadata review sheet for an entire album.
-public struct AlbumMetadataReviewSheet: View {
-    // Album title
-    public let album: Album
-    @Bindable var libraryStore: LibraryStore
-    public let diffs: [MetadataDiff]
-    // Flag indicating if loading
-    public let isLoading: Bool
-    // On recheck
-    public let onRecheck: () -> Void
-
-    @Environment(\.dismiss) private var dismiss
-    @Environment(\.appTheme) private var appTheme
-    @State private var preserveFeatures: Bool = true
-    @State private var isEnrichingAll: Bool = false
-    @State private var enrichProgress: Double = 0.0
-    @State private var enrichStatusText: String = ""
-
-    // Initialize with configured properties
-    public init(
-        album: Album,
-        libraryStore: LibraryStore,
-        diffs: [MetadataDiff],
-        isLoading: Bool,
-        onRecheck: @escaping () -> Void
-    ) {
-        self.album = album
-        self.libraryStore = libraryStore
-        self.diffs = diffs
-        self.isLoading = isLoading
-        self.onRecheck = onRecheck
-    }
-
-    // Main view layout structure
-    public var body: some View {
-        NavigationStack {
-            Group {
-                if isLoading {
-                    VStack(spacing: 14) {
-                        ProgressView()
-                            .tint(Color.primary)
-                        Text("CHECKING APPLE MUSIC METADATA FOR '\(album.title.uppercased())'...")
-                            .font(.system(size: 11, weight: .bold, design: .monospaced))
-                            .foregroundStyle(.secondary)
-                            .multilineTextAlignment(.center)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 64)
-                } else if diffs.isEmpty {
-                    VStack(spacing: 14) {
-                        Text("NO ONLINE METADATA MATCHES")
-                            .font(.system(size: 14, weight: .bold, design: .monospaced))
-                            .foregroundStyle(Color.primary)
-
-                        Text("Could not find verified online album matches for '\(album.title)' by '\(album.artist)'.")
-                            .font(.system(size: 12))
-                            .foregroundStyle(.secondary)
-                            .multilineTextAlignment(.center)
-                            .padding(.horizontal, 24)
-
-                        Button(action: onRecheck) {
-                            Text("RETRY SCAN")
-                        }
-                        .buttonStyle(TypographicButtonStyle(variant: .primary, size: .small))
-                        .padding(.top, 6)
-                    }
-                    .padding(.vertical, 48)
-                } else {
-                    ScrollView(.vertical, showsIndicators: true) {
-                        LazyVStack(spacing: 20) {
-                            // Header Summary Card (Identical to Settings)
-                            EnrichHeaderCardView(
-                                diffsCount: diffs.count,
-                                isBackgroundChecking: false,
-                                backgroundStatus: "",
-                                backgroundProgress: 0.0,
-                                isEnriching: isEnrichingAll,
-                                progress: enrichProgress,
-                                statusText: enrichStatusText,
-                                preserveFeatures: $preserveFeatures,
-                                writeToFile: $libraryStore.settings.writeMetadataToAudioFiles,
-                                onEnrichAll: {
-                                    enrichAll()
-                                }
-                            )
-
-                            // Swipeable Track Cards
-                            ForEach(diffs) { diff in
-                                SwipeableMetadataTrackCard(
-                                    diff: diff,
-                                    preserveFeatures: preserveFeatures,
-                                    onApply: { lockedFields in
-                                        applySingleWithLocks(diff: diff, lockedFields: lockedFields)
-                                    },
-                                    onKeepLocal: {
-                                        withAnimation {
-                                            libraryStore.dismissEnrichmentDiff(diffID: diff.id)
-                                        }
-                                        HapticFeedback.notificationSuccess()
-                                    }
-                                )
-
-                                Divider()
-                                    .overlay(appTheme.separatorColor.opacity(0.35))
-                            }
-                        }
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 14)
-                    }
-                }
-            }
-            .background(appTheme.backgroundColor.ignoresSafeArea())
-            .navigationTitle("ALBUM METADATA REVIEW")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("DONE") {
-                        dismiss()
-                    }
-                    .font(.system(size: 13, weight: .bold, design: .monospaced))
-                }
-            }
-        }
-    }
-
-    // Apply single with custom locks
-    private func applySingleWithLocks(diff: MetadataDiff, lockedFields: Set<MetadataField>) {
-        let local = diff.localTrack
-        let online = diff.onlineMetadata
-
-        let finalTitle = lockedFields.contains(.title) ? local.title : online.title
-        let finalArtist = lockedFields.contains(.artist) ? local.artist : online.artist
-        let finalAlbum = lockedFields.contains(.album) ? local.album : (online.album.isEmpty ? local.album : online.album)
-        let finalYear = lockedFields.contains(.year) ? local.year : (online.releaseYear ?? local.year)
-        let finalTrackNumber = lockedFields.contains(.trackNumber) ? local.trackNumber : (online.trackNumber ?? local.trackNumber)
-        let finalGenre = lockedFields.contains(.genre) ? local.genre : (online.genre ?? local.genre)
-        let finalArtworkURL = lockedFields.contains(.artwork) ? nil : online.artworkURL
-
-        let customizedOnline = OnlineTrackMetadata(
-            title: finalTitle,
-            artist: finalArtist,
-            album: finalAlbum,
-            releaseYear: finalYear,
-            genre: finalGenre,
-            trackNumber: finalTrackNumber,
-            artworkURL: finalArtworkURL,
-            isCompilation: online.isCompilation
-        )
-
-        Task {
-            _ = await libraryStore.applyOnlineMetadata(
-                trackID: local.id,
-                onlineMetadata: customizedOnline,
-                preserveLocalTitleAndArtist: false
-            )
-            HapticFeedback.notificationSuccess()
-        }
-    }
-
-    // Enrich all
-    private func enrichAll() {
-        // Ensure preconditions are met before proceeding
-        guard !diffs.isEmpty else { return }
-        isEnrichingAll = true
-        enrichProgress = 0.0
-        enrichStatusText = "Pre-fetching artwork..."
-
-        Task {
-            _ = await libraryStore.applyBatchOnlineMetadata(
-                diffs: diffs,
-                preserveLocalTitleAndArtist: preserveFeatures,
-                onProgress: { progress, text in
-                    Task { @MainActor in
-                        self.enrichProgress = progress
-                        self.enrichStatusText = text
-                    }
-                }
-            )
-            isEnrichingAll = false
-            HapticFeedback.notificationSuccess()
-            dismiss()
         }
     }
 }

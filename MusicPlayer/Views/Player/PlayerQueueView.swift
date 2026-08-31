@@ -185,7 +185,9 @@ public struct PlayerQueueView: View {
                     // Triggered when view appears
                     .onAppear {
                         // Scroll to Now Playing on appearance so it starts at the top
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                        Task { @MainActor in
+                            try? await Task.sleep(nanoseconds: 50_000_000)
+                            guard !Task.isCancelled else { return }
                             withAnimation(.easeOut(duration: 0.2)) {
                                 proxy.scrollTo("now_playing_item", anchor: .top)
                             }

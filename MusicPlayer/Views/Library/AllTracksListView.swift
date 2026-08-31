@@ -36,18 +36,26 @@ public struct AllTracksListView: View {
                 )
                 .padding(.top, 24)
             } else {
+                let tracks = libraryStore.filteredTracks
+                let currentTrackID = playerService.currentTrack?.id
+                let isCurrentPlaying = playerService.playbackStatus.isPlaying
+                let nextTrackID = playerService.nextTrack?.id
+                let playNextSet = Set(playerService.playNextQueue.map { $0.id })
+                let isTapToPlayNext = libraryStore.settings.tapToPlayNext
+
                 LazyVStack(spacing: 4) {
-                    ForEach(Array(libraryStore.filteredTracks.enumerated()), id: \.element.id) { index, track in
+                    ForEach(0..<tracks.count, id: \.self) { index in
+                        let track = tracks[index]
                         TrackRowView(
                             track: track,
                             indexNumber: index + 1,
-                            isCurrentTrack: track.id == playerService.currentTrack?.id,
-                            isPlaying: playerService.playbackStatus.isPlaying && track.id == playerService.currentTrack?.id,
-                            isNextTrack: playerService.nextTrack?.id == track.id,
-                            isInPlayNext: playerService.playNextQueue.contains(where: { $0.id == track.id }),
-                            isTapToPlayNextEnabled: libraryStore.settings.tapToPlayNext,
+                            isCurrentTrack: track.id == currentTrackID,
+                            isPlaying: isCurrentPlaying && track.id == currentTrackID,
+                            isNextTrack: track.id == nextTrackID,
+                            isInPlayNext: playNextSet.contains(track.id),
+                            isTapToPlayNextEnabled: isTapToPlayNext,
                             onPlay: {
-                                playerService.play(track: track, inQueue: libraryStore.filteredTracks, startIndex: index)
+                                playerService.play(track: track, inQueue: tracks, startIndex: index)
                             },
                             onPlayNext: {
                                 playerService.insertPlayNextFront(track: track)
@@ -83,6 +91,8 @@ public struct AllTracksListView: View {
         // Modal presentation sheet
         .sheet(item: $selectedTrackForInfo) { track in
             TrackInfoSheetView(track: track, libraryStore: libraryStore)
+                .tint(libraryStore.settings.appTheme.accentColor)
+                .environment(\.appTheme, libraryStore.settings.appTheme)
         }
         // Modal presentation sheet
         .sheet(item: $selectedTrackForPlaylist) { track in

@@ -1,6 +1,27 @@
 import Foundation
 
-/// Lightweight, verified online track & album metadata entity retrieved from iTunes Search API, ShazamKit, or Deezer.
+/// Available online metadata providers/APIs for querying and enrichment.
+public enum MetadataAPIOption: String, CaseIterable, Identifiable, Codable, Sendable {
+    case all = "ALL SOURCES"
+    case itunes = "APPLE MUSIC"
+    case deezer = "DEEZER"
+    case musicBrainz = "MUSICBRAINZ"
+
+    public var id: String { rawValue }
+
+    public var displayName: String { rawValue }
+
+    public var shortName: String {
+        switch self {
+        case .all: return "ALL"
+        case .itunes: return "APPLE"
+        case .deezer: return "DEEZER"
+        case .musicBrainz: return "MBRAINZ"
+        }
+    }
+}
+
+/// Lightweight, verified online track & album metadata entity retrieved from iTunes Search API, ShazamKit, Deezer, or MusicBrainz.
 public struct OnlineTrackMetadata: Identifiable, Codable, Sendable, Hashable {
     // Unique identifier
     public let id: String
@@ -122,32 +143,76 @@ public struct MetadataDiff: Identifiable, Codable, Sendable, Hashable {
         DeluxeAlbumDetector.isDeluxe(text: onlineMetadata.album)
     }
 
-    /// The resolved online album name: cleaned to standard studio album title unless the track is from a deluxe edition.
-    public var effectiveOnlineAlbum: String {
-        if !isLocalDeluxe && isOnlineDeluxe {
-            return DeluxeAlbumDetector.cleanToStandardAlbumName(onlineMetadata.album)
+    /// Indicates if this record represents a single release.
+    public var isSingleRelease: Bool {
+        if onlineMetadata.isSingle { return true }
+        let onlineAlbumLower = onlineMetadata.album.lowercased()
+        if onlineAlbumLower.hasSuffix(" - single") || onlineAlbumLower.hasSuffix(" (single)") || onlineAlbumLower.hasSuffix(" [single]") || onlineAlbumLower == "single" {
+            return true
         }
-        return onlineMetadata.album
+        let localAlbumLower = localTrack.album.lowercased()
+        if localAlbumLower.hasSuffix(" - single") || localAlbumLower.hasSuffix(" (single)") || localAlbumLower == "single" {
+            return true
+        }
+        let cleanOnlineAlbum = DeluxeAlbumDetector.cleanToStandardAlbumName(onlineMetadata.album).lowercased()
+        let cleanOnlineTitle = DeluxeAlbumDetector.cleanToStandardAlbumName(onlineMetadata.title).lowercased()
+        if !cleanOnlineTitle.isEmpty && cleanOnlineAlbum == cleanOnlineTitle && (onlineMetadata.totalTracks == nil || onlineMetadata.totalTracks! <= 2) {
+            return true
+        }
+        return false
+    }
+
+    /// Resolves the edition preference for this track (normal, deluxe, or unspecified defaulting to deluxe).
+    public var editionPreference: AlbumEditionPreference {
+        DeluxeAlbumDetector.resolveEditionPreference(localTrack: localTrack)
+    }
+
+    /// The resolved online album name based on the edition preference:
+    /// - If the track is a single: album name IS the track title!
+    /// - If local track has Deluxe in album name, NEVER overwrite for the non-deluxe version.
+    /// - If normal: clean to standard studio album title.
+    /// - If deluxe or unspecified: use full deluxe album title.
+    public var effectiveOnlineAlbum: String {
+        // If it's a single release, name the album as the track name!
+        if isSingleRelease {
+            return effectiveOnlineTitle
+        }
+
+        if isLocalDeluxe && !isOnlineDeluxe {
+            return localTrack.album
+        }
+
+        switch editionPreference {
+        case .normal:
+            if isOnlineDeluxe {
+                return DeluxeAlbumDetector.cleanToStandardAlbumName(onlineMetadata.album)
+            }
+            return onlineMetadata.album
+        case .deluxe, .unspecified:
+            return onlineMetadata.album
+        }
     }
 
     // Controls is exact album match
     public var isExactAlbumMatch: Bool {
-        // Norm local
         let normLocal = localTrack.album.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        // Norm online
         let normOnline = effectiveOnlineAlbum.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         return !normLocal.isEmpty && normLocal != "unknown album" && normLocal == normOnline
     }
 
     // Controls is album override ignored to preserve local album
     public var isAlbumOverrideIgnoredToPreserveLocalAlbum: Bool {
-        // Local has valid album
-        let localHasValidAlbum = !localTrack.album.isEmpty &&
-                                 localTrack.album.lowercased() != "unknown album" &&
-                                 !localTrack.album.lowercased().hasSuffix(" - single") &&
-                                 !localTrack.album.lowercased().hasSuffix(" (single)") &&
-                                 localTrack.album.lowercased() != "single"
-        return localHasValidAlbum && (onlineMetadata.isSingle || onlineMetadata.isCompilation)
+        if isLocalDeluxe && !isOnlineDeluxe {
+            return true // Never overwrite local Deluxe album with a non-deluxe candidate
+        }
+
+        let localHasValidStudioAlbum = !localTrack.album.isEmpty &&
+                                       localTrack.album.lowercased() != "unknown album" &&
+                                       !localTrack.album.lowercased().hasSuffix(" - single") &&
+                                       !localTrack.album.lowercased().hasSuffix(" (single)") &&
+                                       localTrack.album.lowercased() != "single" &&
+                                       localTrack.album.lowercased() != localTrack.title.lowercased()
+        return localHasValidStudioAlbum && onlineMetadata.isCompilation
     }
 
     // Controls is single ignored to preserve local album
@@ -155,24 +220,70 @@ public struct MetadataDiff: Identifiable, Codable, Sendable, Hashable {
         isAlbumOverrideIgnoredToPreserveLocalAlbum
     }
 
-    // Controls has local feature credit
-    public var hasLocalFeatureCredit: Bool {
-        // Title lower
-        let titleLower = localTrack.title.lowercased()
-        // Artist lower
+    /// Indicates if the local track has multiple artists or collaborative credits.
+    public var hasMultipleLocalArtists: Bool {
         let artistLower = localTrack.artist.lowercased()
+        if artistLower.contains(" & ") || artistLower.contains(", ") ||
+           artistLower.contains(" feat.") || artistLower.contains(" feat ") ||
+           artistLower.contains(" ft.") || artistLower.contains(" ft ") ||
+           artistLower.contains(" with ") || artistLower.contains(" x ") ||
+           artistLower.contains(" vs. ") || artistLower.contains(" vs ") {
+            return true
+        }
+        return ArtistParser.parseArtists(from: localTrack.artist).count > 1
+    }
+
+    // Controls has local feature credit in title or artist
+    public var hasLocalFeatureCredit: Bool {
+        let titleLower = localTrack.title.lowercased()
         return titleLower.contains("feat.") || titleLower.contains("feat ") ||
                titleLower.contains("ft.") || titleLower.contains("ft ") ||
-               artistLower.contains("feat.") || artistLower.contains("ft.") ||
-               artistLower.contains(" & ")
+               titleLower.contains("with ") ||
+               hasMultipleLocalArtists
+    }
+
+    /// Smart decision whether local artist metadata is richer / multi-artist and should not be overwritten by a single artist.
+    public var shouldPreserveLocalArtist: Bool {
+        if preserveLocalTitleAndArtist { return true }
+        if hasMultipleLocalArtists {
+            let onlineArtists = ArtistParser.parseArtists(from: onlineMetadata.artist)
+            // If local has multiple artists and online only has 1 artist or fewer, keep local!
+            if onlineArtists.count <= 1 {
+                return true
+            }
+        }
+        return false
+    }
+
+    /// Smart decision whether local title metadata has feature credits that should be preserved.
+    public var shouldPreserveLocalTitle: Bool {
+        if preserveLocalTitleAndArtist { return true }
+        let localHasFeature = localTrack.title.lowercased().contains("feat") || localTrack.title.lowercased().contains("ft.")
+        let onlineHasFeature = onlineMetadata.title.lowercased().contains("feat") || onlineMetadata.title.lowercased().contains("ft.")
+        if localHasFeature && !onlineHasFeature {
+            return true
+        }
+        return false
+    }
+
+    /// The effective artist name to apply: protects local multi-artist tags from single-artist downgrades.
+    public var effectiveOnlineArtist: String {
+        shouldPreserveLocalArtist ? localTrack.artist : onlineMetadata.artist
+    }
+
+    /// The effective title to apply: protects local featured artists in titles from stripping.
+    public var effectiveOnlineTitle: String {
+        shouldPreserveLocalTitle ? localTrack.title : onlineMetadata.title
     }
 
     public var titleChanged: Bool {
-        localTrack.title.trimmingCharacters(in: .whitespacesAndNewlines) != onlineMetadata.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        if shouldPreserveLocalTitle { return false }
+        return localTrack.title.trimmingCharacters(in: .whitespacesAndNewlines) != onlineMetadata.title.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     public var artistChanged: Bool {
-        localTrack.artist.trimmingCharacters(in: .whitespacesAndNewlines) != onlineMetadata.artist.trimmingCharacters(in: .whitespacesAndNewlines)
+        if shouldPreserveLocalArtist { return false }
+        return localTrack.artist.trimmingCharacters(in: .whitespacesAndNewlines) != onlineMetadata.artist.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     public var albumChanged: Bool {
@@ -192,48 +303,50 @@ public struct MetadataDiff: Identifiable, Codable, Sendable, Hashable {
 
     // Controls is year transferred from local
     public var isYearTransferredFromLocal: Bool {
-        (onlineMetadata.releaseYear == nil || onlineMetadata.releaseYear == 0) && (localTrack.year != nil && localTrack.year! > 0)
+        (onlineMetadata.releaseYear == nil || onlineMetadata.releaseYear == 0) && ((localTrack.year ?? 0) > 0)
     }
 
     public var genreChanged: Bool {
-        false
+        guard let onlineGenre = onlineMetadata.genre, !onlineGenre.isEmpty, onlineGenre != "Unknown Genre", onlineGenre != "—" else { return false }
+        let isLocalGenreMissing = localTrack.genre == nil || localTrack.genre?.isEmpty == true || localTrack.genre == "Unknown Genre" || localTrack.genre == "—"
+        return isLocalGenreMissing
     }
 
     // Controls is genre transferred from local
     public var isGenreTransferredFromLocal: Bool {
-        false
+        let isOnlineGenreMissing = onlineMetadata.genre == nil || onlineMetadata.genre?.isEmpty == true || onlineMetadata.genre == "Unknown Genre" || onlineMetadata.genre == "—"
+        let hasLocalGenre = localTrack.genre != nil && !localTrack.genre!.isEmpty && localTrack.genre != "Unknown Genre" && localTrack.genre != "—"
+        return isOnlineGenreMissing && hasLocalGenre
     }
 
     public var trackNumberChanged: Bool {
-        // If the track is from a deluxe release, preserve local track number if already set
-        if (isLocalDeluxe || isOnlineDeluxe) && (localTrack.trackNumber != nil && localTrack.trackNumber! > 0) {
+        // If local track already has a valid track number (> 0), never overwrite with online data!
+        if let localNum = localTrack.trackNumber, localNum > 0 {
             return false
         }
-        // Ensure preconditions are met before proceeding
+        // Infill missing local track number if online provides one
         guard let onlineTrackNum = onlineMetadata.trackNumber, onlineTrackNum > 0 else { return false }
-        return localTrack.trackNumber != onlineTrackNum
+        return true
     }
 
     // Controls is track number transferred from local
     public var isTrackNumberTransferredFromLocal: Bool {
-        // Flag indicating if deluxe protected
-        let isDeluxeProtected = (isLocalDeluxe || isOnlineDeluxe) && (localTrack.trackNumber != nil && localTrack.trackNumber! > 0)
-        // Online missing
-        let onlineMissing = (onlineMetadata.trackNumber == nil || onlineMetadata.trackNumber == 0)
-        return (onlineMissing || isDeluxeProtected) && (localTrack.trackNumber != nil && localTrack.trackNumber! > 0)
+        (localTrack.trackNumber ?? 0) > 0
     }
 
     public var artworkUpgraded: Bool {
-        // Ensure preconditions are met before proceeding
+        // Ensure online artwork exists
         guard onlineMetadata.artworkURL != nil else { return false }
-        // Missing local artwork
-        if localTrack.artworkKey == nil || localTrack.artworkKey?.isEmpty == true {
+        // 1. Missing local artwork -> upgrade!
+        let hasLocalArtwork = localTrack.artworkKey != nil && !localTrack.artworkKey!.isEmpty
+        if !hasLocalArtwork {
             return true
         }
-        // Different album or artist cover from official online release
-        if albumChanged || artistChanged {
+        // 2. Only change artwork if the album changed!
+        if albumChanged {
             return true
         }
+        // Retain verified local artwork
         return false
     }
 
@@ -243,14 +356,33 @@ public struct MetadataDiff: Identifiable, Codable, Sendable, Hashable {
         var count = 0
         if yearChanged { count += 1 }
         if trackNumberChanged { count += 1 }
+        if genreChanged { count += 1 }
         if artworkUpgraded { count += 1 }
         if albumChanged { count += 1 }
-        if !preserveLocalTitleAndArtist {
-            if titleChanged { count += 1 }
-            if artistChanged { count += 1 }
-        }
+        if titleChanged { count += 1 }
+        if artistChanged { count += 1 }
         return count
     }
+
+    /// Human-readable list of specific metadata fields being filled or enriched for this track.
+    public var tagInfillSummary: [String] {
+        var summary: [String] = []
+        if titleChanged { summary.append("Title: \(effectiveOnlineTitle)") }
+        if artistChanged { summary.append("Artist: \(effectiveOnlineArtist)") }
+        if albumChanged { summary.append("Album: \(effectiveOnlineAlbum)") }
+        if yearChanged, let y = onlineMetadata.releaseYear { summary.append("Year: \(y)") }
+        if trackNumberChanged, let tn = onlineMetadata.trackNumber { summary.append("Track #: \(tn)") }
+        if genreChanged, let g = onlineMetadata.genre { summary.append("Genre: \(g)") }
+        if artworkUpgraded { summary.append("High-Res Artwork") }
+        return summary
+    }
+}
+
+/// Album edition preference categorization for matching and tag injection.
+public enum AlbumEditionPreference: String, Sendable, Codable {
+    case normal
+    case deluxe
+    case unspecified
 }
 
 /// Utility engine for detecting Deluxe / Expanded / Collector's / Anniversary editions,
@@ -293,6 +425,21 @@ public enum DeluxeAlbumDetector {
     /// Determines if a local track is explicitly from a deluxe edition (via its local album tag or title).
     public static func isLocalTrackFromDeluxe(localTrack: Track) -> Bool {
         isDeluxe(text: localTrack.album) || isDeluxe(text: localTrack.title)
+    }
+
+    /// Resolves the album edition preference according to the user's exact specification:
+    /// - Normal album: local metadata has a normal album with nothing else -> `.normal`
+    /// - Deluxe album: local metadata explicitly has deluxe keywords in album or title -> `.deluxe`
+    /// - Nothing: local metadata has empty or unknown album -> defaults to `.deluxe`
+    public static func resolveEditionPreference(localTrack: Track) -> AlbumEditionPreference {
+        let trimmedAlbum = localTrack.album.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmedAlbum.isEmpty || trimmedAlbum.lowercased() == "unknown album" || trimmedAlbum.lowercased() == "unknown" {
+            return .deluxe
+        }
+        if isLocalTrackFromDeluxe(localTrack: localTrack) {
+            return .deluxe
+        }
+        return .normal
     }
 
     /// Strips deluxe, expanded, anniversary, and collector's edition noise from an album name,

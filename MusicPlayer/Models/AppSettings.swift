@@ -197,6 +197,8 @@ public struct AppSettings: Codable, Sendable {
     public var playerBackgroundStyle: PlayerBackgroundStyle
     public var autoPlayNext: Bool
     public var rememberPlaybackPosition: Bool
+    // Minimum track length (in minutes) required to save and remember playback position
+    public var rememberPlaybackPositionMinMinutes: Double
     public var showAudioSpecsInPlayer: Bool
     // Enables smooth audio crossfade between consecutive tracks
     public var isCrossfadeEnabled: Bool
@@ -217,6 +219,8 @@ public struct AppSettings: Codable, Sendable {
     public var joinedArtists: [String]
     // Enables micro-fade when skipping tracks to prevent audio pops
     public var smoothSkippingEnabled: Bool
+    // Persistent user preference for lyrics mode display
+    public var isLyricsViewPreferred: Bool
 
     /// Backwards compatibility property
     public var accentTheme: AppTheme {
@@ -231,6 +235,7 @@ public struct AppSettings: Codable, Sendable {
         playerBackgroundStyle: PlayerBackgroundStyle = .albumColor,
         autoPlayNext: Bool = true,
         rememberPlaybackPosition: Bool = true,
+        rememberPlaybackPositionMinMinutes: Double = 10.0,
         showAudioSpecsInPlayer: Bool = true,
         isCrossfadeEnabled: Bool = false,
         crossfadeDuration: Double = 4.0,
@@ -244,13 +249,15 @@ public struct AppSettings: Codable, Sendable {
         tapToPlayNext: Bool = false,
         customShuffleTarget: ShuffleTarget = .all,
         joinedArtists: [String] = [],
-        smoothSkippingEnabled: Bool = false
+        smoothSkippingEnabled: Bool = false,
+        isLyricsViewPreferred: Bool = false
     ) {
         self.appTheme = appTheme
         self.defaultLibraryCategory = defaultLibraryCategory
         self.playerBackgroundStyle = playerBackgroundStyle
         self.autoPlayNext = autoPlayNext
         self.rememberPlaybackPosition = rememberPlaybackPosition
+        self.rememberPlaybackPositionMinMinutes = rememberPlaybackPositionMinMinutes
         self.showAudioSpecsInPlayer = showAudioSpecsInPlayer
         self.isCrossfadeEnabled = isCrossfadeEnabled
         self.crossfadeDuration = crossfadeDuration
@@ -265,6 +272,7 @@ public struct AppSettings: Codable, Sendable {
         self.customShuffleTarget = customShuffleTarget
         self.joinedArtists = joinedArtists
         self.smoothSkippingEnabled = smoothSkippingEnabled
+        self.isLyricsViewPreferred = isLyricsViewPreferred
     }
 
     // MARK: - Custom Codable to seamlessly decode older settings JSON
@@ -281,6 +289,8 @@ public struct AppSettings: Codable, Sendable {
         case autoPlayNext
         // Remember playback position option
         case rememberPlaybackPosition
+        // Minimum track length in minutes to remember playback position
+        case rememberPlaybackPositionMinMinutes
         // Show audio specs in player option
         case showAudioSpecsInPlayer
         // Is crossfade enabled option
@@ -309,6 +319,8 @@ public struct AppSettings: Codable, Sendable {
         case joinedArtists
         // Smooth skipping enabled option
         case smoothSkippingEnabled
+        // Persistent lyrics view preference option
+        case isLyricsViewPreferred
     }
 
     // Initialize with configured properties
@@ -336,6 +348,7 @@ public struct AppSettings: Codable, Sendable {
         self.playerBackgroundStyle = try container.decodeIfPresent(PlayerBackgroundStyle.self, forKey: .playerBackgroundStyle) ?? .albumColor
         self.autoPlayNext = try container.decodeIfPresent(Bool.self, forKey: .autoPlayNext) ?? true
         self.rememberPlaybackPosition = try container.decodeIfPresent(Bool.self, forKey: .rememberPlaybackPosition) ?? true
+        self.rememberPlaybackPositionMinMinutes = try container.decodeIfPresent(Double.self, forKey: .rememberPlaybackPositionMinMinutes) ?? 10.0
         self.showAudioSpecsInPlayer = try container.decodeIfPresent(Bool.self, forKey: .showAudioSpecsInPlayer) ?? true
         self.isCrossfadeEnabled = try container.decodeIfPresent(Bool.self, forKey: .isCrossfadeEnabled) ?? false
         self.crossfadeDuration = try container.decodeIfPresent(Double.self, forKey: .crossfadeDuration) ?? 4.0
@@ -350,6 +363,7 @@ public struct AppSettings: Codable, Sendable {
         self.customShuffleTarget = try container.decodeIfPresent(ShuffleTarget.self, forKey: .customShuffleTarget) ?? .all
         self.joinedArtists = try container.decodeIfPresent([String].self, forKey: .joinedArtists) ?? []
         self.smoothSkippingEnabled = try container.decodeIfPresent(Bool.self, forKey: .smoothSkippingEnabled) ?? false
+        self.isLyricsViewPreferred = try container.decodeIfPresent(Bool.self, forKey: .isLyricsViewPreferred) ?? false
     }
 
     // Encode
@@ -361,6 +375,7 @@ public struct AppSettings: Codable, Sendable {
         try container.encode(playerBackgroundStyle, forKey: .playerBackgroundStyle)
         try container.encode(autoPlayNext, forKey: .autoPlayNext)
         try container.encode(rememberPlaybackPosition, forKey: .rememberPlaybackPosition)
+        try container.encode(rememberPlaybackPositionMinMinutes, forKey: .rememberPlaybackPositionMinMinutes)
         try container.encode(showAudioSpecsInPlayer, forKey: .showAudioSpecsInPlayer)
         try container.encode(isCrossfadeEnabled, forKey: .isCrossfadeEnabled)
         try container.encode(crossfadeDuration, forKey: .crossfadeDuration)
@@ -375,6 +390,7 @@ public struct AppSettings: Codable, Sendable {
         try container.encode(customShuffleTarget, forKey: .customShuffleTarget)
         try container.encode(joinedArtists, forKey: .joinedArtists)
         try container.encode(smoothSkippingEnabled, forKey: .smoothSkippingEnabled)
+        try container.encode(isLyricsViewPreferred, forKey: .isLyricsViewPreferred)
     }
 }
 

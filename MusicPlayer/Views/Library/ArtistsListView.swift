@@ -41,21 +41,33 @@ public struct ArtistsListView: View {
                 LazyVGrid(columns: columns, spacing: 10) {
                     ForEach(libraryStore.filteredArtists) { artist in
                         NavigationLink(destination: ArtistDetailView(artist: artist, libraryStore: libraryStore, playerService: playerService)) {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(artist.name)
-                                    .font(.system(size: 14, weight: .bold))
-                                    .foregroundStyle(Color.primary)
-                                    .lineLimit(2)
-                                    .multilineTextAlignment(.leading)
+                            HStack(spacing: 12) {
+                                AlbumArtworkView(
+                                    artworkKey: artist.mostRecentArtworkKey,
+                                    title: artist.name,
+                                    subtitle: artist.discographySummary,
+                                    cornerRadius: 6
+                                )
+                                .frame(width: 48, height: 48)
+                                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
 
-                                Text(artist.discographySummary)
-                                    .font(.system(size: 11, design: .monospaced))
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(1)
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(artist.name)
+                                        .font(.system(size: 13, weight: .bold))
+                                        .foregroundStyle(Color.primary)
+                                        .lineLimit(2)
+                                        .multilineTextAlignment(.leading)
+
+                                    Text(artist.discographySummary)
+                                        .font(.system(size: 10, design: .monospaced))
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(1)
+                                }
+                                Spacer(minLength: 0)
                             }
                             .frame(maxWidth: .infinity, minHeight: 64, alignment: .leading)
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 12)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 8)
                             .background(appTheme.secondaryBackgroundColor.opacity(0.6))
                             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                         }

@@ -73,8 +73,9 @@ public final class SecurityScopedBookmark: @unchecked Sendable {
         // Cleanup upon exiting scope
         defer { lock.unlock() }
 
-        // If we already have an active URL that exists on disk, reuse it without leaking startAccessing tokens
+        // If we already have an active URL, ensure active access and check disk existence
         if let active = activeSecurityScopedURL {
+            _ = active.startAccessingSecurityScopedResource()
             if FileManager.default.fileExists(atPath: active.path) {
                 return active
             } else {

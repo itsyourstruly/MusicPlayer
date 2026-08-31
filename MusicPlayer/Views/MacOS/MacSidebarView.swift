@@ -288,7 +288,7 @@ public struct MacSidebarView: View {
                     .foregroundStyle(appTheme.primaryTextColor.opacity(0.85))
                     .lineLimit(1)
 
-                if let lastScan = libraryStore.settings.lastScanDate {
+                if libraryStore.settings.lastScanDate != nil {
                     Text("\(libraryStore.tracks.count) tracks indexed")
                         .font(.system(size: 9))
                         .foregroundStyle(.tertiary)

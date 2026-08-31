@@ -78,7 +78,7 @@ public enum MetadataSanitizer {
         // Parsed artist
         var parsedArtist = rawArtist
         // Parsed album
-        var parsedAlbum = rawAlbum
+        let parsedAlbum = rawAlbum
 
         if isGenericOrEmpty(rawTitle) || isGenericOrEmpty(rawArtist) {
             if let fromFilename = parseFilename(url: track.url) {
@@ -290,21 +290,19 @@ public enum MetadataSanitizer {
 
     // MARK: - Completeness Pre-Check (Zero Network Cost)
 
-    /// Evaluates if a track already has all core metadata fields and artwork populated.
-    public static func isFullyTagged(track: Track) -> Bool {
-        // Ensure preconditions are met before proceeding
+    /// Evaluates if a track has all essential metadata spots filled (Title, Artist, Album, Year, and Artwork).
+    public static func hasAllSpotsFilled(track: Track) -> Bool {
         guard !isGenericOrEmpty(track.title) else { return false }
-        // Ensure preconditions are met before proceeding
         guard !isUnknownArtist(track.artist) else { return false }
-        // Ensure preconditions are met before proceeding
         guard !isUnknownAlbum(track.album) else { return false }
-        // Ensure preconditions are met before proceeding
-        guard let year = track.year, year > 1900 else { return false }
-        // Ensure preconditions are met before proceeding
-        guard let trackNum = track.trackNumber, trackNum > 0 else { return false }
-        // Ensure preconditions are met before proceeding
+        guard let year = track.year, (1900...2099).contains(year) else { return false }
         guard let artKey = track.artworkKey, !artKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
         return true
+    }
+
+    /// Evaluates if a track already has all core metadata fields and artwork populated.
+    public static func isFullyTagged(track: Track) -> Bool {
+        hasAllSpotsFilled(track: track)
     }
 
     /// Constructs a verified OnlineTrackMetadata model from an already complete local track.
@@ -337,6 +335,18 @@ public enum MetadataSanitizer {
             .joined(separator: " ")
     }
 
+    /// Preserves exact artist name strings for catalog queries, stripping only outer wrapping quotes or brackets.
+    public static func cleanArtistSearchTerm(_ artist: String) -> String {
+        let trimmed = artist.trimmingCharacters(in: .whitespacesAndNewlines)
+        var cleaned = trimmed
+        if (cleaned.hasPrefix("\"") && cleaned.hasSuffix("\"")) ||
+           (cleaned.hasPrefix("(") && cleaned.hasSuffix(")")) ||
+           (cleaned.hasPrefix("[") && cleaned.hasSuffix("]")) {
+            cleaned = String(cleaned.dropFirst().dropLast()).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return cleaned
+    }
+
     // Is generic or empty
     public static func isGenericOrEmpty(_ string: String) -> Bool {
         // Trimmed
@@ -360,6 +370,132 @@ public enum MetadataSanitizer {
         // Lower
         let lower = album.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
         return lower.isEmpty || lower == "unknown album" || lower == "unknown"
+    }
+
+    // MARK: - Remix, Alternate Version & Live Detection & Album Routing
+
+    public static func isFreestyleOrBonusTrack(title: String, album: String = "") -> Bool {
+        let titleLower = title.lowercased()
+        let albumLower = album.lowercased()
+        let keywords = ["freestyle", "bonus track", "bonus cut", "bonus song", "bonus"]
+        return keywords.contains { titleLower.contains($0) || albumLower.contains($0) }
+    }
+
+    private static let alternateVersionRegex = try? NSRegularExpression(
+        pattern: #"[\(\[\{]\s*(?:clear\s+channel|heineken|red\s+star|session|sessions|live\s+session|bbc|live\s+lounge|tiny\s*desk|spotify\s+session|apple\s+music\s+session|itunes\s+session|aol\s+session|stripped|unplugged|mtv|exclusive|performance|snippet|demo|unreleased|alternate|alternative|alt\.?\s+take|take\s+\d+|rough\s+mix|work\s+in\s+progress|wip|early\s+version|outtake|b-side|clean\s+version|explicit\s+version|instrumental|acapella|a\s+cappella|orchestral|acoustic|dub|vip|re-?mix|club\s+mix|extended|radio\s+edit|radio\s+version|dance\s+mix|slowed|reverb|sped\s+up|speed\s+up|chopped\s+(?:and|&)\s+screwed|mash-?up|re-?work|re-?edit|bootleg|nightcore|daycore|intro\s+version|outro\s+version|single\s+version|album\s+version|re-?recorded|flip|mix|edit|version).*?[\)\]\}]|\s+-\s*(?:clear\s+channel|heineken|red\s+star|session|sessions|live\s+session|bbc|live\s+lounge|tiny\s*desk|stripped|unplugged|mtv|exclusive|performance|snippet|demo|unreleased|alternate|alternative|rough\s+mix|outtake|b-side|clean\s+version|instrumental|acapella|acoustic|dub|vip|re-?mix|extended|radio\s+edit|radio\s+version|slowed|sped\s+up|mash-?up|re-?work|re-?edit|bootleg|nightcore|re-?recorded|flip|mix|edit|version).*$"#,
+        options: [.caseInsensitive]
+    )
+
+    private static let remixKeywords: [String] = [
+        "remix", "re-mix", "club mix", "dub mix", "vip mix", "vip", "extended mix",
+        "extended version", "acoustic version", "acoustic", "instrumental",
+        "sped up", "speed up", "slowed + reverb", "slowed & reverb", "slowed down",
+        "chopped and screwed", "chopped & screwed", "radio edit", "dance mix",
+        "bootleg", "nightcore", "daycore", "flip", "acapella", "a cappella", "orchestral",
+        "stripped", "demo", "unreleased", "alternate", "alternative",
+        "session", "sessions", "clear channel", "heineken", "red star", "bbc",
+        "live lounge", "tinydesk", "tiny desk", "mtv", "unplugged", "exclusive",
+        "outtake", "b-side", "rough mix", "re-recorded", "rerecorded",
+        "snippet", "clean version", "explicit version", "radio version", "re-edit",
+        "re-work", "rework", "mashup", "mash-up", "intro version", "outro version"
+    ]
+
+    private static let liveKeywords: [String] = [
+        "live at", "live in", "live from", "(live)", "[live]", "- live",
+        "live recording", "recorded live", "in concert", "live session", "unplugged",
+        "live festival", "tour live"
+    ]
+
+    /// Determines if a track title or album title indicates a remix or alternate version.
+    public static func isRemixOrAlternateVersion(title: String, album: String = "") -> Bool {
+        // Freestyles and bonus tracks stay in singles, not alternates/remixes
+        if isFreestyleOrBonusTrack(title: title, album: album) {
+            return false
+        }
+
+        let titleLower = title.lowercased()
+        let albumLower = album.lowercased()
+
+        // 1. Regex evaluation for bracketed or trailing descriptors (e.g. "Jesus Walks (Clear Channel...)")
+        if let regex = alternateVersionRegex {
+            let nsTitle = title as NSString
+            if regex.firstMatch(in: title, options: [], range: NSRange(location: 0, length: nsTitle.length)) != nil {
+                return true
+            }
+            let nsAlbum = album as NSString
+            if regex.firstMatch(in: album, options: [], range: NSRange(location: 0, length: nsAlbum.length)) != nil {
+                return true
+            }
+        }
+
+        // 2. Keyword check
+        for kw in remixKeywords {
+            if titleLower.contains(kw) || albumLower.contains(kw) {
+                return true
+            }
+        }
+        return false
+    }
+
+    /// Determines if a track title or album title indicates a live concert recording.
+    public static func isLiveRecording(title: String, album: String = "") -> Bool {
+        let titleLower = title.lowercased()
+        let albumLower = album.lowercased()
+        for kw in liveKeywords {
+            if titleLower.contains(kw) || albumLower.contains(kw) {
+                return true
+            }
+        }
+        return false
+    }
+
+    /// Generates clean album title for alternates without appending "(Alternates)".
+    public static func remixAlbumName(forStandardAlbum rawAlbum: String) -> String {
+        var clean = DeluxeAlbumDetector.cleanToStandardAlbumName(rawAlbum).trimmingCharacters(in: .whitespacesAndNewlines)
+        if clean.isEmpty || clean.lowercased() == "unknown album" || clean.lowercased() == "unknown" {
+            return rawAlbum.isEmpty ? "Unknown Album" : rawAlbum
+        }
+        if clean.hasSuffix(" (Alternates)") {
+            clean = String(clean.dropLast(" (Alternates)".count)).trimmingCharacters(in: .whitespacesAndNewlines)
+        } else if clean.hasSuffix("(Alternates)") {
+            clean = String(clean.dropLast("(Alternates)".count)).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return clean.isEmpty ? rawAlbum : clean
+    }
+
+    /// Generates clean Live album title (e.g. "Graduation (Live)").
+    public static func liveAlbumName(forStandardAlbum rawAlbum: String) -> String {
+        let clean = DeluxeAlbumDetector.cleanToStandardAlbumName(rawAlbum).trimmingCharacters(in: .whitespacesAndNewlines)
+        if clean.isEmpty || clean.lowercased() == "unknown album" || clean.lowercased() == "unknown" {
+            return "Live"
+        }
+        if clean.hasSuffix("(Live)") {
+            return clean
+        }
+        return "\(clean) (Live)"
+    }
+
+    // MARK: - 4-Digit Release Year Extractor
+
+    private static let fourDigitYearRegex = try? NSRegularExpression(
+        pattern: #"\b(19\d{2}|20\d{2})\b"#,
+        options: []
+    )
+
+    /// Extracts a 4-digit release year (1900..2099) from any date, timestamp, or freeform metadata string.
+    public static func extract4DigitYear(from text: String?) -> Int? {
+        guard let text = text?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else { return nil }
+        let nsText = text as NSString
+        if let match = fourDigitYearRegex?.firstMatch(in: text, options: [], range: NSRange(location: 0, length: nsText.length)) {
+            if let yearInt = Int(nsText.substring(with: match.range)), (1900...2099).contains(yearInt) {
+                return yearInt
+            }
+        }
+        let digits = text.filter { $0.isNumber }
+        if digits.count >= 4, let y = Int(digits.prefix(4)), (1900...2099).contains(y) {
+            return y
+        }
+        return nil
     }
 
     // Sanitize brackets and punctuation
@@ -405,5 +541,73 @@ public enum MetadataSanitizer {
 
         return str.trimmingCharacters(in: CharacterSet(charactersIn: " -_.,/\\"))
     }
+
+    // MARK: - String Normalization & Canonical Genre Taxonomy
+
+    /// Strips diacritics, accents, and decomposes unicode characters for uniform matching.
+    public static func stripDiacriticsAndAccents(_ text: String) -> String {
+        text.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
+    }
+
+    /// Normalizes raw scraped genres to canonical standard taxonomies (ID3/Apple/Deezer standards).
+    public static func normalizeGenre(_ rawGenre: String?) -> String? {
+        guard let raw = rawGenre?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else { return nil }
+        let lower = stripDiacriticsAndAccents(raw).lowercased()
+
+        if lower == "unknown genre" || lower == "unknown" || lower == "other" || lower == "—" || lower == "-" || lower == "none" {
+            return nil
+        }
+
+        // Canonical mapping table
+        if lower.contains("hip hop") || lower.contains("hip-hop") || lower.contains("rap") || lower.contains("trap") || lower.contains("drill") {
+            return "Hip-Hop/Rap"
+        }
+        if lower.contains("r&b") || lower.contains("rnb") || lower.contains("soul") || lower.contains("neo-soul") || lower.contains("motown") {
+            return "R&B/Soul"
+        }
+        if lower.contains("alt") || lower.contains("indie") || lower.contains("grunge") || lower.contains("shoegaze") {
+            return "Alternative"
+        }
+        if lower.contains("metal") || lower.contains("deathcore") || lower.contains("metalcore") || lower.contains("thrash") {
+            return "Metal"
+        }
+        if lower.contains("hard rock") || lower.contains("classic rock") || lower.contains("punk") || lower.contains("rock") {
+            return "Rock"
+        }
+        if lower.contains("synthpop") || lower.contains("synth-pop") || lower.contains("electropop") || lower.contains("dance pop") || lower.contains("pop") || lower.contains("k-pop") || lower.contains("j-pop") {
+            return "Pop"
+        }
+        if lower.contains("electronic") || lower.contains("edm") || lower.contains("house") || lower.contains("techno") || lower.contains("trance") || lower.contains("dubstep") || lower.contains("dance") || lower.contains("ambient") || lower.contains("drum and bass") || lower.contains("dnb") {
+            return "Electronic"
+        }
+        if lower.contains("jazz") || lower.contains("bebop") || lower.contains("swing") || lower.contains("bossa nova") {
+            return "Jazz"
+        }
+        if lower.contains("classical") || lower.contains("baroque") || lower.contains("orchestral") || lower.contains("symphony") || lower.contains("opera") {
+            return "Classical"
+        }
+        if lower.contains("country") || lower.contains("bluegrass") || lower.contains("americana") {
+            return "Country"
+        }
+        if lower.contains("reggae") || lower.contains("dancehall") || lower.contains("dub") || lower.contains("ska") {
+            return "Reggae"
+        }
+        if lower.contains("latin") || lower.contains("reggaeton") || lower.contains("salsa") || lower.contains("bachata") || lower.contains("cumbia") {
+            return "Latin"
+        }
+        if lower.contains("soundtrack") || lower.contains("score") || lower.contains("ost") || lower.contains("film") || lower.contains("video game") {
+            return "Soundtrack"
+        }
+        if lower.contains("folk") || lower.contains("acoustic") || lower.contains("singer-songwriter") {
+            return "Folk"
+        }
+        if lower.contains("blues") {
+            return "Blues"
+        }
+
+        // Return title-cased trimmed original if not in mapping table
+        return raw.capitalized
+    }
 }
+
 

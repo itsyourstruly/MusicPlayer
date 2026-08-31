@@ -26,9 +26,7 @@ public struct PlayerControlsView: View {
                 // Previous button
                 Button(action: {
                     HapticFeedback.selectionChanged()
-                    withAnimation(.spring(response: 0.25, dampingFraction: 0.75)) {
-                        playerService.previous()
-                    }
+                    playerService.previous()
                 }) {
                     Text("PREV")
                         .font(.system(size: 19, weight: .heavy, design: .monospaced))
@@ -62,9 +60,7 @@ public struct PlayerControlsView: View {
                 // Next button
                 Button(action: {
                     HapticFeedback.selectionChanged()
-                    withAnimation(.spring(response: 0.25, dampingFraction: 0.75)) {
-                        playerService.next()
-                    }
+                    playerService.next()
                 }) {
                     Text("NEXT")
                         .font(.system(size: 19, weight: .heavy, design: .monospaced))
