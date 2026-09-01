@@ -581,7 +581,8 @@ public final class LibraryStore {
         // Scanned tracks with smart differential fast-path
         let scannedTracks = await AudioScannerService.shared.scanDirectory(
             at: url,
-            existingTracks: cachedExistingTracks
+            existingTracks: cachedExistingTracks,
+            scanMethod: self.settings.libraryScanMethod
         ) { [weak self] current, total, name in
             Task { @MainActor in
                 guard let self = self else { return }
@@ -949,8 +950,6 @@ public final class LibraryStore {
 
         for track in self.tracks {
             let trimmedAlbum = track.album.trimmingCharacters(in: .whitespacesAndNewlines)
-            let isRemix = MetadataSanitizer.isRemixOrAlternateVersion(title: track.title, album: track.album)
-            let isLive = MetadataSanitizer.isLiveRecording(title: track.title, album: track.album)
 
             if trimmedAlbum.isEmpty || trimmedAlbum.lowercased() == "unknown album" || trimmedAlbum.lowercased() == "unknown" {
                 standaloneSingleTracks.append(track)
@@ -958,16 +957,7 @@ public final class LibraryStore {
             }
 
             let baseNormAlbum = normalizeAlbumTitleForClustering(trimmedAlbum)
-            let normAlbum: String
-            if isRemix {
-                normAlbum = "\(baseNormAlbum)____alternates"
-            } else if isLive {
-                normAlbum = "\(baseNormAlbum)____live"
-            } else {
-                normAlbum = baseNormAlbum
-            }
-
-            albumTitleBuckets[normAlbum, default: []].append(track)
+            albumTitleBuckets[baseNormAlbum, default: []].append(track)
         }
 
         var rawAlbumClusters: [[Track]] = []
@@ -1047,17 +1037,8 @@ public final class LibraryStore {
         for groupTracks in rawAlbumClusters {
             guard let first = groupTracks.first else { continue }
 
-            let isRemixCluster = groupTracks.allSatisfy { MetadataSanitizer.isRemixOrAlternateVersion(title: $0.title, album: $0.album) }
-            let isLiveCluster = groupTracks.allSatisfy { MetadataSanitizer.isLiveRecording(title: $0.title, album: $0.album) }
             let baseAlbumTitle = first.album.isEmpty ? "Unknown Album" : first.album.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
-            let albumTitle: String
-            if isRemixCluster {
-                albumTitle = MetadataSanitizer.remixAlbumName(forStandardAlbum: baseAlbumTitle)
-            } else if isLiveCluster {
-                albumTitle = MetadataSanitizer.liveAlbumName(forStandardAlbum: baseAlbumTitle)
-            } else {
-                albumTitle = baseAlbumTitle
-            }
+            let albumTitle = baseAlbumTitle
 
             // Display Artist determination strictly for this unified album: list out each individual artist
             let explicitAlbumArtist = groupTracks.compactMap { $0.albumArtist?.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines) }.first { !$0.isEmpty && !MetadataSanitizer.isUnknownArtist($0) && $0.lowercased() != "various artists" && $0.lowercased() != "various" }

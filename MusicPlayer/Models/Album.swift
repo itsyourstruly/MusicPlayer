@@ -208,6 +208,24 @@ public struct Album: Identifiable, Codable, Sendable, Hashable {
         return !isSingle && !isRemix && !isLive
     }
 
+    /// Main canonical tracklist of the album (standard releases).
+    public var mainTracks: [Track] {
+        let alts = alternateTracks
+        if alts.isEmpty || alts.count == tracks.count {
+            return tracks
+        }
+        let altSet = Set(alts.map { $0.id })
+        return tracks.filter { !altSet.contains($0.id) }
+    }
+
+    /// Alternate versions belonging to this album (instrumentals, remixes, acoustics, live recordings, sped up, slowed, acapellas, etc.).
+    public var alternateTracks: [Track] {
+        tracks.filter {
+            MetadataSanitizer.isRemixOrAlternateVersion(title: $0.title, album: $0.album) ||
+            MetadataSanitizer.isLiveRecording(title: $0.title, album: $0.album)
+        }
+    }
+
     /// Resolved visual artwork key for this album (album tag artworkKey, falling back to first track with artwork).
     public var effectiveArtworkKey: String? {
         if let key = artworkKey, !key.isEmpty {

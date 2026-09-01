@@ -194,7 +194,7 @@ public struct FullScreenPlayerView: View {
                 }
         )
         .sheet(isPresented: $showingQueue) {
-            PlayerQueueView(playerService: playerService)
+            PlayerQueueView(playerService: playerService, libraryStore: libraryStore)
         }
         .sheet(isPresented: $showingFileInfo) {
             if let track = playerService.currentTrack {

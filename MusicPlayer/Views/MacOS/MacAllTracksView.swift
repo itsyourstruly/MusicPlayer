@@ -402,7 +402,6 @@ private struct MacTrackTableRowView: View {
         .contextMenu {
             Button("PLAY") { onPlay() }
             Button("PLAY NEXT") { onPlayNext() }
-            Button("ADD TO QUEUE") { onEnqueue() }
             Divider()
             Button("ADD TO PLAYLIST...") { onAddToPlaylist() }
             Button("GET INFO") { onShowTrackInfo() }

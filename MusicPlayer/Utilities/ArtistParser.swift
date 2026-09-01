@@ -16,80 +16,174 @@ public struct ArtistSegment: Identifiable, Hashable, Sendable {
     }
 }
 
-/// Robust parser for multi-artist metadata strings (supporting commas, ampersands, feat./ft., slashes, etc.)
+/// Robust, intelligent parser for multi-artist metadata strings (supporting commas, ampersands, feat./ft., slashes, etc.)
+/// with placeholder masking for compound artist names (e.g. "Tyler, The Creator", "Earth, Wind & Fire", "Simon & Garfunkel").
 public enum ArtistParser {
-    // Known individual artists / bands with internal commas, ampersands, or slashes that should NOT be split into multiple artists
-    private static let singleArtistExceptions: Set<String> = [
-        "tyler, the creator",
-        "earth, wind & fire",
-        "crosby, stills, nash & young",
-        "crosby, stills & nash",
-        "blood, sweat & tears",
-        "emerson, lake & palmer",
-        "simon & garfunkel",
-        "hall & oates",
-        "kool & the gang",
-        "kc & the sunshine band",
-        "huey lewis & the news",
-        "frankie lymon & the teenagers",
-        "gladys knight & the pips",
-        "joan jett & the blackhearts",
-        "tom petty and the heartbreakers",
-        "bob marley & the wailers",
-        "ziggy marley & the melody makers",
-        "sly & the family stone",
-        "captain & tennille",
-        "peaches & herb",
-        "ashford & simpson",
-        "sam & dave",
-        "ike & tina turner",
-        "brooks & dunn",
-        "dan + shay",
-        "florida georgia line",
-        "above & beyond",
-        "ac/dc"
-    ]
+    // Known compound artist / band names that contain internal commas, ampersands, pluses, or slashes
+    // Sorted longest first so longer multi-word names match before shorter substrings
+    private static let protectedArtists: [String] = [
+        "Tyler, The Creator",
+        "Earth, Wind & Fire",
+        "Earth, Wind and Fire",
+        "Crosby, Stills, Nash & Young",
+        "Crosby, Stills & Nash",
+        "Blood, Sweat & Tears",
+        "Emerson, Lake & Palmer",
+        "Simon & Garfunkel",
+        "Simon and Garfunkel",
+        "Daryl Hall & John Oates",
+        "Hall & Oates",
+        "Hall and Oates",
+        "Kool & The Gang",
+        "Kool and the Gang",
+        "KC & The Sunshine Band",
+        "KC and the Sunshine Band",
+        "Huey Lewis & The News",
+        "Huey Lewis and the News",
+        "Frankie Lymon & The Teenagers",
+        "Gladys Knight & The Pips",
+        "Joan Jett & The Blackhearts",
+        "Tom Petty and the Heartbreakers",
+        "Tom Petty & The Heartbreakers",
+        "Bob Marley & The Wailers",
+        "Bob Marley and the Wailers",
+        "Ziggy Marley & The Melody Makers",
+        "Sly & The Family Stone",
+        "Sly and the Family Stone",
+        "Captain & Tennille",
+        "Captain and Tennille",
+        "Peaches & Herb",
+        "Peaches and Herb",
+        "Ashford & Simpson",
+        "Ashford and Simpson",
+        "Sam & Dave",
+        "Sam and Dave",
+        "Ike & Tina Turner",
+        "Ike and Tina Turner",
+        "Brooks & Dunn",
+        "Brooks and Dunn",
+        "Dan + Shay",
+        "Dan and Shay",
+        "Florida Georgia Line",
+        "Above & Beyond",
+        "AC/DC",
+        "Marina & The Diamonds",
+        "Marina and the Diamonds",
+        "Florence + The Machine",
+        "Florence and the Machine",
+        "Fitz and the Tantrums",
+        "Fitz & The Tantrums",
+        "Edward Sharpe & The Magnetic Zeros",
+        "Echo & The Bunnymen",
+        "King Gizzard & The Lizard Wizard",
+        "Me First and the Gimme Gimmes",
+        "Siouxsie and the Banshees",
+        "Toots & The Maytals",
+        "Arms and Sleepers",
+        "Birds and Batteries",
+        "The Mamas & The Papas",
+        "The Mamas and the Papas",
+        "The Birds and the Bees",
+        "Portugal. The Man"
+    ].sorted { $0.count > $1.count }
+
+    private static let singleArtistExceptions: Set<String> = Set(protectedArtists.map { $0.lowercased() })
 
     /// Checks whether an artist string is a protected single entity.
     public static func isSingleArtistException(_ name: String) -> Bool {
         let clean = name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return singleArtistExceptions.contains(clean)
+        if singleArtistExceptions.contains(clean) { return true }
+        if clean.contains("tyler, the creator") || clean.contains("tyler the creator") {
+            return true
+        }
+        return false
     }
 
     // Covers multi-artist delimiter conventions: &, and, feat., ft., featuring, with, vs., x, comma, semicolon, pipe, slash
-    private static let delimiterPattern = #"(?:\s*;\s*|\s*\|\s*|\s+/\s+|\s*,\s*|\s+&\s+|\s+x\s+|\s+(?:feat\.?|ft\.?|featuring|with|vs\.?)\s+)"#
+    private static let delimiterPattern = #"(?:\s*;\s*|\s*\|\s*|\s+/\s+|\s*,\s*|\s+&\s+|\s+and\s+|\s+x\s+|\s+(?:feat\.?|ft\.?|featuring|with|vs\.?)\s+)"#
 
     // Compiled once at startup — NSRegularExpression is thread-safe after initialization
     private static let regex: NSRegularExpression? = {
         try? NSRegularExpression(pattern: delimiterPattern, options: [.caseInsensitive])
     }()
 
-    // Delimiter cleanup set
-    private static let unwantedChars = CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: ";|/,()[]\""))
+    // Delimiter and punctuation cleanup set
+    private static let unwantedChars = CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: ";|/,()[]\"'&+"))
 
     // MARK: - Parsing
 
-    /// Parses a raw artist string into discrete, individually selectable `ArtistSegment` tokens.
+    /// Parses a raw artist string into discrete, individually selectable `ArtistSegment` tokens with intelligent compound name protection.
     public static func parse(rawArtist: String) -> [ArtistSegment] {
         let trimmed = rawArtist.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             return [ArtistSegment(name: "Unknown Artist")]
         }
 
-        // If it's a known single-artist compound name (e.g. "Tyler, The Creator"), preserve intact
+        // 1. Direct match for protected entity
         if isSingleArtistException(trimmed) {
+            if let canonical = protectedArtists.first(where: { $0.caseInsensitiveCompare(trimmed) == .orderedSame }) {
+                return [ArtistSegment(name: canonical)]
+            }
+            if trimmed.lowercased().contains("tyler") && trimmed.lowercased().contains("creator") {
+                return [ArtistSegment(name: "Tyler, The Creator")]
+            }
             return [ArtistSegment(name: trimmed)]
+        }
+
+        // 2. Placeholder masking: preserve protected compound names prior to delimiter splitting
+        var workingText = trimmed
+        var placeholders: [String: String] = [:]
+        var placeholderIndex = 0
+
+        for protected in protectedArtists {
+            let escaped = NSRegularExpression.escapedPattern(for: protected)
+            let pattern = "(?i)(?:^|(?<=[\\s,;&|/]))" + escaped + "(?=[\\s,;&|/]|$)"
+            if let regex = try? NSRegularExpression(pattern: pattern) {
+                let nsWorking = workingText as NSString
+                let matches = regex.matches(in: workingText, options: [], range: NSRange(location: 0, length: nsWorking.length))
+                if !matches.isEmpty {
+                    let key = "___PROT_ARTIST_\(placeholderIndex)___"
+                    placeholders[key] = protected
+                    placeholderIndex += 1
+                    workingText = regex.stringByReplacingMatches(
+                        in: workingText,
+                        options: [],
+                        range: NSRange(location: 0, length: (workingText as NSString).length),
+                        withTemplate: key
+                    )
+                }
+            }
+        }
+
+        // Smart protection for Tyler, The Creator variations
+        if let tylerRegex = try? NSRegularExpression(pattern: "(?i)(?:^|(?<=[\\s,;&|/]))tyler,?\\s+the creator(?=[\\s,;&|/]|$)") {
+            let nsWorking = workingText as NSString
+            let matches = tylerRegex.matches(in: workingText, options: [], range: NSRange(location: 0, length: nsWorking.length))
+            if !matches.isEmpty {
+                let key = "___PROT_ARTIST_\(placeholderIndex)___"
+                placeholders[key] = "Tyler, The Creator"
+                placeholderIndex += 1
+                workingText = tylerRegex.stringByReplacingMatches(
+                    in: workingText,
+                    options: [],
+                    range: NSRange(location: 0, length: (workingText as NSString).length),
+                    withTemplate: key
+                )
+            }
         }
 
         guard let regex = regex else {
-            return [ArtistSegment(name: trimmed)]
+            let restored = restorePlaceholders(in: workingText, placeholders: placeholders)
+            return [ArtistSegment(name: cleanArtistToken(restored))]
         }
 
-        let nsString = trimmed as NSString
-        let matches = regex.matches(in: trimmed, options: [], range: NSRange(location: 0, length: nsString.length))
+        let nsString = workingText as NSString
+        let matches = regex.matches(in: workingText, options: [], range: NSRange(location: 0, length: nsString.length))
 
         guard !matches.isEmpty else {
-            return [ArtistSegment(name: trimmed)]
+            let restored = restorePlaceholders(in: workingText, placeholders: placeholders)
+            let clean = cleanArtistToken(restored)
+            return [ArtistSegment(name: clean.isEmpty ? trimmed : clean)]
         }
 
         var segments: [ArtistSegment] = []
@@ -98,27 +192,54 @@ public enum ArtistParser {
         for match in matches {
             let matchRange = match.range
             let artistRange = NSRange(location: currentIndex, length: matchRange.location - currentIndex)
-            let artistName = nsString.substring(with: artistRange).trimmingCharacters(in: unwantedChars)
+            let rawSegment = nsString.substring(with: artistRange)
             let delimiter = nsString.substring(with: matchRange)
 
-            if !artistName.isEmpty {
-                segments.append(ArtistSegment(name: artistName, separatorAfter: delimiter))
+            let restoredName = restorePlaceholders(in: rawSegment, placeholders: placeholders)
+            let clean = cleanArtistToken(restoredName)
+
+            if !clean.isEmpty && !isGenericArtistName(clean) {
+                segments.append(ArtistSegment(name: clean, separatorAfter: delimiter))
             }
             currentIndex = matchRange.location + matchRange.length
         }
 
         if currentIndex < nsString.length {
             let remainderRange = NSRange(location: currentIndex, length: nsString.length - currentIndex)
-            let artistName = nsString.substring(with: remainderRange).trimmingCharacters(in: unwantedChars)
-            if !artistName.isEmpty {
-                segments.append(ArtistSegment(name: artistName, separatorAfter: nil))
+            let rawSegment = nsString.substring(with: remainderRange)
+            let restoredName = restorePlaceholders(in: rawSegment, placeholders: placeholders)
+            let clean = cleanArtistToken(restoredName)
+
+            if !clean.isEmpty && !isGenericArtistName(clean) {
+                segments.append(ArtistSegment(name: clean, separatorAfter: nil))
             }
         }
 
         return segments.isEmpty ? [ArtistSegment(name: trimmed)] : segments
     }
 
-    /// Parses a raw artist string into an array of clean artist name strings.
+    private static func restorePlaceholders(in text: String, placeholders: [String: String]) -> String {
+        var result = text
+        for (key, val) in placeholders {
+            result = result.replacingOccurrences(of: key, with: val)
+        }
+        return result
+    }
+
+    private static func cleanArtistToken(_ text: String) -> String {
+        var clean = text.trimmingCharacters(in: unwantedChars)
+        // Check if quotes wrap the token
+        if (clean.hasPrefix("\"") && clean.hasSuffix("\"")) || (clean.hasPrefix("'") && clean.hasSuffix("'")) {
+            clean = String(clean.dropFirst().dropLast()).trimmingCharacters(in: unwantedChars)
+        }
+        // Normalize Tyler The Creator if missing comma
+        if clean.lowercased() == "tyler the creator" {
+            clean = "Tyler, The Creator"
+        }
+        return clean
+    }
+
+    /// Parses a raw artist string into an array of clean individual artist name strings.
     public static func parseArtists(from rawArtist: String) -> [String] {
         parse(rawArtist: rawArtist).map { $0.name }
     }
@@ -127,39 +248,27 @@ public enum ArtistParser {
 
     // Matches "(feat. X)", "[ft. X]", and trailing "feat. X" patterns across all common bracket styles
     private static let titleFeatureRegex: NSRegularExpression? = {
-        // Pattern
         let pattern = #"(?:\((?:feat\.?|ft\.?|featuring|with)\s+([^)]+)\)|\[(?:feat\.?|ft\.?|featuring|with)\s+([^\]]+)\]|(?:\s+-\s+|\s+)(?:feat\.?|ft\.?|featuring|with)\s+(.+)$)"#
         return try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive])
     }()
 
     /// Extracts all featured artist names mentioned in a track title (e.g. `(feat. Drake & Future)` -> `["Drake", "Future"]`).
     public static func extractFeaturedArtists(fromTitle title: String) -> [String] {
-        // Trimmed
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        // Ensure preconditions are met before proceeding
         guard !trimmed.isEmpty, let regex = titleFeatureRegex else { return [] }
 
-        // Ns string
         let nsString = trimmed as NSString
-        // Matches
         let matches = regex.matches(in: trimmed, options: [], range: NSRange(location: 0, length: nsString.length))
 
-        // Featured artists
         var featuredArtists: [String] = []
         for match in matches {
-            // Groups 1, 2, 3 correspond to parentheses, brackets, and trailing forms respectively
             for groupIndex in 1...3 {
-                // Range
                 let range = match.range(at: groupIndex)
                 if range.location != NSNotFound && range.length > 0 {
-                    // Feature string
                     let featureString = nsString.substring(with: range)
-                    // Artists
                     let artists = parseArtists(from: featureString)
                     for a in artists {
-                        // Clean
-                        let clean = a.trimmingCharacters(in: unwantedChars)
-                        // Deduplicate case-insensitively to avoid "Drake" and "drake" both appearing
+                        let clean = cleanArtistToken(a)
                         if !clean.isEmpty && !featuredArtists.contains(where: { $0.caseInsensitiveCompare(clean) == .orderedSame }) {
                             featuredArtists.append(clean)
                         }
@@ -191,15 +300,18 @@ public enum ArtistParser {
     public static func allArtists(forTitle title: String, artist: String, albumArtist: String? = nil) -> [String] {
         var results: [String] = []
 
-        let cleanDirect = artist.trimmingCharacters(in: unwantedChars)
+        let cleanDirect = artist.trimmingCharacters(in: .whitespacesAndNewlines)
         if isSingleArtistException(cleanDirect) {
-            if !cleanDirect.isEmpty && !isGenericArtistName(cleanDirect) {
-                results.append(cleanDirect)
+            let parsedDirect = parse(rawArtist: cleanDirect)
+            for seg in parsedDirect {
+                if !seg.name.isEmpty && !isGenericArtistName(seg.name) {
+                    results.append(seg.name)
+                }
             }
         } else {
             let direct = parseArtists(from: artist)
             for a in direct {
-                let clean = a.trimmingCharacters(in: unwantedChars)
+                let clean = cleanArtistToken(a)
                 if !clean.isEmpty && !isGenericArtistName(clean) && !results.contains(where: { $0.caseInsensitiveCompare(clean) == .orderedSame }) {
                     results.append(clean)
                 }
@@ -208,15 +320,18 @@ public enum ArtistParser {
 
         // 2. Album artist if present
         if let albArt = albumArtist, !albArt.isEmpty {
-            let cleanAlb = albArt.trimmingCharacters(in: unwantedChars)
+            let cleanAlb = albArt.trimmingCharacters(in: .whitespacesAndNewlines)
             if isSingleArtistException(cleanAlb) {
-                if !cleanAlb.isEmpty && !isGenericArtistName(cleanAlb) && !results.contains(where: { $0.caseInsensitiveCompare(cleanAlb) == .orderedSame }) {
-                    results.append(cleanAlb)
+                let parsedAlb = parse(rawArtist: cleanAlb)
+                for seg in parsedAlb {
+                    if !seg.name.isEmpty && !isGenericArtistName(seg.name) && !results.contains(where: { $0.caseInsensitiveCompare(seg.name) == .orderedSame }) {
+                        results.append(seg.name)
+                    }
                 }
             } else {
                 let albArtists = parseArtists(from: albArt)
                 for a in albArtists {
-                    let clean = a.trimmingCharacters(in: unwantedChars)
+                    let clean = cleanArtistToken(a)
                     if !clean.isEmpty && !isGenericArtistName(clean) && !results.contains(where: { $0.caseInsensitiveCompare(clean) == .orderedSame }) {
                         results.append(clean)
                     }
@@ -227,7 +342,7 @@ public enum ArtistParser {
         // 3. Features embedded in the title string
         let featuredInTitle = extractFeaturedArtists(fromTitle: title)
         for a in featuredInTitle {
-            let clean = a.trimmingCharacters(in: unwantedChars)
+            let clean = cleanArtistToken(a)
             if !clean.isEmpty && !isGenericArtistName(clean) && !results.contains(where: { $0.caseInsensitiveCompare(clean) == .orderedSame }) {
                 results.append(clean)
             }
@@ -239,7 +354,7 @@ public enum ArtistParser {
         return results
     }
 
-    /// Generates a canonical, punctuation and diacritic-tolerant artist key for clustering aliases (e.g. "JAŸ-Z", "JAY-Z", "Jay Z" -> "jay z", "J Cole" and "J. Cole" -> "j cole", "A$AP Rocky" and "ASAP Rocky" -> "asap rocky").
+    /// Generates a canonical, punctuation and diacritic-tolerant artist key for clustering aliases.
     public static func canonicalArtistKey(_ name: String) -> String {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return "" }
@@ -261,9 +376,17 @@ public enum ArtistParser {
         return tokens.joined(separator: " ")
     }
 
-    /// Selects the authoritative display name between two aliases (e.g. prefers "J. Cole" over "J Cole", "Jay-Z" over "Jay Z").
+    /// Selects the authoritative display name between two aliases.
     public static func preferredArtistDisplayName(_ name1: String, _ name2: String) -> String {
         guard name1 != name2 else { return name1 }
+        // Prefer known canonical casing from protected exceptions if available
+        if let canon1 = protectedArtists.first(where: { $0.caseInsensitiveCompare(name1) == .orderedSame }) {
+            return canon1
+        }
+        if let canon2 = protectedArtists.first(where: { $0.caseInsensitiveCompare(name2) == .orderedSame }) {
+            return canon2
+        }
+
         let punctChars = CharacterSet(charactersIn: ".-,!'$")
         let count1 = name1.unicodeScalars.filter { punctChars.contains($0) }.count
         let count2 = name2.unicodeScalars.filter { punctChars.contains($0) }.count
@@ -280,7 +403,6 @@ public enum ArtistParser {
 
     /// Checks if a specific artist name is featured in a track title (e.g. `(feat. Artist)`), tolerating missing punctuation.
     public static func isArtistFeatured(name: String, inTitle title: String) -> Bool {
-        // Clean name
         let cleanName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleanName.isEmpty else { return false }
         let canonicalTarget = canonicalArtistKey(cleanName)

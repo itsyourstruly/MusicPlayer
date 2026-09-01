@@ -187,23 +187,10 @@ public struct TrackRowView: View {
                         .foregroundStyle(isCurrentTrack ? appTheme.accentColor : Color.primary)
                         .lineLimit(1)
 
-                    HStack(spacing: 4) {
-                        Text(track.artist)
-                            .font(.system(size: 12, weight: .regular))
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-
-                        if showAlbumSubtitle && !track.album.isEmpty {
-                            Text("•")
-                                .font(.system(size: 10))
-                                .foregroundStyle(.secondary.opacity(0.6))
-
-                            Text(track.album)
-                                .font(.system(size: 12, weight: .regular))
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                        }
-                    }
+                    Text(track.artist)
+                        .font(.system(size: 12, weight: .regular))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
                 }
 
                 Spacer(minLength: 8)
@@ -293,12 +280,6 @@ public struct TrackRowView: View {
             }
             Button(action: triggerQueueNext) {
                 Text("QUEUE NEXT")
-            }
-            Button(action: {
-                HapticFeedback.notificationSuccess()
-                onAddToQueue()
-            }) {
-                Text("ADD TO QUEUE")
             }
 
             // Artists

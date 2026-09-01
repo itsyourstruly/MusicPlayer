@@ -190,7 +190,7 @@ public struct ExpandablePlayerView: View {
             }
             // Modal presentation sheet
             .sheet(isPresented: $showingQueue) {
-                PlayerQueueView(playerService: playerService)
+                PlayerQueueView(playerService: playerService, libraryStore: libraryStore)
             }
             .sheet(isPresented: $showingFileInfo) {
                 TrackInfoSheetView(track: track, libraryStore: libraryStore)

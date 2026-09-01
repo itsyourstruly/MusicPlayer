@@ -23,6 +23,7 @@ public struct AudioScannerService: Sendable {
     public func scanDirectory(
         at folderURL: URL,
         existingTracks: [Track] = [],
+        scanMethod: LibraryScanMethod = .id3Tags,
         onProgress: (@Sendable (Int, Int, String) -> Void)? = nil
     ) async -> [Track] {
         AppLogger.scanner.info("Starting high-speed audio scan at: \(folderURL.path) (with \(existingTracks.count) cached tracks)")
@@ -161,7 +162,11 @@ public struct AudioScannerService: Sendable {
                 await withTaskGroup(of: Track?.self) { group in
                     for fileURL in currentChunk {
                         group.addTask(priority: .utility) {
-                            await self.parseAudioTrack(at: fileURL, rootFolderURL: folderURL)
+                            if scanMethod == .folderHierarchy {
+                                return await FolderHierarchyScanner.shared.parseAudioTrack(at: fileURL, rootFolderURL: folderURL)
+                            } else {
+                                return await self.parseAudioTrack(at: fileURL, rootFolderURL: folderURL)
+                            }
                         }
                     }
 

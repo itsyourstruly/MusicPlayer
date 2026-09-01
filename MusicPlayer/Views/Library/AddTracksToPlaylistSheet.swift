@@ -100,7 +100,7 @@ public struct AddTracksToPlaylistSheet: View {
                                         .foregroundStyle(Color.primary)
                                         .lineLimit(1)
 
-                                    Text(track.artistAlbumSubtitle)
+                                    Text(track.artist)
                                         .font(.system(size: 12, weight: .regular))
                                         .foregroundStyle(.secondary)
                                         .lineLimit(1)

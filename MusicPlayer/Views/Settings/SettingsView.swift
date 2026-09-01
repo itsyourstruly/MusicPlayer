@@ -24,6 +24,27 @@ public struct SettingOptionDetail: Identifiable, Sendable {
 
 /// Catalog of comprehensive, concise explanations for every setting option across the app.
 public enum SettingOptionCatalog {
+    public static let folderSettings = SettingOptionDetail(
+        id: "folderSettings",
+        title: "FOLDER SETTINGS & ORGANIZATION",
+        whatItDoes: "• MANAGES YOUR MUSIC DIRECTORY LINKING, DISK RESCANNING, AND DUPLICATE DETECTION.\n• LETS YOU SWITCH SCAN MODES BETWEEN STANDARD ID3 TAGS AND SMART FOLDER HIERARCHY.",
+        howToUseIt: "1. TAP THE FOLDER CARD TO OPEN DEDICATED FOLDER MANAGEMENT.\n2. CHANGE LINKED DIRECTORY, RESCAN FILES, RESOLVE DUPLICATES, OR UNLINK FOLDER."
+    )
+
+    public static let metadataEnrichment = SettingOptionDetail(
+        id: "metadataEnrichment",
+        title: "METADATA ENRICHMENT",
+        whatItDoes: "• ENRICHES LOCAL TRACKS WITH VERIFIED ONLINE METADATA, ARTWORK, AND LYRICS.\n• EMBEDS TAGS DIRECTLY TO AUDIO FILES ON DISK IF ENABLED.\n• HOUSES READY TO ENRICH, LOOK GOOD, UNMATCHED, AND DUPLICATES SHEETS.",
+        howToUseIt: "1. TAP TO OPEN THE METADATA ENRICHMENT HUB.\n2. REVIEW DETECTED DIFFERENCES, SWIPE TO APPLY UPGRADES, OR RESCAN ALL METADATA."
+    )
+
+    public static let libraryScanMethod = SettingOptionDetail(
+        id: "libraryScanMethod",
+        title: "LIBRARY SCAN METHOD",
+        whatItDoes: "• METHOD 1 (STANDARD ID3 TAGS): GROUPS SONGS BASED ON EMBEDDED METADATA TAGS (ARTIST > ALBUM > TRACK).\n• METHOD 2 (FOLDER HIERARCHY): GROUPS SONGS BASED ON YOUR HARD DRIVE DIRECTORY NESTING (PARENT FOLDER = ARTIST, SUBFOLDER = ALBUM).",
+        howToUseIt: "1. SELECT YOUR PREFERRED SCAN METHOD IN FOLDER SETTINGS.\n2. RESCAN LIBRARY TO RE-ORGANIZE YOUR SONGS."
+    )
+
     public static let appearance = SettingOptionDetail(
         id: "appearance",
         title: "APPEARANCE",
@@ -40,14 +61,14 @@ public enum SettingOptionCatalog {
 
     public static let enrichTracks = SettingOptionDetail(
         id: "enrichTracks",
-        title: "TRACKS READY TO ENRICH",
+        title: "TRACKS FOUND",
         whatItDoes: "• IDENTIFIES LOCAL SONGS WITH MISSING TAGS, LOW-RES ARTWORK, OR INCOMPLETE METADATA.\n• MATCHES THEM WITH OFFICIAL ONLINE RECORDS AND HIGHLIGHTS UPGRADES IN GREEN.\n• LETS YOU LOCK SPECIFIC LOCAL TAGS WITH [KEEP LOCAL] SO THEY ARE NOT OVERWRITTEN.",
         howToUseIt: "1. TAP TO OPEN THE ENRICHMENT MENU.\n2. SWIPE ON ANY TRACK TO COMPARE ONLINE DATA WITH YOUR ORIGINAL TAGS.\n3. TAP 'APPLY ONLINE METADATA' FOR A SINGLE TRACK, OR 'ENRICH ALL' TO BATCH UPDATE."
     )
 
     public static let verifiedTracks = SettingOptionDetail(
         id: "verifiedTracks",
-        title: "TRACKS LOOK GOOD",
+        title: "TRACKS GOOD",
         whatItDoes: "• LISTS SONGS WHOSE LOCAL TAGS ALREADY MATCH OFFICIAL ONLINE DATABASES.\n• KEEPS TRACK OF COMPLETE ALBUMS AND EMBEDDED HIGH-RES COVER ART.\n• ALLOWS RE-EMBEDDING OFFICIAL TAGS OR RESCANNING AT ANY TIME.",
         howToUseIt: "1. TAP TO VIEW VERIFIED SONGS.\n2. SWIPE TO REVIEW THE ONLINE MATCH AGAINST YOUR ORIGINAL LOCAL TAGS.\n3. TAP 'RE-APPLY TAGS & ART' TO RE-DOWNLOAD ARTWORK, OR 'RESCAN' TO RE-CHECK."
     )
@@ -153,167 +174,137 @@ public enum SettingOptionCatalog {
     public static let playTrackInQueue = SettingOptionDetail(
         id: "playTrackInQueue",
         title: "PLAY TRACKS IN QUEUE",
-        whatItDoes: "• WHEN ON: TAPPING A SONG PLAYS IT WITHIN YOUR CURRENT QUEUE WITHOUT CLEARING YOUR QUEUE LIST.",
-        howToUseIt: "1. TAP TO TOGGLE ON (BLUE) OR OFF (RED)."
+        whatItDoes: "• MAINTAINS YOUR ACTIVE QUEUE CONTEXT WHEN YOU TAP A SONG IN SEARCH OR LISTS.\n• PREVENTS ACCIDENTAL CLEARING OF YOUR CURRENT PLAYLIST OR QUEUE.",
+        howToUseIt: "1. TAP TO TOGGLE ON (BLUE) OR OFF (RED).\n2. WHEN ON, SELECTING A TRACK ADDS OR SWITCHES WITHIN YOUR CURRENT QUEUE."
     )
 
     public static let tapToPlayNext = SettingOptionDetail(
         id: "tapToPlayNext",
         title: "TAP TO PLAY NEXT",
-        whatItDoes: "• WHEN ON: TAPPING ANY SONG ADDS IT RIGHT AFTER THE CURRENTLY PLAYING TRACK INSTEAD OF INTERRUPTING PLAYBACK.",
-        howToUseIt: "1. TAP TO TOGGLE ON (BLUE) OR OFF (RED)."
+        whatItDoes: "• AUTOMATICALLY INSERTS TAPPED SONGS RIGHT AFTER THE CURRENTLY PLAYING TRACK.\n• PERFECT FOR ON-THE-FLY QUEUE BUILDING.",
+        howToUseIt: "1. TAP TO TOGGLE ON (BLUE) OR OFF (RED).\n2. TAPPING ANY SONG IMMEDIATELY QUEUES IT AS UP NEXT."
     )
 
     public static let autoPlayNext = SettingOptionDetail(
         id: "autoPlayNext",
         title: "AUTO-PLAY NEXT",
-        whatItDoes: "• WHEN ON: AUTOMATICALLY ADVANCES TO THE NEXT SONG WHEN THE CURRENT TRACK FINISHES.\n• WHEN OFF: PAUSES AT THE END OF EACH TRACK.",
+        whatItDoes: "• AUTOMATICALLY ADVANCES TO THE NEXT SONG IN THE QUEUE OR ALBUM WHEN A TRACK FINISHES.\n• KEEPS YOUR MUSIC FLOWING WITHOUT MANUAL INTERVENTION.",
         howToUseIt: "1. TAP TO TOGGLE ON (BLUE) OR OFF (RED)."
     )
 
     public static let rememberPlaybackPosition = SettingOptionDetail(
         id: "rememberPlaybackPosition",
         title: "REMEMBER PLAYBACK POSITION",
-        whatItDoes: "• REMEMBERS EXACTLY WHERE YOU STOPPED IN LONG TRACKS, PODCASTS, OR DJ SETS.\n• EXPANDS TO LET YOU SET THE MINIMUM TRACK DURATION (10 TO 60 MINUTES) TO REMEMBER.\n• RESUMES FROM YOUR LAST POSITION ANYTIME YOU RETURN TO A TRACK.",
-        howToUseIt: "1. TAP TO TOGGLE ON (BLUE) OR OFF (RED).\n2. DRAG THE SLIDER TO SET THE MINIMUM TRACK LENGTH (10 TO 60 MIN)."
+        whatItDoes: "• REMEMBERS WHERE YOU LEFT OFF ON LONG AUDIO TRACKS, PODCASTS, DJ SETS, AND AUDIOBOOKS.\n• RESUMES FROM THE EXACT SECOND WHEN YOU PLAY THE TRACK AGAIN.",
+        howToUseIt: "1. TAP TO TOGGLE ON (BLUE) OR OFF (RED).\n2. SET THE MINIMUM TRACK DURATION SLIDER BELOW (10 TO 60 MINUTES)."
     )
 
     public static let showAudioSpecs = SettingOptionDetail(
         id: "showAudioSpecs",
         title: "SHOW AUDIO SPECS",
-        whatItDoes: "• SHOWS AUDIOPHILE BADGES (FLAC 24-BIT 96KHZ, MP3 320KBPS, ETC.) DIRECTLY IN THE PLAYER INTERFACE.",
+        whatItDoes: "• DISPLAYS AUDIOPHILE TECHNICAL AUDIO METRICS (SAMPLE RATE, BIT DEPTH, BITRATE, CODEC) IN THE PLAYER BAR AND FULLSCREEN PLAYER.\n• LETS YOU VERIFY LOSSLESS OR HI-RES AUDIO FIDELITY AT A GLANCE.",
         howToUseIt: "1. TAP TO TOGGLE ON (BLUE) OR OFF (RED)."
     )
 
     public static let smoothSkipping = SettingOptionDetail(
         id: "smoothSkipping",
         title: "SMOOTH SKIPPING",
-        whatItDoes: "• APPLIES A QUICK MICRO-FADE (60MS) WHEN SKIPPING SONGS TO PREVENT LOUD AUDIO CLICKS OR POPS.",
+        whatItDoes: "• APPLIES AN ULTRA-FAST MICRO-FADE WHEN SKIPPING BETWEEN TRACKS.\n• ELIMINATES HARD AUDIO POPS, CLICKS, AND DISCONTINUITIES.",
         howToUseIt: "1. TAP TO TOGGLE ON (BLUE) OR OFF (RED)."
     )
 }
 
-/// Minimal, clean modal sheet displaying simple, broken-down explanations of how to use a setting
-/// followed by what it does.
+/// Setting option detailed sheet overlay
 public struct SettingOptionDetailSheet: View {
     public let detail: SettingOptionDetail
     @Environment(\.dismiss) private var dismiss
-    @Environment(\.appTheme) private var appTheme
 
     public init(detail: SettingOptionDetail) {
         self.detail = detail
     }
 
     public var body: some View {
-        ScrollView(.vertical, showsIndicators: false) {
-            VStack(alignment: .leading, spacing: 20) {
-                // Title Header
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("SETTING INFO")
-                        .font(.system(size: 11, weight: .bold, design: .monospaced))
-                        .foregroundStyle(Color.blue)
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("WHAT IT DOES")
+                            .font(.system(size: 11, weight: .bold, design: .monospaced))
+                            .foregroundStyle(.secondary)
 
-                    Text(detail.title)
-                        .font(.system(size: 17, weight: .black, design: .monospaced))
-                        .foregroundStyle(Color.primary)
+                        Text(detail.whatItDoes)
+                            .font(.system(size: 13, weight: .medium, design: .monospaced))
+                            .foregroundStyle(Color.primary)
+                            .lineSpacing(4)
+                    }
+                    .padding(14)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.primary.opacity(0.04))
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("HOW TO USE IT")
+                            .font(.system(size: 11, weight: .bold, design: .monospaced))
+                            .foregroundStyle(.secondary)
+
+                        Text(detail.howToUseIt)
+                            .font(.system(size: 13, weight: .medium, design: .monospaced))
+                            .foregroundStyle(Color.primary)
+                            .lineSpacing(4)
+                    }
+                    .padding(14)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.primary.opacity(0.04))
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                 }
-                .padding(.top, 8)
-
-                Divider()
-                    .overlay(appTheme.separatorColor.opacity(0.4))
-
-                // Section 1: HOW TO USE IT (Placed on top!)
-                explanationSection(
-                    title: "HOW TO USE IT",
-                    content: detail.howToUseIt
-                )
-
-                Divider()
-                    .overlay(appTheme.separatorColor.opacity(0.3))
-
-                // Section 2: WHAT IT DOES (Placed below!)
-                explanationSection(
-                    title: "WHAT IT DOES",
-                    content: detail.whatItDoes
-                )
+                .padding(20)
             }
-            .padding(.horizontal, 22)
-            .padding(.vertical, 20)
-            .padding(.bottom, 30)
-        }
-        .background(appTheme.backgroundColor.ignoresSafeArea())
-        .presentationDetents([.medium, .large])
-        .presentationDragIndicator(.visible)
-    }
-
-    private func explanationSection(title: String, content: String) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(title)
-                .font(.system(size: 11, weight: .heavy, design: .monospaced))
-                .foregroundStyle(Color.blue)
-                .tracking(1.0)
-
-            Text(content)
-                .font(.system(size: 12.5, design: .monospaced))
-                .foregroundStyle(Color.primary.opacity(0.9))
-                .lineSpacing(4)
+            .background(Color.appBackground.ignoresSafeArea())
+            .navigationTitle(detail.title)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("DONE") {
+                        dismiss()
+                    }
+                    .font(.system(size: 13, weight: .bold, design: .monospaced))
+                    .foregroundStyle(Color.primary)
+                }
+            }
         }
     }
 }
 
-/// Redesigned minimal settings view featuring top white navigation buttons for page/sheet options,
-/// clean inline toggles and actions without section headers or subtitles, and long-press explanation sheets.
+/// Settings and preferences control panel.
 public struct SettingsView: View {
     @Bindable var libraryStore: LibraryStore
-    var playerService: AudioPlayerService?
+    public var playerService: AudioPlayerService?
+
     @Environment(\.dismiss) private var dismiss
-
-    @State private var showingFolderPicker: Bool = false
-    @State private var showingUnlinkAlert: Bool = false
-    @State private var showingDuplicateResolver: Bool = false
-    @State private var showingMetadataComparison: Bool = false
-    @State private var showingVerifiedGoodTracks: Bool = false
-    @State private var showingUnmatchedTracks: Bool = false
-    @State private var artworkCacheSizeBytes: Int64 = 0
-    @State private var activeDetail: SettingOptionDetail? = nil
-    @State private var isScanningDuplicates: Bool = false
     @State private var showingClearCacheAlert: Bool = false
+    @State private var activeDetail: SettingOptionDetail? = nil
+    @State private var artworkCacheSizeBytes: Int64 = 0
 
-    // Initialize with configured properties
     public init(libraryStore: LibraryStore, playerService: AudioPlayerService? = nil) {
         self.libraryStore = libraryStore
         self.playerService = playerService
     }
 
-    // Main view layout structure
     public var body: some View {
         NavigationStack {
             ScrollView(.vertical, showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 24) {
-                    // MARK: - Top Page & Sheet Navigation Buttons (White Background, Black Text)
+                    // MARK: - Consolidated Top Group (Primary Folder Card & Subpages)
                     topPageButtonsGroup
-
-                    if libraryStore.isBackgroundCheckingMetadata {
-                        HStack {
-                            Spacer()
-                            Text("\(libraryStore.backgroundCheckScannedCount) of \(libraryStore.backgroundCheckTotalCount)")
-                                .font(.system(size: 12, weight: .bold, design: .monospaced))
-                                .foregroundStyle(Color.blue)
-                            Spacer()
-                        }
-                        .padding(.vertical, 2)
-                        .transition(.opacity)
-                    }
 
                     Divider()
                         .overlay(libraryStore.settings.appTheme.separatorColor.opacity(0.4))
-                        .padding(.vertical, 6)
 
-                    // MARK: - Inline Toggles & Actions
+                    // MARK: - Main Inline Controls & Cache Maintenance
                     inlineControlsGroup
                 }
                 .padding(.horizontal, 20)
-                .padding(.vertical, 20)
+                .padding(.vertical, 16)
                 .padding(.bottom, 60)
             }
             .background(libraryStore.settings.appTheme.backgroundColor.ignoresSafeArea())
@@ -328,34 +319,6 @@ public struct SettingsView: View {
                     .foregroundStyle(Color.primary)
                 }
             }
-            .fileImporter(
-                isPresented: $showingFolderPicker,
-                allowedContentTypes: [.folder, .audio, .item],
-                allowsMultipleSelection: false
-            ) { result in
-                switch result {
-                case .success(let urls):
-                    if let selectedURL = urls.first {
-                        Task {
-                            await libraryStore.linkAndScanFolder(url: selectedURL)
-                            await refreshCacheSize()
-                        }
-                    }
-                case .failure(let error):
-                    AppLogger.library.error("Folder selection failed: \(error.localizedDescription)")
-                }
-            }
-            .alert("UNLINK DIRECTORY", isPresented: $showingUnlinkAlert) {
-                Button("CANCEL", role: .cancel) {}
-                Button("UNLINK", role: .destructive) {
-                    libraryStore.unlinkDirectory()
-                    Task {
-                        await refreshCacheSize()
-                    }
-                }
-            } message: {
-                Text("THIS WILL REMOVE INDEXED TRACKS AND PLAYLISTS FROM THE APP. YOUR AUDIO FILES ON DISK WILL NOT BE MODIFIED OR DELETED.")
-            }
             .alert("CLEAR METADATA & ARTWORK CACHE?", isPresented: $showingClearCacheAlert) {
                 Button("CANCEL", role: .cancel) {}
                 Button("CLEAR CACHE", role: .destructive) {
@@ -368,26 +331,6 @@ public struct SettingsView: View {
             } message: {
                 Text("THIS WILL REMOVE \(libraryStore.downloadedMetadataCache.totalRecordsCount) DOWNLOADED METADATA RECORDS AND PURGE CACHED COVER ARTWORK (\(ByteFormatting.formatFileSize(bytes: artworkCacheSizeBytes))). YOUR LOCAL AUDIO FILES ON DISK WILL NOT BE MODIFIED.")
             }
-            .sheet(isPresented: $showingDuplicateResolver) {
-                DuplicateResolverView(libraryStore: libraryStore)
-                    .tint(libraryStore.settings.appTheme.accentColor)
-                    .environment(\.appTheme, libraryStore.settings.appTheme)
-            }
-            .sheet(isPresented: $showingMetadataComparison) {
-                MetadataComparisonListView(libraryStore: libraryStore)
-                    .tint(libraryStore.settings.appTheme.accentColor)
-                    .environment(\.appTheme, libraryStore.settings.appTheme)
-            }
-            .sheet(isPresented: $showingVerifiedGoodTracks) {
-                VerifiedGoodTracksListView(libraryStore: libraryStore)
-                    .tint(libraryStore.settings.appTheme.accentColor)
-                    .environment(\.appTheme, libraryStore.settings.appTheme)
-            }
-            .sheet(isPresented: $showingUnmatchedTracks) {
-                UnmatchedTracksListView(libraryStore: libraryStore)
-                    .tint(libraryStore.settings.appTheme.accentColor)
-                    .environment(\.appTheme, libraryStore.settings.appTheme)
-            }
             .sheet(item: $activeDetail) { detail in
                 SettingOptionDetailSheet(detail: detail)
             }
@@ -397,10 +340,10 @@ public struct SettingsView: View {
         }
     }
 
-    // MARK: - Top Page & Sheet Buttons (Grouped with Spacing)
+    // MARK: - Top Page Navigation Buttons Group
     private var topPageButtonsGroup: some View {
-        VStack(spacing: 12) {
-            // Group 1: Navigation Subpages (Appearance & Playback)
+        VStack(spacing: 10) {
+            // 1. Navigation Subpages Grid (Appearance & Playback)
             LazyVGrid(
                 columns: [
                     GridItem(.flexible(), spacing: 8),
@@ -408,7 +351,7 @@ public struct SettingsView: View {
                 ],
                 spacing: 8
             ) {
-                // 1. Appearance Page
+                // Appearance Subpage
                 NavigationLink(destination: AppearanceSettingsView(libraryStore: libraryStore)) {
                     topButtonContent(
                         title: "APPEARANCE",
@@ -422,7 +365,7 @@ public struct SettingsView: View {
                     }
                 }
 
-                // 2. Playback Page
+                // Playback Subpage
                 NavigationLink(destination: PlaybackSettingsView(libraryStore: libraryStore, playerService: playerService ?? AudioPlayerService())) {
                     topButtonContent(
                         title: "PLAYBACK",
@@ -439,61 +382,37 @@ public struct SettingsView: View {
                 }
             }
 
-            // Group 2: Metadata & Duplicates Review Sheets
-            LazyVGrid(
-                columns: [
-                    GridItem(.flexible(), spacing: 8),
-                    GridItem(.flexible(), spacing: 8)
-                ],
-                spacing: 8
-            ) {
-                // 3. Tracks Ready to Enrich (Sheet)
-                topActionButton(
-                    title: "READY TO ENRICH",
-                    badge: "\(libraryStore.enrichmentDiffs.count) TRACKS",
-                    action: {
-                        if !libraryStore.enrichmentDiffs.isEmpty {
-                            showingMetadataComparison = true
-                        }
-                    },
-                    detail: SettingOptionCatalog.enrichTracks,
-                    isDisabled: libraryStore.enrichmentDiffs.isEmpty
-                )
+            // 2. Primary Consolidated Folder Card (Below Appearance & Playback)
+            NavigationLink(destination: FolderSettingsView(libraryStore: libraryStore)) {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(alignment: .top) {
+                        Text("FOLDER")
+                            .font(.system(size: 15, weight: .black, design: .monospaced))
+                            .foregroundStyle(Color.black)
 
-                // 4. Tracks Look Good (Sheet)
-                topActionButton(
-                    title: "LOOK GOOD",
-                    badge: "\(libraryStore.verifiedGoodCount) TRACKS",
-                    action: {
-                        if libraryStore.verifiedGoodCount > 0 {
-                            showingVerifiedGoodTracks = true
-                        }
-                    },
-                    detail: SettingOptionCatalog.verifiedTracks,
-                    isDisabled: libraryStore.verifiedGoodCount == 0
-                )
+                        Spacer()
 
-                // 5. Unmatched Tracks (Sheet)
-                topActionButton(
-                    title: "UNMATCHED",
-                    badge: "\(libraryStore.unmatchedTracksCount) TRACKS",
-                    action: {
-                        showingUnmatchedTracks = true
-                    },
-                    detail: SettingOptionCatalog.unmatchedTracks,
-                    isDisabled: false
-                )
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 13, weight: .bold))
+                            .foregroundStyle(Color.black.opacity(0.6))
+                    }
 
-                // 6. Duplicate Tracks (Sheet)
-                topActionButton(
-                    title: "DUPLICATES",
-                    badge: "\(libraryStore.duplicateGroups.count) CLUSTERS",
-                    action: {
-                        showingDuplicateResolver = true
-                    },
-                    detail: SettingOptionCatalog.duplicateTracks,
-                    isDisabled: libraryStore.duplicateGroups.isEmpty
-                )
+                    Text(libraryStore.settings.linkedFolderName ?? "NO FOLDER LINKED")
+                        .font(.system(size: 11.5, weight: .bold, design: .monospaced))
+                        .foregroundStyle(Color.black.opacity(0.7))
+                        .lineLimit(1)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 12)
+                .background(Color.white)
+                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            }
+            .buttonStyle(.plain)
+            .contextMenu {
+                Button("Option Info") {
+                    activeDetail = SettingOptionCatalog.folderSettings
+                }
             }
         }
     }
@@ -521,70 +440,9 @@ public struct SettingsView: View {
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 
-    private func topActionButton(
-        title: String,
-        badge: String? = nil,
-        action: @escaping () -> Void,
-        detail: SettingOptionDetail,
-        isDisabled: Bool = false
-    ) -> some View {
-        Button(action: {
-            HapticFeedback.notificationSuccess()
-            action()
-        }) {
-            topButtonContent(title: title, badge: badge, isMuted: isDisabled)
-        }
-        .buttonStyle(.plain)
-        .disabled(isDisabled)
-        .contextMenu {
-            Button("Option Info") {
-                activeDetail = detail
-            }
-        }
-    }
-
     // MARK: - Inline Controls Group
     private var inlineControlsGroup: some View {
         VStack(alignment: .leading, spacing: 22) {
-            // Folder Section Info & Actions
-            folderControlsView
-
-            // Live Background Scanning Status Logs
-            scanningStatusLogsView
-
-            Divider()
-                .overlay(libraryStore.settings.appTheme.separatorColor.opacity(0.4))
-
-            // Write Metadata to Disk
-            TypographicToggleRow(
-                title: "WRITE METADATA TO FILES ON DISK",
-                isOn: Binding(
-                    get: { libraryStore.settings.writeMetadataToAudioFiles },
-                    set: { newValue in
-                        libraryStore.settings.writeMetadataToAudioFiles = newValue
-                        libraryStore.saveSettings()
-                    }
-                ),
-                onLongPress: { activeDetail = SettingOptionCatalog.writeMetadataToDisk }
-            )
-
-            // Action: Rescan All Metadata
-            Button(action: {
-                HapticFeedback.notificationSuccess()
-                libraryStore.rescanAllMetadata()
-            }) {
-                Text(libraryStore.isBackgroundCheckingMetadata ? "SCANNING METADATA..." : "RESCAN ALL METADATA")
-                    .font(.system(size: 14.5, weight: .bold, design: .monospaced))
-                    .foregroundStyle(libraryStore.isBackgroundCheckingMetadata ? Color.secondary : Color.blue)
-            }
-            .buttonStyle(.plain)
-            .disabled(libraryStore.isBackgroundCheckingMetadata)
-            .contextMenu {
-                Button("Option Info") {
-                    activeDetail = SettingOptionCatalog.rescanAllMetadata
-                }
-            }
-
             // Action: Reset Home Shuffle
             if !libraryStore.settings.customShuffleTarget.isAll {
                 Button(action: {
@@ -649,169 +507,10 @@ public struct SettingsView: View {
         }
     }
 
-    // MARK: - Folder Controls View
-    private var folderControlsView: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            if let folderName = libraryStore.settings.linkedFolderName {
-                HStack {
-                    Text("FOLDER: \(folderName.uppercased())")
-                        .font(.system(size: 14.5, weight: .bold, design: .monospaced))
-                        .foregroundStyle(Color.primary)
-                        .lineLimit(1)
-                    Spacer()
-                }
-                .contentShape(Rectangle())
-                .onLongPressGesture(minimumDuration: 0.45) {
-                    HapticFeedback.notificationSuccess()
-                    activeDetail = SettingOptionCatalog.linkFolder
-                }
-
-                HStack(spacing: 18) {
-                    Button(action: {
-                        HapticFeedback.notificationSuccess()
-                        showingFolderPicker = true
-                    }) {
-                        Text("CHANGE FOLDER")
-                            .font(.system(size: 13, weight: .bold, design: .monospaced))
-                            .foregroundStyle(Color.blue)
-                    }
-                    .buttonStyle(.plain)
-                    .contextMenu {
-                        Button("Option Info") {
-                            activeDetail = SettingOptionCatalog.linkFolder
-                        }
-                    }
-
-                    Button(action: {
-                        HapticFeedback.notificationSuccess()
-                        Task {
-                            await libraryStore.rescanCurrentDirectory()
-                        }
-                    }) {
-                        Text(libraryStore.isScanning ? "SCANNING..." : "RESCAN")
-                            .font(.system(size: 13, weight: .bold, design: .monospaced))
-                            .foregroundStyle(libraryStore.isScanning ? Color.secondary : Color.blue)
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(libraryStore.isScanning)
-                    .contextMenu {
-                        Button("Option Info") {
-                            activeDetail = SettingOptionCatalog.rescanFolder
-                        }
-                    }
-
-                    Spacer()
-
-                    Button(action: {
-                        HapticFeedback.notificationSuccess()
-                        showingUnlinkAlert = true
-                    }) {
-                        Text("UNLINK")
-                            .font(.system(size: 13, weight: .bold, design: .monospaced))
-                            .foregroundStyle(Color.red)
-                    }
-                    .buttonStyle(.plain)
-                    .contextMenu {
-                        Button("Option Info") {
-                            activeDetail = SettingOptionCatalog.unlinkFolder
-                        }
-                    }
-                }
-
-                // SCAN ALL FOR DUPLICATES BUTTON
-                Button(action: {
-                    HapticFeedback.notificationSuccess()
-                    isScanningDuplicates = true
-                    Task {
-                        await libraryStore.recalculateDuplicates()
-                        isScanningDuplicates = false
-                        HapticFeedback.notificationSuccess()
-                    }
-                }) {
-                    Text(isScanningDuplicates ? "SCANNING FOR DUPLICATES..." : "SCAN ALL FOR DUPLICATES")
-                        .font(.system(size: 14.5, weight: .bold, design: .monospaced))
-                        .foregroundStyle(isScanningDuplicates ? Color.secondary : Color.blue)
-                }
-                .buttonStyle(.plain)
-                .disabled(isScanningDuplicates)
-                .padding(.top, 2)
-                .contextMenu {
-                    Button("Option Info") {
-                        activeDetail = SettingOptionCatalog.scanDuplicates
-                    }
-                }
-            } else {
-                Button(action: {
-                    HapticFeedback.notificationSuccess()
-                    showingFolderPicker = true
-                }) {
-                    Text("LINK FOLDER")
-                        .font(.system(size: 14.5, weight: .bold, design: .monospaced))
-                        .foregroundStyle(Color.blue)
-                }
-                .buttonStyle(.plain)
-            }
-        }
-    }
-
-    // MARK: - Scanning Status Logs View
-    @ViewBuilder
-    private var scanningStatusLogsView: some View {
-        if libraryStore.isScanning {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(libraryStore.scanStatusText.uppercased())
-                    .font(.system(size: 10, design: .monospaced))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-
-                HStack {
-                    Text("INDEXING: \(Int(libraryStore.scanProgress * 100))%")
-                        .font(.system(size: 11, weight: .bold, design: .monospaced))
-                        .foregroundStyle(Color.blue)
-
-                    Spacer()
-                }
-            }
-            .padding(.vertical, 2)
-        }
-
-        if libraryStore.isBackgroundCheckingMetadata {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(libraryStore.backgroundCheckStatusText.uppercased())
-                    .font(.system(size: 10, design: .monospaced))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-
-                HStack {
-                    Text("METADATA CHECK: \(Int(libraryStore.backgroundCheckProgress * 100))%")
-                        .font(.system(size: 11, weight: .bold, design: .monospaced))
-                        .foregroundStyle(Color.blue)
-
-                    Spacer()
-
-                    Button("CANCEL") {
-                        libraryStore.cancelBackgroundMetadataScan()
-                    }
-                    .font(.system(size: 10, weight: .bold, design: .monospaced))
-                    .foregroundStyle(Color.red)
-                    .buttonStyle(.plain)
-                }
-            }
-            .padding(.vertical, 2)
-        }
-    }
-
-    // Refresh cache size
     private func refreshCacheSize() async {
         let size = await ArtworkCacheService.shared.calculateDiskSize()
-        self.artworkCacheSizeBytes = size
-    }
-
-    // Clear artwork cache
-    private func clearArtworkCache() {
-        Task {
-            await ArtworkCacheService.shared.clearCache()
-            await refreshCacheSize()
+        await MainActor.run {
+            self.artworkCacheSizeBytes = size
         }
     }
 }

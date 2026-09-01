@@ -254,6 +254,11 @@ public actor ArtworkCacheService {
         return totalSize
     }
 
+    /// Alias for calculateDiskSize().
+    public func diskCacheSizeBytes() -> Int64 {
+        calculateDiskSize()
+    }
+
     /// Generates a canonical album-level artwork key to ensure deduplicated storage across tracks.
     public static func albumArtworkKey(artist: String, album: String) -> String {
         let cleanArtist = artist.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()

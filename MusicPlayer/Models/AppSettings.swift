@@ -188,6 +188,32 @@ public enum PlayerBackgroundStyle: String, CaseIterable, Identifiable, Codable, 
     }
 }
 
+// MARK: - LibraryScanMethod
+
+/// Available library scanning and organization modes.
+public enum LibraryScanMethod: String, CaseIterable, Identifiable, Codable, Sendable {
+    /// Method 1 (Default): Standard ID3 tag organization (Artist > Album > Track)
+    case id3Tags = "ID3_TAGS"
+    /// Method 2: Filesystem-based organization (Parent Folder (Artist) > Subfolder (Album) > Files (Tracks))
+    case folderHierarchy = "FOLDER_HIERARCHY"
+
+    public var id: String { rawValue }
+
+    public var displayName: String {
+        switch self {
+        case .id3Tags: return "STANDARD ID3 TAGS"
+        case .folderHierarchy: return "FOLDER HIERARCHY"
+        }
+    }
+
+    public var descriptionText: String {
+        switch self {
+        case .id3Tags: return "Organizes music using embedded ID3/audio tags (Artist > Album > Track)."
+        case .folderHierarchy: return "Organizes music from folder structure (Artist Folder > Album Folder > Tracks)."
+        }
+    }
+}
+
 // MARK: - AppSettings
 
 /// User preferences and persistent application configuration.
@@ -195,6 +221,7 @@ public struct AppSettings: Codable, Sendable {
     public var appTheme: AppTheme
     public var defaultLibraryCategory: LibraryCategory
     public var playerBackgroundStyle: PlayerBackgroundStyle
+    public var libraryScanMethod: LibraryScanMethod
     public var autoPlayNext: Bool
     public var rememberPlaybackPosition: Bool
     // Minimum track length (in minutes) required to save and remember playback position
@@ -233,6 +260,7 @@ public struct AppSettings: Codable, Sendable {
         appTheme: AppTheme = .dark,
         defaultLibraryCategory: LibraryCategory = .artists,
         playerBackgroundStyle: PlayerBackgroundStyle = .albumColor,
+        libraryScanMethod: LibraryScanMethod = .id3Tags,
         autoPlayNext: Bool = true,
         rememberPlaybackPosition: Bool = true,
         rememberPlaybackPositionMinMinutes: Double = 10.0,
@@ -255,6 +283,7 @@ public struct AppSettings: Codable, Sendable {
         self.appTheme = appTheme
         self.defaultLibraryCategory = defaultLibraryCategory
         self.playerBackgroundStyle = playerBackgroundStyle
+        self.libraryScanMethod = libraryScanMethod
         self.autoPlayNext = autoPlayNext
         self.rememberPlaybackPosition = rememberPlaybackPosition
         self.rememberPlaybackPositionMinMinutes = rememberPlaybackPositionMinMinutes
@@ -285,6 +314,8 @@ public struct AppSettings: Codable, Sendable {
         case defaultLibraryCategory
         // Player background style option
         case playerBackgroundStyle
+        // Library scan method option
+        case libraryScanMethod
         // Auto play next option
         case autoPlayNext
         // Remember playback position option
@@ -346,6 +377,7 @@ public struct AppSettings: Codable, Sendable {
         // All other settings use safe decodeIfPresent with sensible defaults so missing keys don't throw.
         self.defaultLibraryCategory = try container.decodeIfPresent(LibraryCategory.self, forKey: .defaultLibraryCategory) ?? .artists
         self.playerBackgroundStyle = try container.decodeIfPresent(PlayerBackgroundStyle.self, forKey: .playerBackgroundStyle) ?? .albumColor
+        self.libraryScanMethod = try container.decodeIfPresent(LibraryScanMethod.self, forKey: .libraryScanMethod) ?? .id3Tags
         self.autoPlayNext = try container.decodeIfPresent(Bool.self, forKey: .autoPlayNext) ?? true
         self.rememberPlaybackPosition = try container.decodeIfPresent(Bool.self, forKey: .rememberPlaybackPosition) ?? true
         self.rememberPlaybackPositionMinMinutes = try container.decodeIfPresent(Double.self, forKey: .rememberPlaybackPositionMinMinutes) ?? 10.0
@@ -373,6 +405,7 @@ public struct AppSettings: Codable, Sendable {
         try container.encode(appTheme, forKey: .appTheme)
         try container.encode(defaultLibraryCategory, forKey: .defaultLibraryCategory)
         try container.encode(playerBackgroundStyle, forKey: .playerBackgroundStyle)
+        try container.encode(libraryScanMethod, forKey: .libraryScanMethod)
         try container.encode(autoPlayNext, forKey: .autoPlayNext)
         try container.encode(rememberPlaybackPosition, forKey: .rememberPlaybackPosition)
         try container.encode(rememberPlaybackPositionMinMinutes, forKey: .rememberPlaybackPositionMinMinutes)

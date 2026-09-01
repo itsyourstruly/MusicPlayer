@@ -28,14 +28,29 @@ public struct AlbumDetailView: View {
         self.playerService = playerService
     }
 
-    private var displayedTracks: [Track] {
-        // Clean query
+    private var displayedMainTracks: [Track] {
+        let list = album.mainTracks
         let cleanQuery = FuzzyMatcher.normalize(searchQuery)
-        // Ensure preconditions are met before proceeding
-        guard !cleanQuery.isEmpty else { return album.tracks }
-        // Scored
-        let scored: [(Track, Int)] = album.tracks.compactMap { track in
-            // Score
+        guard !cleanQuery.isEmpty else { return list }
+        let scored: [(Track, Int)] = list.compactMap { track in
+            let score = FuzzyMatcher.scoreTrack(
+                normalizedTitle: track.normalizedTitle,
+                normalizedArtist: track.normalizedArtist,
+                normalizedAlbum: track.normalizedAlbum,
+                searchTokens: track.searchTokens,
+                cleanQuery: cleanQuery
+            )
+            return score > 0 ? (track, score) : nil
+        }
+        return scored.sorted { $0.1 > $1.1 }.map { $0.0 }
+    }
+
+    private var displayedAlternateTracks: [Track] {
+        let list = album.alternateTracks
+        guard !list.isEmpty && list.count < album.tracks.count else { return [] }
+        let cleanQuery = FuzzyMatcher.normalize(searchQuery)
+        guard !cleanQuery.isEmpty else { return list }
+        let scored: [(Track, Int)] = list.compactMap { track in
             let score = FuzzyMatcher.scoreTrack(
                 normalizedTitle: track.normalizedTitle,
                 normalizedArtist: track.normalizedArtist,
@@ -158,14 +173,14 @@ public struct AlbumDetailView: View {
                         .buttonStyle(.plain)
                     }
 
-                    // Tracklist Section (Album name removed next to artist, no track numbers written)
+                    // Tracklist Section (Main canonical tracks)
                     VStack(alignment: .leading, spacing: 10) {
-                        Text("TRACKLIST (\(displayedTracks.count))")
+                        Text("TRACKLIST (\(displayedMainTracks.count))")
                             .font(.system(size: 12, weight: .bold, design: .monospaced))
                             .foregroundStyle(.secondary)
                             .padding(.horizontal, 2)
 
-                        if displayedTracks.isEmpty {
+                        if displayedMainTracks.isEmpty && displayedAlternateTracks.isEmpty {
                             EmptyStateView(
                                 title: "NO MATCHING TRACKS",
                                 message: "No tracks in this album match '\(searchQuery)'."
@@ -179,8 +194,8 @@ public struct AlbumDetailView: View {
                             let isTapToPlayNext = libraryStore.settings.tapToPlayNext
 
                             LazyVStack(spacing: 4) {
-                                ForEach(0..<displayedTracks.count, id: \.self) { index in
-                                    let track = displayedTracks[index]
+                                ForEach(0..<displayedMainTracks.count, id: \.self) { index in
+                                    let track = displayedMainTracks[index]
                                     TrackRowView(
                                         track: track,
                                         indexNumber: index + 1,
@@ -190,7 +205,7 @@ public struct AlbumDetailView: View {
                                         isInPlayNext: playNextSet.contains(track.id),
                                         isTapToPlayNextEnabled: isTapToPlayNext,
                                         onPlay: {
-                                            playerService.play(track: track, inQueue: displayedTracks, startIndex: index)
+                                            playerService.play(track: track, inQueue: displayedMainTracks, startIndex: index)
                                         },
                                         onPlayNext: {
                                             playerService.insertPlayNextFront(track: track)
@@ -219,6 +234,64 @@ public struct AlbumDetailView: View {
                                 }
                             }
                         }
+                    }
+
+                    // Alternates Section (Instrumentals, Remixes, Acoustics, Live Versions, etc.)
+                    if !displayedAlternateTracks.isEmpty {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text("ALTERNATES")
+                                .font(.system(size: 12, weight: .bold, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                                .padding(.horizontal, 2)
+
+                            let currentTrackID = playerService.currentTrack?.id
+                            let isCurrentPlaying = playerService.playbackStatus.isPlaying
+                            let nextTrackID = playerService.nextTrack?.id
+                            let playNextSet = Set(playerService.playNextQueue.map { $0.id })
+                            let isTapToPlayNext = libraryStore.settings.tapToPlayNext
+
+                            LazyVStack(spacing: 4) {
+                                ForEach(0..<displayedAlternateTracks.count, id: \.self) { index in
+                                    let track = displayedAlternateTracks[index]
+                                    TrackRowView(
+                                        track: track,
+                                        indexNumber: nil,
+                                        isCurrentTrack: track.id == currentTrackID,
+                                        isPlaying: isCurrentPlaying && track.id == currentTrackID,
+                                        isNextTrack: track.id == nextTrackID,
+                                        isInPlayNext: playNextSet.contains(track.id),
+                                        isTapToPlayNextEnabled: isTapToPlayNext,
+                                        onPlay: {
+                                            playerService.play(track: track, inQueue: displayedAlternateTracks, startIndex: index)
+                                        },
+                                        onPlayNext: {
+                                            playerService.insertPlayNextFront(track: track)
+                                        },
+                                        onQueueNext: {
+                                            playerService.playNext(track: track)
+                                        },
+                                        onAddToQueue: {
+                                            playerService.appendToQueue(track: track)
+                                        },
+                                        onAddToPlaylist: {
+                                            selectedTrackForPlaylist = track
+                                        },
+                                        onShowInfo: {
+                                            selectedTrackForInfo = track
+                                        },
+                                        onSelectArtist: { artistName in
+                                            if let artistObj = libraryStore.findArtist(name: artistName) {
+                                                selectedArtistForNavigation = artistObj
+                                            }
+                                        },
+                                        onSelectAlbum: {
+                                            // Already in album view
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                        .padding(.top, 14)
                     }
                 }
                 .padding(.horizontal, 16)

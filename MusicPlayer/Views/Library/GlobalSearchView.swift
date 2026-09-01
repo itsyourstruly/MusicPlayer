@@ -203,6 +203,7 @@ public struct GlobalSearchView: View {
     @State private var isOnlineMode: Bool = false
     @State private var onlineResults: OnlineSearchResults = OnlineSearchResults()
     @State private var isOnlineSearching: Bool = false
+    @State private var previewManager = OnlineAudioPreviewManager.shared
 
     private let onlineColumns = [
         GridItem(.flexible(), spacing: 14),
@@ -288,6 +289,9 @@ public struct GlobalSearchView: View {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                 isSearchFocused = true
             }
+        }
+        .onDisappear {
+            previewManager.stop()
         }
         .task(id: "\(searchQuery)_\(isOnlineMode)") {
             let clean = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -495,51 +499,86 @@ public struct GlobalSearchView: View {
 
             LazyVStack(alignment: .leading, spacing: 6) {
                 ForEach(onlineResults.tracks) { item in
-                    HStack(spacing: 12) {
-                        AsyncImage(url: item.artworkURL) { phase in
-                            switch phase {
-                            case .success(let image):
-                                image.resizable().scaledToFill()
-                            default:
-                                RoundedRectangle(cornerRadius: 6).fill(Color.primary.opacity(0.08))
-                            }
-                        }
-                        .frame(width: 40, height: 40)
-                        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                    NavigationLink(destination: OnlineTrackDetailView(track: item)) {
+                        HStack(spacing: 12) {
+                            ZStack(alignment: .center) {
+                                AsyncImage(url: item.artworkURL) { phase in
+                                    switch phase {
+                                    case .success(let image):
+                                        image.resizable().scaledToFill()
+                                    default:
+                                        RoundedRectangle(cornerRadius: 6).fill(Color.primary.opacity(0.08))
+                                    }
+                                }
+                                .frame(width: 42, height: 42)
+                                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
 
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(item.title)
-                                .font(.system(size: 14, weight: .semibold))
-                                .foregroundStyle(Color.primary)
-                                .lineLimit(1)
-
-                            HStack(spacing: 6) {
-                                Text(item.artistName)
-                                    .font(.system(size: 12))
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(1)
-
-                                if !item.albumTitle.isEmpty {
-                                    Text("·")
-                                        .font(.system(size: 10))
-                                        .foregroundStyle(.tertiary)
-
-                                    Text(item.albumTitle)
-                                        .font(.system(size: 12))
-                                        .foregroundStyle(.tertiary)
-                                        .lineLimit(1)
+                                if item.previewURL != nil {
+                                    Button(action: {
+                                        previewManager.togglePreview(track: item)
+                                    }) {
+                                        Image(systemName: previewManager.currentTrackID == item.id && previewManager.isPlaying ? "pause.fill" : "play.fill")
+                                            .font(.system(size: 11, weight: .bold))
+                                            .foregroundStyle(Color.white)
+                                            .frame(width: 26, height: 26)
+                                            .background(Color.black.opacity(0.7))
+                                            .clipShape(Circle())
+                                    }
+                                    .buttonStyle(.plain)
                                 }
                             }
+
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(item.title)
+                                    .font(.system(size: 14, weight: .semibold))
+                                    .foregroundStyle(previewManager.currentTrackID == item.id && previewManager.isPlaying ? appTheme.accentColor : Color.primary)
+                                    .lineLimit(1)
+
+                                HStack(spacing: 6) {
+                                    Text(item.artistName)
+                                        .font(.system(size: 12))
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(1)
+
+                                    if !item.albumTitle.isEmpty {
+                                        Text("·")
+                                            .font(.system(size: 10))
+                                            .foregroundStyle(.tertiary)
+
+                                        Text(item.albumTitle)
+                                            .font(.system(size: 12))
+                                            .foregroundStyle(.tertiary)
+                                            .lineLimit(1)
+                                    }
+                                }
+                            }
+
+                            Spacer()
+
+                            if item.previewURL != nil {
+                                Button(action: {
+                                    previewManager.togglePreview(track: item)
+                                }) {
+                                    Text(previewManager.currentTrackID == item.id && previewManager.isPlaying ? "PAUSE" : "PREVIEW")
+                                        .font(.system(size: 8.5, weight: .bold, design: .monospaced))
+                                        .padding(.horizontal, 6)
+                                        .padding(.vertical, 3.5)
+                                        .background(previewManager.currentTrackID == item.id && previewManager.isPlaying ? appTheme.accentColor : appTheme.accentColor.opacity(0.18))
+                                        .foregroundStyle(previewManager.currentTrackID == item.id && previewManager.isPlaying ? Color.appInvertedBackground : appTheme.accentColor)
+                                        .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+                                }
+                                .buttonStyle(.plain)
+                            }
+
+                            Text(TimeFormatting.format(seconds: item.duration))
+                                .font(.system(size: 11, design: .monospaced))
+                                .foregroundStyle(.secondary)
                         }
-
-                        Spacer()
-
-                        Text(TimeFormatting.format(seconds: item.duration))
-                            .font(.system(size: 11, design: .monospaced))
-                            .foregroundStyle(.secondary)
+                        .padding(.vertical, 4)
+                        .padding(.horizontal, 4)
+                        .contentShape(Rectangle())
                     }
-                    .padding(.vertical, 4)
-                    .padding(.horizontal, 4)
+                    .buttonStyle(.plain)
                 }
             }
         }
@@ -553,31 +592,40 @@ public struct GlobalSearchView: View {
 
             LazyVGrid(columns: onlineColumns, spacing: 14) {
                 ForEach(onlineResults.albums) { item in
-                    VStack(alignment: .leading, spacing: 6) {
-                        AsyncImage(url: item.artworkURL) { phase in
-                            switch phase {
-                            case .success(let image):
-                                image.resizable().scaledToFill()
-                            default:
-                                RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.08))
+                    NavigationLink(destination: OnlineAlbumDetailView(album: item)) {
+                        VStack(alignment: .leading, spacing: 6) {
+                            AsyncImage(url: item.artworkURL) { phase in
+                                switch phase {
+                                case .success(let image):
+                                    image.resizable().scaledToFill()
+                                default:
+                                    RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.08))
+                                }
                             }
-                        }
-                        .aspectRatio(1.0, contentMode: .fit)
-                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                            .aspectRatio(1.0, contentMode: .fit)
+                            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
 
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(item.title)
-                                .font(.system(size: 13, weight: .bold))
-                                .foregroundStyle(Color.primary)
-                                .lineLimit(1)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(item.title)
+                                    .font(.system(size: 13, weight: .bold))
+                                    .foregroundStyle(Color.primary)
+                                    .lineLimit(1)
 
-                            Text(item.artistName)
-                                .font(.system(size: 11))
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
+                                Text(item.artistName)
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+
+                                if let count = item.trackCount, count > 0 {
+                                    Text("\(count) TRACKS")
+                                        .font(.system(size: 9.5, design: .monospaced))
+                                        .foregroundStyle(.tertiary)
+                                }
+                            }
+                            .padding(.horizontal, 2)
                         }
-                        .padding(.horizontal, 2)
                     }
+                    .buttonStyle(.plain)
                 }
             }
         }
@@ -591,36 +639,44 @@ public struct GlobalSearchView: View {
 
             LazyVStack(alignment: .leading, spacing: 8) {
                 ForEach(onlineResults.artists) { item in
-                    HStack(spacing: 12) {
-                        AsyncImage(url: item.imageURL) { phase in
-                            switch phase {
-                            case .success(let image):
-                                image.resizable().scaledToFill()
-                            default:
-                                Circle().fill(Color.primary.opacity(0.08))
+                    NavigationLink(destination: OnlineArtistDetailView(artist: item)) {
+                        HStack(spacing: 12) {
+                            AsyncImage(url: item.imageURL) { phase in
+                                switch phase {
+                                case .success(let image):
+                                    image.resizable().scaledToFill()
+                                default:
+                                    Circle().fill(Color.primary.opacity(0.08))
+                                }
                             }
-                        }
-                        .frame(width: 44, height: 44)
-                        .clipShape(Circle())
+                            .frame(width: 44, height: 44)
+                            .clipShape(Circle())
 
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(item.name)
-                                .font(.system(size: 14, weight: .bold))
-                                .foregroundStyle(Color.primary)
-                                .lineLimit(1)
-
-                            if let genre = item.genre, !genre.isEmpty {
-                                Text(genre)
-                                    .font(.system(size: 11, design: .monospaced))
-                                    .foregroundStyle(.secondary)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(item.name)
+                                    .font(.system(size: 14, weight: .bold))
+                                    .foregroundStyle(Color.primary)
                                     .lineLimit(1)
-                            }
-                        }
 
-                        Spacer()
+                                if let genre = item.genre, !genre.isEmpty {
+                                    Text(genre)
+                                        .font(.system(size: 11, design: .monospaced))
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(1)
+                                }
+                            }
+
+                            Spacer()
+
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(.tertiary)
+                        }
+                        .padding(.vertical, 4)
+                        .padding(.horizontal, 4)
+                        .contentShape(Rectangle())
                     }
-                    .padding(.vertical, 4)
-                    .padding(.horizontal, 4)
+                    .buttonStyle(.plain)
                 }
             }
         }
@@ -912,12 +968,6 @@ public struct SearchTreeTrackRowView: View {
 
             Button(action: triggerQueueNext) {
                 Text("QUEUE NEXT")
-            }
-
-            Button(action: {
-                playerService.appendToQueue(track: track)
-            }) {
-                Text("ADD TO QUEUE")
             }
 
             Button(action: {
@@ -1593,7 +1643,6 @@ public struct LibrarySearchResultsContainer: View, Equatable {
                     isNextTrack: track.id == nextTrackID,
                     isInPlayNext: playNextSet.contains(track.id),
                     isTapToPlayNextEnabled: isTapToPlayNext,
-                    showAlbumSubtitle: true,
                     onPlay: {
                         playerService.play(track: track, inQueue: allTracks, startIndex: index)
                     },

@@ -685,6 +685,28 @@ public final class AudioPlayerService {
     public func movePlayNextItem(fromOffsets source: IndexSet, toOffset destination: Int) {
         playNextQueue.move(fromOffsets: source, toOffset: destination)
     }
+
+    /// Moves a track from the Play Next queue to the main queue at a destination index.
+    public func moveFromPlayNextToQueue(playNextIndex: Int, queueDestinationIndex: Int) {
+        guard playNextQueue.indices.contains(playNextIndex) else { return }
+        let track = playNextQueue.remove(at: playNextIndex)
+        let clampedIndex = max(0, min(queueDestinationIndex, queue.count))
+        queue.insert(track, at: clampedIndex)
+        if let current = currentTrack {
+            self.currentIndex = queue.firstIndex(where: { $0.id == current.id })
+        }
+    }
+
+    /// Moves a track from the main queue to the Play Next queue at a destination index.
+    public func moveFromQueueToPlayNext(queueIndex: Int, playNextDestinationIndex: Int) {
+        guard queue.indices.contains(queueIndex) else { return }
+        let track = queue.remove(at: queueIndex)
+        let clampedIndex = max(0, min(playNextDestinationIndex, playNextQueue.count))
+        playNextQueue.insert(track, at: clampedIndex)
+        if let current = currentTrack {
+            self.currentIndex = queue.firstIndex(where: { $0.id == current.id })
+        }
+    }
     
     /// Clears all tracks from the Play Next queue.
     public func clearPlayNextQueue() {
