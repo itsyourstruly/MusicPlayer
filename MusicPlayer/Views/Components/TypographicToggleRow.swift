@@ -26,7 +26,7 @@ public struct TypographicToggleRow: View {
     }
 
     public var body: some View {
-        HStack(alignment: .center, spacing: 12) {
+        let content = HStack(alignment: .center, spacing: 12) {
             VStack(alignment: .leading, spacing: 4) {
                 Text(title)
                     .font(.system(size: 14.5, weight: .bold, design: .monospaced))
@@ -49,17 +49,29 @@ public struct TypographicToggleRow: View {
         }
         .padding(.vertical, 8)
         .contentShape(Rectangle())
-        .onTapGesture {
-            HapticFeedback.selectionChanged()
-            withAnimation(.easeInOut(duration: 0.15)) {
-                isOn.toggle()
-            }
-            onToggle?()
-        }
-        .onLongPressGesture(minimumDuration: 0.45) {
-            if let onLongPress {
-                HapticFeedback.notificationSuccess()
-                onLongPress()
+
+        if let onLongPress {
+            content.gesture(
+                LongPressGesture(minimumDuration: 0.45)
+                    .onEnded { _ in
+                        HapticFeedback.softImpact(intensity: 0.50)
+                        onLongPress()
+                    }
+                    .exclusively(before: TapGesture().onEnded {
+                        HapticFeedback.toggle(isOn: !isOn)
+                        withAnimation(.easeInOut(duration: 0.15)) {
+                            isOn.toggle()
+                        }
+                        onToggle?()
+                    })
+            )
+        } else {
+            content.onTapGesture {
+                HapticFeedback.toggle(isOn: !isOn)
+                withAnimation(.easeInOut(duration: 0.15)) {
+                    isOn.toggle()
+                }
+                onToggle?()
             }
         }
     }

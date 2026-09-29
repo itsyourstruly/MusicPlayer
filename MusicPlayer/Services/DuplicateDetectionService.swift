@@ -18,16 +18,20 @@ public actor DuplicateDetectionService {
 
     /// Analyzes a collection of tracks and returns detected duplicate clusters.
     public func analyzeDuplicates(in tracks: [Track]) -> [DuplicateGroup] {
+        AppLogger.library.info("Starting duplicate analysis across \(tracks.count) tracks...")
         // Ensure preconditions are met before proceeding
         guard tracks.count > 1 else { return [] }
 
-        // Phase 1: Hash-bucketed grouping by normalized title
+        // Phase 1: Compound-key hash-bucketed grouping by normalized title + artist + album
         var buckets: [String: [Int]] = [:]
         buckets.reserveCapacity(tracks.count)
 
         for i in 0..<tracks.count {
-            let key = normalizeTitle(tracks[i].title).groupingKey
-            buckets[key, default: []].append(i)
+            let titleKey = normalizeTitle(tracks[i].title).groupingKey
+            let artistKey = normalizeArtist(tracks[i].artist)
+            let albumKey = normalizeAlbum(tracks[i].album)
+            let compoundKey = "\(titleKey)|\(artistKey)|\(albumKey)"
+            buckets[compoundKey, default: []].append(i)
         }
 
         // Phase 2 & 3: Pairwise verification within each bucket using union-find
@@ -84,7 +88,8 @@ public actor DuplicateDetectionService {
             let first = cluster[0]
             let normTitle = normalizeTitle(first.title).normalized
             let normArtist = normalizeArtist(first.artist)
-            let groupID = "\(normArtist)_\(normTitle)".lowercased()
+            let normAlbum = normalizeAlbum(first.album)
+            let groupID = "\(normArtist)_\(normAlbum)_\(normTitle)".lowercased()
 
             let recommendedID = evaluatedCandidates.first(where: { $0.isRecommended })?.track.id ?? first.id
 
@@ -98,6 +103,7 @@ public actor DuplicateDetectionService {
             duplicateGroups.append(group)
         }
 
+        AppLogger.library.info("Duplicate analysis finished: found \(duplicateGroups.count) duplicate groups.")
         // Sort groups by potential disk savings (largest first)
         return duplicateGroups.sorted { $0.potentialSavedBytes > $1.potentialSavedBytes }
     }
@@ -105,7 +111,7 @@ public actor DuplicateDetectionService {
     // MARK: - Multi-Signal Duplicate Verification
 
     /// Evaluates whether two tracks are duplicates using a multi-signal scoring approach.
-    /// Returns true when the composite confidence score meets the threshold.
+    /// Strictly requires matching track title, artist, and album.
     public func isDuplicate(_ a: Track, _ b: Track) -> Bool {
         // Fast exact file path check
         if a.url == b.url { return true }
@@ -118,26 +124,33 @@ public actor DuplicateDetectionService {
         let titleScore = scoreTitleMatch(titleInfoA.normalized, titleInfoB.normalized)
         guard titleScore > 0 else { return false }
 
-        // Signal 5: Version/remix guard (apply early to reject quickly)
+        // Signal 2: Version/remix guard (apply early to reject quickly)
         let versionPenalty = scoreVersionGuard(titleInfoA.versionModifier, titleInfoB.versionModifier)
         if versionPenalty < 0 { return false }
 
-        // Signal 2: Artist match
+        // Signal 3: Artist match (required gate: identical or canonical equivalent artist)
         let normArtistA = normalizeArtist(a.artist)
         let normArtistB = normalizeArtist(b.artist)
         let artistScore = scoreArtistMatch(normArtistA, normArtistB)
+        guard artistScore > 0 else { return false }
 
-        // Signal 3: Duration proximity
-        let durationScore = scoreDurationProximity(a.duration, b.duration)
-
-        // Signal 4: Album match bonus
+        // Signal 4: Album match (required gate: identical album)
         let normAlbumA = normalizeAlbum(a.album)
         let normAlbumB = normalizeAlbum(b.album)
         let albumScore = scoreAlbumMatch(normAlbumA, normAlbumB)
+        guard albumScore > 0 else { return false }
 
-        // Composite score
+        // If both tracks have valid durations, guard against mismatched audio lengths (> 30s diff)
+        if a.duration > 0 && b.duration > 0 && abs(a.duration - b.duration) > 30.0 {
+            return false
+        }
+
+        // Signal 5: Duration proximity
+        let durationScore = scoreDurationProximity(a.duration, b.duration)
+
+        // Composite score: requires title (35-40) + artist (20-25) + album (15-20)
         let totalScore = titleScore + artistScore + durationScore + albumScore + versionPenalty
-        return totalScore >= 55
+        return totalScore >= 75
     }
 
     // MARK: - Individual Signal Scoring
@@ -159,23 +172,15 @@ public actor DuplicateDetectionService {
         // Exact match
         if normA == normB { return 25 }
 
-        // Both unknown
-        if normA == "unknown artist" && normB == "unknown artist" { return 10 }
+        // Both unknown - only match if both are explicitly unknown
+        if normA == "unknown artist" && normB == "unknown artist" { return 15 }
 
-        // One unknown — give benefit of the doubt
-        if normA == "unknown artist" || normB == "unknown artist" { return 15 }
+        // If one is unknown and the other is known, they do not match
+        if normA == "unknown artist" || normB == "unknown artist" { return 0 }
 
-        // Substring containment: only if the contained string has meaningful length
-        // This prevents "dj" matching "dj khaled" matching "dj snake"
-        let tokensA = normA.split(separator: " ")
-        let tokensB = normB.split(separator: " ")
-
-        if normA.contains(normB) && tokensB.count >= 2 { return 20 }
-        if normB.contains(normA) && tokensA.count >= 2 { return 20 }
-
-        // Levenshtein for minor differences
+        // High similarity Levenshtein for minor typos/punctuation
         let similarity = levenshteinSimilarityPreNormalized(normA, normB)
-        if similarity >= 0.85 { return 18 }
+        if similarity >= 0.92 { return 20 }
 
         return 0
     }
@@ -190,10 +195,21 @@ public actor DuplicateDetectionService {
         return 0
     }
 
-    /// Scores album match. Returns 0-10 points.
+    /// Scores album match. Returns 0-20 points.
     private func scoreAlbumMatch(_ normA: String, _ normB: String) -> Int {
-        if normA == normB { return 10 }
-        if normA == "unknown album" || normB == "unknown album" { return 5 }
+        // Exact match
+        if normA == normB { return 20 }
+
+        // Both unknown - only match if both are explicitly unknown
+        if normA == "unknown album" && normB == "unknown album" { return 10 }
+
+        // If one is unknown and the other is known, they do not match
+        if normA == "unknown album" || normB == "unknown album" { return 0 }
+
+        // High similarity Levenshtein for minor variations
+        let similarity = levenshteinSimilarityPreNormalized(normA, normB)
+        if similarity >= 0.92 { return 15 }
+
         return 0
     }
 

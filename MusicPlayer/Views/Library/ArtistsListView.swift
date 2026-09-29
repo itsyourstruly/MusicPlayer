@@ -12,6 +12,8 @@ public struct ArtistsListView: View {
         GridItem(.flexible(), spacing: 10)
     ]
 
+    @State private var selectedArtist: Artist? = nil
+
     // Initialize with configured properties
     public init(libraryStore: LibraryStore, playerService: AudioPlayerService) {
         self.libraryStore = libraryStore
@@ -40,7 +42,9 @@ public struct ArtistsListView: View {
             } else {
                 LazyVGrid(columns: columns, spacing: 10) {
                     ForEach(libraryStore.filteredArtists) { artist in
-                        NavigationLink(destination: ArtistDetailView(artist: artist, libraryStore: libraryStore, playerService: playerService)) {
+                        Button(action: {
+                            selectedArtist = artist
+                        }) {
                             HStack(spacing: 12) {
                                 AlbumArtworkView(
                                     artworkKey: artist.mostRecentArtworkKey,
@@ -76,6 +80,9 @@ public struct ArtistsListView: View {
                 }
                 .padding(.horizontal, 16)
             }
+        }
+        .navigationDestination(item: $selectedArtist) { artist in
+            ArtistDetailView(artist: artist, libraryStore: libraryStore, playerService: playerService)
         }
     }
 }

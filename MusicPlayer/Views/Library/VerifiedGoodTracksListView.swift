@@ -86,14 +86,6 @@ public struct VerifiedGoodTracksListView: View {
             .background(appTheme.backgroundColor.ignoresSafeArea())
             .navigationTitle("VERIFIED TRACKS")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("DONE") {
-                        dismiss()
-                    }
-                    .font(.system(size: 13, weight: .bold, design: .monospaced))
-                }
-            }
             .sheet(item: $selectedTrackForCustomSearch) { track in
                 OnlineMetadataMatchSheet(track: track, libraryStore: libraryStore)
                     .tint(appTheme.accentColor)
@@ -191,44 +183,63 @@ public struct VerifiedGoodTracksListView: View {
 
 /// Centered, swipeable card displaying local track vs verified online match with sub-artwork status label.
 /// Defaults to displaying original local metadata.
-private struct VerifiedGoodTrackCard: View {
-    let diff: MetadataDiff
-    let isRechecking: Bool
-    let onCustomSearch: () -> Void
-    let onRescan: () -> Void
+public struct VerifiedGoodTrackCard: View {
+    public let diff: MetadataDiff
+    public let isRechecking: Bool
+    public let onCustomSearch: () -> Void
+    public let onRescan: () -> Void
+    public let onSelectAPI: ((MetadataAPIOption) -> Void)?
+
+    public init(
+        diff: MetadataDiff,
+        isRechecking: Bool,
+        onCustomSearch: @escaping () -> Void,
+        onRescan: @escaping () -> Void,
+        onSelectAPI: ((MetadataAPIOption) -> Void)? = nil
+    ) {
+        self.diff = diff
+        self.isRechecking = isRechecking
+        self.onCustomSearch = onCustomSearch
+        self.onRescan = onRescan
+        self.onSelectAPI = onSelectAPI
+    }
 
     @State private var selectedPage: Int = 1 // Default to 1 (ORIGINAL LOCAL)
     @Environment(\.appTheme) private var appTheme
 
-    var body: some View {
+    public var body: some View {
         VStack(spacing: 14) {
-            // Page Indicator Tabs
-            HStack(spacing: 12) {
+            // Header Row: Page Indicator Tabs + Top-Right Provider Selector
+            HStack(alignment: .center) {
+                // Page Indicator Tabs
+                HStack(spacing: 10) {
+                    Button(action: {
+                        withAnimation(.easeInOut(duration: 0.2)) { selectedPage = 0 }
+                    }) {
+                        Text("ONLINE METADATA")
+                            .font(.system(size: 11, weight: .black, design: .monospaced))
+                            .foregroundStyle(selectedPage == 0 ? Color.blue : Color.secondary.opacity(0.5))
+                    }
+                    .buttonStyle(.plain)
+
+                    Text("•")
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(.secondary.opacity(0.3))
+
+                    Button(action: {
+                        withAnimation(.easeInOut(duration: 0.2)) { selectedPage = 1 }
+                    }) {
+                        Text("ORIGINAL LOCAL")
+                            .font(.system(size: 11, weight: .black, design: .monospaced))
+                            .foregroundStyle(selectedPage == 1 ? Color.orange : Color.secondary.opacity(0.5))
+                    }
+                    .buttonStyle(.plain)
+                }
+
                 Spacer()
 
-                Button(action: {
-                    withAnimation(.easeInOut(duration: 0.2)) { selectedPage = 0 }
-                }) {
-                    Text("ONLINE METADATA")
-                        .font(.system(size: 11, weight: .black, design: .monospaced))
-                        .foregroundStyle(selectedPage == 0 ? Color.blue : Color.secondary.opacity(0.5))
-                }
-                .buttonStyle(.plain)
-
-                Text("•")
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundStyle(.secondary.opacity(0.3))
-
-                Button(action: {
-                    withAnimation(.easeInOut(duration: 0.2)) { selectedPage = 1 }
-                }) {
-                    Text("ORIGINAL LOCAL")
-                        .font(.system(size: 11, weight: .black, design: .monospaced))
-                        .foregroundStyle(selectedPage == 1 ? Color.orange : Color.secondary.opacity(0.5))
-                }
-                .buttonStyle(.plain)
-
-                Spacer()
+                // Top-Right API Source Badge / Switcher
+                apiSourceBadge
             }
 
             // Swipeable Card Pages
@@ -269,6 +280,47 @@ private struct VerifiedGoodTrackCard: View {
             }
         }
         .padding(.vertical, 8)
+    }
+
+    // MARK: - API Source Badge & Interactive Switcher
+    private var apiSourceBadge: some View {
+        let currentSource = diff.onlineMetadata.sourceAPIOption
+        return Menu {
+            ForEach([MetadataAPIOption.itunes, .deezer, .musicBrainz], id: \.self) { source in
+                Button(action: {
+                    HapticFeedback.selectionChanged()
+                    onSelectAPI?(source)
+                }) {
+                    HStack {
+                        Text(source.displayName)
+                        if currentSource == source {
+                            Image(systemName: "checkmark")
+                        }
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 4) {
+                if isRechecking {
+                    ProgressView()
+                        .scaleEffect(0.65)
+                        .tint(Color.secondary)
+                }
+                Text(currentSource.displayName)
+                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+                    .foregroundStyle(Color.secondary)
+
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.system(size: 8, weight: .bold))
+                    .foregroundStyle(Color.secondary.opacity(0.7))
+            }
+            .padding(.horizontal, 7)
+            .padding(.vertical, 4)
+            .background(Color.white.opacity(0.08))
+            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 
     // MARK: - Online Page View
@@ -323,7 +375,7 @@ private struct VerifiedGoodTrackCard: View {
                 } else {
                     HStack(spacing: 4) {
                         Text("USING ONLINE ARTWORK")
-                        Text("• \(diff.onlineMetadata.sourceAPI.uppercased())")
+                        Text("• \(diff.onlineMetadata.normalizedSourceAPI)")
                     }
                     .font(.system(size: 9, weight: .bold, design: .monospaced))
                     .foregroundStyle(Color.green)

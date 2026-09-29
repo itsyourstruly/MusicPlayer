@@ -7,6 +7,7 @@ public struct EqualizerGraphView: View {
     @Bindable var equalizerManager: EqualizerManager
     @Environment(\.appTheme) private var appTheme
     @State private var activeDraggingBand: Int? = nil
+    @State private var dragFingerOffsetY: CGFloat = 0.0
 
     public init(equalizerManager: EqualizerManager) {
         self.equalizerManager = equalizerManager
@@ -55,6 +56,13 @@ public struct EqualizerGraphView: View {
                 let count = equalizerManager.bands.count
                 let stepX = count > 1 ? (width - 2 * marginX) / CGFloat(count - 1) : 0
                 let usableHeight = height - 2 * insetY
+                let nodePoints = (0..<count).map { i -> CGPoint in
+                    let x = marginX + CGFloat(i) * stepX
+                    let gain = equalizerManager.bands[i].gainDB
+                    let norm = (gain - minDB) / (maxDB - minDB) // 0.0 at -12, 1.0 at +12
+                    let y = (height - insetY) - (CGFloat(norm) * usableHeight)
+                    return CGPoint(x: x, y: y)
+                }
 
                 ZStack {
                     // Background Surface
@@ -132,15 +140,6 @@ public struct EqualizerGraphView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                     .padding(.leading, 6)
                     .padding(.vertical, insetY - 5)
-
-                    // Compute Node Coordinates
-                    let nodePoints = (0..<count).map { i -> CGPoint in
-                        let x = marginX + CGFloat(i) * stepX
-                        let gain = equalizerManager.bands[i].gainDB
-                        let norm = (gain - minDB) / (maxDB - minDB) // 0.0 at -12, 1.0 at +12
-                        let y = (height - insetY) - (CGFloat(norm) * usableHeight)
-                        return CGPoint(x: x, y: y)
-                    }
 
                     // Translucent Gradient Fill Area under the Curve
                     Path { path in
@@ -226,24 +225,56 @@ public struct EqualizerGraphView: View {
                     isEnabled
                         ? DragGesture(minimumDistance: 0)
                             .onChanged { value in
-                                let touchX = value.location.x
-                                let touchY = value.location.y
+                                if activeDraggingBand == nil {
+                                    // Touch-down: check if touch began on a frequency node handle
+                                    let startX = value.startLocation.x
+                                    let startY = value.startLocation.y
 
-                                // Find nearest frequency band
-                                let normalizedX = (touchX - marginX) / max(1, width - 2 * marginX)
-                                let rawIndex = Int(round(normalizedX * CGFloat(count - 1)))
-                                let nearestIndex = max(0, min(count - 1, rawIndex))
-                                activeDraggingBand = nearestIndex
+                                    var foundBand: Int? = nil
+                                    var bestDistance: CGFloat = .infinity
 
-                                // Calculate gain from touchY clamped within usable height
-                                let clampedY = max(insetY, min(height - insetY, touchY))
+                                    for i in 0..<count {
+                                        let pt = nodePoints[i]
+                                        let dx = abs(startX - pt.x)
+                                        let dy = abs(startY - pt.y)
+                                        let maxDX = min(24.0, stepX * 0.48)
+                                        let maxDY: CGFloat = 30.0
+
+                                        if dx <= maxDX && dy <= maxDY {
+                                            let dist = hypot(dx, dy)
+                                            if dist < bestDistance {
+                                                bestDistance = dist
+                                                foundBand = i
+                                            }
+                                        }
+                                    }
+
+                                    guard let band = foundBand else {
+                                        // Touch did not originate on a frequency node handle - ignore gesture
+                                        return
+                                    }
+
+                                    activeDraggingBand = band
+                                    dragFingerOffsetY = startY - nodePoints[band].y
+                                    HapticFeedback.selectionChanged()
+                                }
+
+                                guard let band = activeDraggingBand else { return }
+
+                                // Adjust ONLY the tapped frequency band without affecting other points
+                                let virtualNodeY = value.location.y - dragFingerOffsetY
+                                let clampedY = max(insetY, min(height - insetY, virtualNodeY))
                                 let normGain = Double(1.0 - ((clampedY - insetY) / usableHeight))
                                 let rawDB = minDB + normGain * (maxDB - minDB)
 
-                                equalizerManager.setGain(bandIndex: nearestIndex, gainDB: rawDB)
+                                equalizerManager.setGain(bandIndex: band, gainDB: rawDB)
                             }
                             .onEnded { _ in
+                                if activeDraggingBand != nil {
+                                    HapticFeedback.lightImpact()
+                                }
                                 activeDraggingBand = nil
+                                dragFingerOffsetY = 0.0
                             }
                         : nil
                 )

@@ -37,6 +37,8 @@ public actor BackgroundMetadataScanner {
     private var activeTask: Task<Void, Never>? = nil
     // Controls is running
     private var isRunning: Bool = false
+    // Controls is paused
+    private var isPaused: Bool = false
 
     // Initialize with configured properties
     private init() {}
@@ -46,11 +48,40 @@ public actor BackgroundMetadataScanner {
         isRunning
     }
 
+    /// Checks if a background scan is currently paused.
+    public var isScanPaused: Bool {
+        isPaused
+    }
+
+    /// Pauses any currently active background scan.
+    public func pause() {
+        if isRunning && !isPaused {
+            AppLogger.metadata.info("[Background Scanner] Pausing active metadata scan...")
+            isPaused = true
+        }
+    }
+
+    /// Resumes a paused background scan.
+    public func resume() {
+        if isRunning && isPaused {
+            AppLogger.metadata.info("[Background Scanner] Resuming paused metadata scan...")
+            isPaused = false
+        }
+    }
+
+    /// Wait helper that yields execution while paused.
+    public func waitIfPaused() async {
+        while isPaused && isRunning && !Task.isCancelled {
+            try? await Task.sleep(nanoseconds: 150_000_000)
+        }
+    }
+
     /// Cancels any currently active background scan immediately.
     public func cancel() {
         if isRunning {
             AppLogger.metadata.info("[Background Scanner] Cancelling active metadata scan task...")
         }
+        isPaused = false
         activeTask?.cancel()
         activeTask = nil
         isRunning = false
@@ -78,7 +109,7 @@ public actor BackgroundMetadataScanner {
 
         isRunning = true
 
-        activeTask = Task.detached(priority: .userInitiated) { [weak self] in
+        activeTask = Task.detached(priority: .utility) { [weak self] in
             // Ensure preconditions are met before proceeding
             guard let self = self else { return }
 
@@ -116,12 +147,20 @@ public actor BackgroundMetadataScanner {
                 return
             }
 
-            // Current diffs
-            var currentDiffs = forceRecheck ? [MetadataDiff]() : existingDiffs
-            // Current good
-            var currentGood = forceRecheck ? [MetadataDiff]() : existingGood
+            // Dictionary indexing for O(1) removals and updates (eliminating O(N^2) scans)
+            var diffsByID: [UUID: MetadataDiff] = Dictionary(
+                existingDiffs.map { ($0.id, $0) },
+                uniquingKeysWith: { first, _ in first }
+            )
+            var goodByID: [UUID: MetadataDiff] = Dictionary(
+                existingGood.filter { diff in
+                    let y = diff.localTrack.year ?? 0
+                    return y >= 1900 && y <= Calendar.current.component(.year, from: Date()) + 2
+                }.map { ($0.id, $0) },
+                uniquingKeysWith: { first, _ in first }
+            )
             // Current unmatched
-            var currentUnmatched = forceRecheck ? Set<UUID>() : existingUnmatched
+            var currentUnmatched = existingUnmatched
 
             // Total
             let total = tracksToScan.count
@@ -132,21 +171,18 @@ public actor BackgroundMetadataScanner {
 
             // Helper to report progress safely without overwhelming main actor
             func emitProgress(statusMessage: String, force: Bool = false) {
-                // Now
                 let now = Date()
-                if force || now.timeIntervalSince(lastProgressReportTime) >= 0.08 || scannedCount >= total {
+                if force || now.timeIntervalSince(lastProgressReportTime) >= 0.75 || scannedCount >= total {
                     lastProgressReportTime = now
-                    // Progress
                     let progress = total > 0 ? min(1.0, Double(scannedCount) / Double(total)) : 1.0
 
-                    // Progress payload
                     let progressPayload = MetadataScanProgress(
                         progress: progress,
                         scannedCount: scannedCount,
                         totalCount: total,
                         statusText: statusMessage,
-                        enrichmentDiffs: currentDiffs,
-                        verifiedGoodDiffs: currentGood,
+                        enrichmentDiffs: Array(diffsByID.values),
+                        verifiedGoodDiffs: Array(goodByID.values),
                         unmatchedTrackIDs: currentUnmatched
                     )
                     onProgress(progressPayload)
@@ -155,8 +191,12 @@ public actor BackgroundMetadataScanner {
 
             AppLogger.metadata.info("[Pipeline Initialized] Total library tracks to evaluate: \(total). Force recheck: \(forceRecheck).")
 
-            // MARK: - STAGE 0: Instant Completeness & Persistent Cache Pre-Check (Zero Network Cost)
+            // MARK: - STAGE 0: Instant Pure App-Cache & Complete Verification Check (Zero Disk File Reads)
+            emitProgress(statusMessage: "Checking app cache...", force: true)
+
             var tracksNeedingOnlineCheck: [Track] = []
+            tracksNeedingOnlineCheck.reserveCapacity(tracksToScan.count)
+
             var preCheckedGoodCount = 0
             var preCheckedCachedCount = 0
 
@@ -171,80 +211,123 @@ public actor BackgroundMetadataScanner {
             }()
 
             for track in tracksToScan {
-                // 1. If all 7 core tags are complete and valid, mark "Looks Good" and skip network completely!
-                if !forceRecheck && track.isComplete7CoreTags {
+                await self.waitIfPaused()
+                if Task.isCancelled { break }
+
+                // 1. Check if track already has all 7 core tags and artwork populated in app cache
+                var effectiveTrack = track
+                var isComplete = effectiveTrack.isComplete7CoreTags
+
+                // If missing artwork key in memory, check if artwork is already in the app's artwork cache
+                if !isComplete && effectiveTrack.artworkKey == nil {
+                    let albumArtKey = ArtworkCacheService.albumArtworkKey(artist: effectiveTrack.artist, album: effectiveTrack.album)
+                    if await ArtworkCacheService.shared.hasArtwork(key: albumArtKey) {
+                        effectiveTrack = effectiveTrack.withArtworkKey(albumArtKey)
+                        isComplete = effectiveTrack.isComplete7CoreTags
+                    }
+                }
+
+                if isComplete {
                     let syntheticOnline = OnlineTrackMetadata(
-                        id: "local_verified_\(track.id)",
-                        title: track.title,
-                        artist: track.artist,
-                        album: track.album,
-                        albumArtist: track.albumArtist,
+                        id: "local_verified_\(effectiveTrack.id)",
+                        title: effectiveTrack.title,
+                        artist: effectiveTrack.artist,
+                        album: effectiveTrack.album,
+                        albumArtist: effectiveTrack.albumArtist,
                         releaseDate: nil,
-                        releaseYear: track.year,
-                        genre: track.genre,
-                        trackNumber: track.trackNumber,
-                        totalTracks: track.totalTracks,
-                        discNumber: track.discNumber,
-                        duration: track.duration,
+                        releaseYear: effectiveTrack.year,
+                        genre: effectiveTrack.genre,
+                        trackNumber: effectiveTrack.trackNumber,
+                        totalTracks: effectiveTrack.totalTracks,
+                        discNumber: effectiveTrack.discNumber,
+                        duration: effectiveTrack.duration,
                         artworkURL: nil,
                         previewURL: nil,
-                        sourceAPI: "Local Tags Verified",
+                        sourceAPI: "Cache Tags Verified",
                         isCompilation: false
                     )
-                    let diff = MetadataDiff(localTrack: track, onlineMetadata: syntheticOnline, preserveLocalTitleAndArtist: true)
-                    currentGood.removeAll { $0.id == track.id }
-                    currentGood.append(diff)
-                    currentUnmatched.remove(track.id)
+                    let diff = MetadataDiff(localTrack: effectiveTrack, onlineMetadata: syntheticOnline, preserveLocalTitleAndArtist: true)
+                    goodByID[effectiveTrack.id] = diff
+                    diffsByID.removeValue(forKey: effectiveTrack.id)
+                    currentUnmatched.remove(effectiveTrack.id)
                     scannedCount += 1
                     preCheckedGoodCount += 1
+                    emitProgress(statusMessage: "Checking cache: \(goodByID.count) good (\(scannedCount)/\(total))...")
                     continue
                 }
 
-                // 2. When forceRecheck is false, check if we already have downloaded online metadata in persistent cache
-                if !forceRecheck {
-                    let path = track.url.standardizedFileURL.path
-                    let normName = track.url.lastPathComponent.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-                    let size = track.fileInfo?.fileSizeBytes ?? 0
-                    let fileSig = "\(normName)__\(size)"
-                    let normArtist = FuzzyMatcher.normalize(track.artist)
-                    let normTitle = FuzzyMatcher.normalize(track.title)
-                    let durInt = Int(track.duration.rounded())
-                    let trackSig = "\(normArtist)__\(normTitle)__\(durInt)"
+                // 2. Check if track was already verified as good (strictly requiring a valid release year >= 1900)
+                if let existingGoodDiff = goodByID[effectiveTrack.id], existingGoodDiff.fieldsEnrichedCount == 0,
+                   let y = effectiveTrack.year, y >= 1900 {
+                    scannedCount += 1
+                    preCheckedGoodCount += 1
+                    emitProgress(statusMessage: "Checking cache: \(goodByID.count) good (\(scannedCount)/\(total))...")
+                    continue
+                }
 
-                    let cachedRecord = persistentCache?.recordsByFilePath[path]
-                        ?? persistentCache?.recordsByFileSignature[fileSig]
-                        ?? (!trackSig.isEmpty ? persistentCache?.recordsBySignature[trackSig] : nil)
+                // 3. Check if we already have downloaded online metadata in persistent cache
+                let path = effectiveTrack.url.standardizedFileURL.path
+                let normName = effectiveTrack.url.lastPathComponent.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                let size = effectiveTrack.fileInfo?.fileSizeBytes ?? 0
+                let fileSig = "\(normName)__\(size)"
+                let normArtist = FuzzyMatcher.normalize(effectiveTrack.artist)
+                let normTitle = FuzzyMatcher.normalize(effectiveTrack.title)
+                let durInt = Int(effectiveTrack.duration.rounded())
+                let trackSig = "\(normArtist)__\(normTitle)__\(durInt)"
 
-                    if let record = cachedRecord {
-                        let currentTrack = (track.artworkKey == nil && record.cachedArtworkKey != nil) ? track.withArtworkKey(record.cachedArtworkKey) : track
-                        let diff = MetadataDiff(localTrack: currentTrack, onlineMetadata: record.onlineMetadata, preserveLocalTitleAndArtist: true)
-                        if record.wasApplied || diff.fieldsEnrichedCount == 0 {
-                            currentGood.removeAll { $0.id == track.id }
-                            currentGood.append(diff)
-                        } else {
-                            currentDiffs.removeAll { $0.id == track.id }
-                            currentDiffs.append(diff)
-                        }
-                        currentUnmatched.remove(track.id)
-                        scannedCount += 1
-                        preCheckedCachedCount += 1
+                let cachedRecord = persistentCache?.recordsByFilePath[path]
+                    ?? persistentCache?.recordsByFileSignature[fileSig]
+                    ?? (!trackSig.isEmpty ? persistentCache?.recordsBySignature[trackSig] : nil)
+
+                if let record = cachedRecord {
+                    let currentTrack = (effectiveTrack.artworkKey == nil && record.cachedArtworkKey != nil) ? effectiveTrack.withArtworkKey(record.cachedArtworkKey) : effectiveTrack
+                    let diff = MetadataDiff(localTrack: currentTrack, onlineMetadata: record.onlineMetadata, preserveLocalTitleAndArtist: true)
+                    let hasValidYear = (currentTrack.year ?? 0) >= 1900
+                    if hasValidYear && (record.wasApplied || diff.fieldsEnrichedCount == 0) {
+                        goodByID[currentTrack.id] = diff
+                        diffsByID.removeValue(forKey: currentTrack.id)
+                        currentUnmatched.remove(currentTrack.id)
+                    } else if diff.fieldsEnrichedCount > 0 {
+                        diffsByID[currentTrack.id] = diff
+                        goodByID.removeValue(forKey: currentTrack.id)
+                        currentUnmatched.remove(currentTrack.id)
+                    } else {
+                        // Missing valid year: queue for online matching
+                        diffsByID.removeValue(forKey: currentTrack.id)
+                        goodByID.removeValue(forKey: currentTrack.id)
+                        tracksNeedingOnlineCheck.append(effectiveTrack)
                         continue
                     }
+                    scannedCount += 1
+                    preCheckedCachedCount += 1
+                    emitProgress(statusMessage: "Checking cache: \(goodByID.count) good (\(scannedCount)/\(total))...")
+                    continue
                 }
-                tracksNeedingOnlineCheck.append(track)
+
+                // 4. Check if diffsByID already has a pending enrichment diff for this track
+                if diffsByID[effectiveTrack.id] != nil {
+                    scannedCount += 1
+                    emitProgress(statusMessage: "Checking cache: \(goodByID.count) good (\(scannedCount)/\(total))...")
+                    continue
+                }
+
+                // 5. Track is not complete and not in cache: queue for online catalog verification
+                tracksNeedingOnlineCheck.append(effectiveTrack)
             }
 
             AppLogger.metadata.info("[Stage 0: Instant Pre-Check] Resolved \(preCheckedGoodCount) verified complete (0 network calls), \(preCheckedCachedCount) from persistent cache. \(tracksNeedingOnlineCheck.count) tracks queued for online catalog verification.")
-            emitProgress(statusMessage: "Scanning online catalog for \(tracksNeedingOnlineCheck.count) tracks...", force: true)
+            emitProgress(statusMessage: "Checked cache: \(goodByID.count) good, \(preCheckedCachedCount) cached. Scanning \(tracksNeedingOnlineCheck.count) queued tracks...", force: true)
 
             // Ensure preconditions are met before proceeding
             guard !tracksNeedingOnlineCheck.isEmpty && !Task.isCancelled else {
-                emitProgress(statusMessage: "Library analysis complete.", force: true)
+                emitProgress(statusMessage: "Library analysis complete. All \(goodByID.count) tracks verified good.", force: true)
                 // Elapsed seconds
                 let elapsedSeconds = Date().timeIntervalSince(scanStartTime)
-                AppLogger.metadata.info("[Pipeline Completed] Completed in \(String(format: "%.2fs", elapsedSeconds)). Enriched: \(currentDiffs.count), Verified Good: \(currentGood.count), Unmatched: \(currentUnmatched.count).")
-                await self.persistScanState(diffs: currentDiffs, good: currentGood, unmatched: currentUnmatched, storageURL: storageDirectoryURL)
-                await self.finish(diffs: currentDiffs, good: currentGood, unmatched: currentUnmatched, onComplete: onComplete)
+                let finalDiffs = Array(diffsByID.values)
+                let finalGood = Array(goodByID.values)
+                AppLogger.metadata.info("[Pipeline Completed] Completed in \(String(format: "%.2fs", elapsedSeconds)). Enriched: \(finalDiffs.count), Verified Good: \(finalGood.count), Unmatched: \(currentUnmatched.count).")
+                await self.persistScanState(diffs: finalDiffs, good: finalGood, unmatched: currentUnmatched, storageURL: storageDirectoryURL)
+                await self.finish(diffs: finalDiffs, good: finalGood, unmatched: currentUnmatched, onComplete: onComplete)
                 return
             }
 
@@ -255,294 +338,86 @@ public actor BackgroundMetadataScanner {
                 return ($0, sig)
             }
 
-            // MARK: - HIERARCHICAL CLUSTERING: Artist Descending (Most Albums -> Least Albums)
-            struct ArtistScanCluster {
+            // MARK: - SMART QUEUE CLUSTERING: Album Batches -> Artist Loose Batches -> Standalone Singles
+            struct AlbumQueueBatch {
                 let artistName: String
-                var albumMap: [String: (albumName: String, entries: [(track: Track, signature: TrackSignature)])] = [:]
-                var looseTracks: [(track: Track, signature: TrackSignature)] = []
+                let albumName: String
+                var entries: [(track: Track, signature: TrackSignature)]
             }
 
-            var artistClusters: [String: ArtistScanCluster] = [:]
-            var unassignedLooseTracks: [(track: Track, signature: TrackSignature)] = []
+            var albumBatchMap: [String: AlbumQueueBatch] = [:]
+            var artistLooseBatches: [String: [(track: Track, signature: TrackSignature)]] = [:]
+            var standaloneSingles: [(track: Track, signature: TrackSignature)] = []
 
             for entry in trackSignatures {
                 let sig = entry.signature
                 let isArtistValid = !MetadataSanitizer.isUnknownArtist(sig.primaryArtist) && !sig.primaryArtist.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 let isAlbumValid = !MetadataSanitizer.isUnknownAlbum(sig.standardAlbum) && !sig.standardAlbum.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
 
-                if isArtistValid {
-                    let artistKey = sig.primaryArtist.lowercased()
-                    if artistClusters[artistKey] == nil {
-                        artistClusters[artistKey] = ArtistScanCluster(artistName: sig.primaryArtist)
-                    }
-
-                    if isAlbumValid {
-                        let albumKey = sig.standardAlbum.lowercased()
-                        if var existing = artistClusters[artistKey]?.albumMap[albumKey] {
-                            existing.entries.append(entry)
-                            artistClusters[artistKey]?.albumMap[albumKey] = existing
-                        } else {
-                            artistClusters[artistKey]?.albumMap[albumKey] = (albumName: sig.standardAlbum, entries: [entry])
-                        }
+                if isArtistValid && isAlbumValid {
+                    let key = "\(sig.primaryArtist.lowercased())__\(sig.standardAlbum.lowercased())"
+                    if var existing = albumBatchMap[key] {
+                        existing.entries.append(entry)
+                        albumBatchMap[key] = existing
                     } else {
-                        artistClusters[artistKey]?.looseTracks.append(entry)
+                        albumBatchMap[key] = AlbumQueueBatch(artistName: sig.primaryArtist, albumName: sig.standardAlbum, entries: [entry])
                     }
+                } else if isArtistValid {
+                    artistLooseBatches[sig.primaryArtist.lowercased(), default: []].append(entry)
                 } else {
-                    unassignedLooseTracks.append(entry)
+                    standaloneSingles.append(entry)
                 }
             }
 
-            // Sort Artists: Start with the artist that has the MOST tracks available locally, down to the least
-            let sortedArtistClusters = artistClusters.values.sorted { a, b in
-                let totalA = a.albumMap.values.reduce(0) { $0 + $1.entries.count } + a.looseTracks.count
-                let totalB = b.albumMap.values.reduce(0) { $0 + $1.entries.count } + b.looseTracks.count
-                return totalA > totalB
-            }
+            // Sort albums descending by number of local tracks in the album (fetching albums with most tracks first for maximum throughput)
+            let sortedAlbumBatches = albumBatchMap.values.sorted { $0.entries.count > $1.entries.count }
+            AppLogger.metadata.info("[Smart Clustering] \(sortedAlbumBatches.count) album batches, \(artistLooseBatches.count) artist loose groups, \(standaloneSingles.count) standalone singles.")
 
-            AppLogger.metadata.info("[Hierarchical Batching] Clustered \(sortedArtistClusters.count) artists. Processing artist with most tracks first.")
-
-            // MARK: - STAGE 1: Artist Discography Concurrent Batch Ingestion (1 Request = Up to 200 Songs per Artist)
+            // MARK: - STAGE 1: Concurrent Album Batch Matching (1 Request Resolves 10–25 Tracks)
             var stage1MatchedCount = 0
-            var unresolvedAlbums: [(artist: String, album: String, entries: [(track: Track, signature: TrackSignature)])] = []
-            var remainingForStage3: [(track: Track, signature: TrackSignature)] = unassignedLooseTracks
-
-            func fetchArtistCatalog(artist: String) async -> [OnlineTrackMetadata]? {
-                if Task.isCancelled { return nil }
-                return await MusicMetadataService.shared.searchArtistSongs(artist: artist, source: source)
-            }
-
-            let maxArtistWorkers = min(8, max(1, sortedArtistClusters.count))
-            var artistClusterIndex = 0
-
-            await withTaskGroup(of: (ArtistScanCluster, [OnlineTrackMetadata]?).self) { group in
-                while artistClusterIndex < sortedArtistClusters.count && artistClusterIndex < maxArtistWorkers {
-                    let cluster = sortedArtistClusters[artistClusterIndex]
-                    artistClusterIndex += 1
-                    group.addTask {
-                        let catalog = await fetchArtistCatalog(artist: cluster.artistName)
-                        return (cluster, catalog)
-                    }
-                }
-
-                for await (cluster, onlineSongsOpt) in group {
-                    if Task.isCancelled {
-                        group.cancelAll()
-                        break
-                    }
-
-                    let onlineCatalog = onlineSongsOpt ?? []
-
-                    if !onlineCatalog.isEmpty {
-                        // Index online songs by normalized standard album name
-                        var onlineAlbumMap: [String: [OnlineTrackMetadata]] = [:]
-                        for song in onlineCatalog {
-                            let std = FuzzyMatcher.normalize(DeluxeAlbumDetector.cleanToStandardAlbumName(song.album))
-                            if !std.isEmpty {
-                                onlineAlbumMap[std, default: []].append(song)
-                            }
-                        }
-
-                        // Match each local album in this artist cluster
-                        for (_, albumData) in cluster.albumMap {
-                            let normLocalAlbum = FuzzyMatcher.normalize(DeluxeAlbumDetector.cleanToStandardAlbumName(albumData.albumName))
-
-                            // Find best matching online album cut list in the catalog
-                            var matchingAlbumCuts: [OnlineTrackMetadata]?
-                            if let direct = onlineAlbumMap[normLocalAlbum], !direct.isEmpty {
-                                matchingAlbumCuts = direct
-                            } else {
-                                // Fuzzy match album keys
-                                var bestKey: String?
-                                var bestSim: Double = 0.0
-                                for key in onlineAlbumMap.keys {
-                                    let sim = max(
-                                        FuzzyMatcher.tokenSortLevenshteinSimilarity(key, normLocalAlbum),
-                                        FuzzyMatcher.jaroWinklerSimilarity(key, normLocalAlbum)
-                                    )
-                                    if sim >= 0.75 && (sim > bestSim || normLocalAlbum.contains(key) || key.contains(normLocalAlbum)) {
-                                        bestSim = sim
-                                        bestKey = key
-                                    }
-                                }
-                                if let foundKey = bestKey {
-                                    matchingAlbumCuts = onlineAlbumMap[foundKey]
-                                }
-                            }
-
-                            if let albumCuts = matchingAlbumCuts, !albumCuts.isEmpty {
-                                let primaryCut = albumCuts.first(where: { !DeluxeAlbumDetector.isDeluxe(text: $0.album) }) ?? albumCuts.first
-                                let verifiedAlbumTitle = primaryCut?.album ?? albumData.albumName
-                                let verifiedAlbumArtist = primaryCut?.albumArtist ?? cluster.artistName
-                                let verifiedGenre = primaryCut?.genre
-                                let verifiedYear = primaryCut?.releaseYear
-                                let verifiedArtworkURL = primaryCut?.artworkURL
-
-                                var matchedCutIDs = Set<String>()
-                                for entry in albumData.entries {
-                                    if let bestCut = DisambiguationMatcher.findTrackCutInAlbum(for: entry.track, signature: entry.signature, in: albumCuts, excludedCutIDs: matchedCutIDs) {
-                                        matchedCutIDs.insert(bestCut.id)
-                                        scannedCount += 1
-                                        stage1MatchedCount += 1
-                                        currentUnmatched.remove(entry.track.id)
-
-                                        let isLocalAlbumValid = !MetadataSanitizer.isUnknownAlbum(entry.track.album) &&
-                                            !entry.track.album.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                                        let rawAlbum = isLocalAlbumValid ? entry.track.album : bestCut.album
-                                        let isRemix = MetadataSanitizer.isRemixOrAlternateVersion(title: entry.track.title, album: rawAlbum)
-                                        let isLive = MetadataSanitizer.isLiveRecording(title: entry.track.title, album: rawAlbum)
-                                        let effectiveAlbum: String
-                                        if isRemix {
-                                            effectiveAlbum = MetadataSanitizer.remixAlbumName(forStandardAlbum: rawAlbum)
-                                        } else if isLive {
-                                            effectiveAlbum = MetadataSanitizer.liveAlbumName(forStandardAlbum: rawAlbum)
-                                        } else {
-                                            effectiveAlbum = rawAlbum
-                                        }
-
-                                        let isLocalArtistValid = !MetadataSanitizer.isUnknownArtist(entry.track.artist) &&
-                                            !entry.track.artist.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                                        let effectiveTrackArtist = isLocalArtistValid ? entry.track.artist : bestCut.artist
-
-                                        // Ground truth: preserve local track number if already set (>0)
-                                        let effectiveTrackNumber = (entry.track.trackNumber != nil && entry.track.trackNumber! > 0)
-                                            ? entry.track.trackNumber
-                                            : bestCut.trackNumber
-
-                                        let synthesizedCut = OnlineTrackMetadata(
-                                            id: bestCut.id,
-                                            title: bestCut.title,
-                                            artist: effectiveTrackArtist,
-                                            album: effectiveAlbum,
-                                            albumArtist: bestCut.albumArtist,
-                                            releaseDate: bestCut.releaseDate,
-                                            releaseYear: bestCut.releaseYear ?? verifiedYear ?? entry.track.year,
-                                            genre: bestCut.genre ?? verifiedGenre ?? entry.track.genre,
-                                            trackNumber: effectiveTrackNumber,
-                                            totalTracks: bestCut.totalTracks ?? primaryCut?.totalTracks ?? entry.track.totalTracks,
-                                            discNumber: bestCut.discNumber ?? entry.track.discNumber,
-                                            duration: bestCut.duration ?? entry.track.duration,
-                                            artworkURL: bestCut.artworkURL ?? verifiedArtworkURL,
-                                            previewURL: bestCut.previewURL,
-                                            sourceAPI: bestCut.sourceAPI,
-                                            isCompilation: bestCut.isCompilation
-                                        )
-
-                                        let diff = MetadataDiff(
-                                            localTrack: entry.track,
-                                            onlineMetadata: synthesizedCut,
-                                            preserveLocalTitleAndArtist: true
-                                        )
-
-                                        if diff.fieldsEnrichedCount > 0 {
-                                            currentGood.removeAll { $0.id == entry.track.id }
-                                            currentDiffs.removeAll { $0.id == entry.track.id }
-                                            currentDiffs.append(diff)
-                                        } else {
-                                            currentDiffs.removeAll { $0.id == entry.track.id }
-                                            currentGood.removeAll { $0.id == entry.track.id }
-                                            currentGood.append(diff)
-                                        }
-                                    } else {
-                                        // Track was not found in this album cut list: queue for Stage 3
-                                        remainingForStage3.append(entry)
-                                    }
-                                }
-                            } else {
-                                // This specific album was not in the top 200 catalog: queue for Stage 2 on-demand album search
-                                unresolvedAlbums.append((artist: cluster.artistName, album: albumData.albumName, entries: albumData.entries))
-                            }
-                        }
-
-                        // Match loose tracks for this artist against the catalog
-                        for looseEntry in cluster.looseTracks {
-                            if let best = DisambiguationMatcher.bestMatch(for: looseEntry.signature, in: onlineCatalog) {
-                                scannedCount += 1
-                                stage1MatchedCount += 1
-                                currentUnmatched.remove(looseEntry.track.id)
-
-                                let diff = MetadataDiff(
-                                    localTrack: looseEntry.track,
-                                    onlineMetadata: best,
-                                    preserveLocalTitleAndArtist: true
-                                )
-
-                                if diff.fieldsEnrichedCount > 0 {
-                                    currentGood.removeAll { $0.id == looseEntry.track.id }
-                                    currentDiffs.removeAll { $0.id == looseEntry.track.id }
-                                    currentDiffs.append(diff)
-                                } else {
-                                    currentDiffs.removeAll { $0.id == looseEntry.track.id }
-                                    currentGood.removeAll { $0.id == looseEntry.track.id }
-                                    currentGood.append(diff)
-                                }
-                            } else {
-                                remainingForStage3.append(looseEntry)
-                            }
-                        }
-                    } else {
-                        // Artist catalog returned 0 results: queue all albums for Stage 2, loose for Stage 3
-                        for (_, albumData) in cluster.albumMap {
-                            unresolvedAlbums.append((artist: cluster.artistName, album: albumData.albumName, entries: albumData.entries))
-                        }
-                        remainingForStage3.append(contentsOf: cluster.looseTracks)
-                    }
-
-                    emitProgress(statusMessage: "Analyzed \(scannedCount) of \(total) tracks")
-
-                    if artistClusterIndex < sortedArtistClusters.count && !Task.isCancelled {
-                        let nextCluster = sortedArtistClusters[artistClusterIndex]
-                        artistClusterIndex += 1
-                        group.addTask {
-                            let nextCatalog = await fetchArtistCatalog(artist: nextCluster.artistName)
-                            return (nextCluster, nextCatalog)
-                        }
-                    }
-                }
-            }
-
-            // MARK: - STAGE 2: Targeted Album On-Demand Batch Matching (Only for Missing Albums)
-            AppLogger.metadata.info("[Stage 1 Completed] Matched \(stage1MatchedCount) tracks. Stage 2 checking \(unresolvedAlbums.count) rare/unresolved albums...")
-            var stage2MatchedCount = 0
+            var looseForStage2: [String: [(track: Track, signature: TrackSignature)]] = artistLooseBatches
+            var stage3Fallback: [(track: Track, signature: TrackSignature)] = standaloneSingles
 
             func fetchAlbum(album: String, artist: String) async -> [OnlineTrackMetadata]? {
                 if Task.isCancelled { return nil }
                 return await MusicMetadataService.shared.searchAlbumSongs(album: album, artist: artist, source: source)
             }
 
-            let maxAlbumWorkers = min(8, max(1, unresolvedAlbums.count))
-            var albumWorkIndex = 0
+            let maxAlbumWorkers = min(6, max(1, sortedAlbumBatches.count))
+            var albumBatchIndex = 0
 
-            await withTaskGroup(of: (String, String, [(track: Track, signature: TrackSignature)], [OnlineTrackMetadata]?).self) { group in
-                while albumWorkIndex < unresolvedAlbums.count && albumWorkIndex < maxAlbumWorkers {
-                    let item = unresolvedAlbums[albumWorkIndex]
-                    albumWorkIndex += 1
+            await withTaskGroup(of: (AlbumQueueBatch, [OnlineTrackMetadata]?).self) { group in
+                while albumBatchIndex < sortedAlbumBatches.count && albumBatchIndex < maxAlbumWorkers {
+                    let batch = sortedAlbumBatches[albumBatchIndex]
+                    albumBatchIndex += 1
                     group.addTask {
-                        let albumSongs = await fetchAlbum(album: item.album, artist: item.artist)
-                        return (item.artist, item.album, item.entries, albumSongs)
+                        let albumSongs = await fetchAlbum(album: batch.albumName, artist: batch.artistName)
+                        return (batch, albumSongs)
                     }
                 }
 
-                for await (artistName, albumName, entries, albumSongs) in group {
+                for await (batch, albumSongsOpt) in group {
+                    await self.waitIfPaused()
                     if Task.isCancelled {
                         group.cancelAll()
                         break
                     }
 
-                    let availableSongs = albumSongs ?? []
-                    if !availableSongs.isEmpty {
-                        let primaryCut = availableSongs.first(where: { !DeluxeAlbumDetector.isDeluxe(text: $0.album) }) ?? availableSongs.first
-                        let verifiedAlbumTitle = primaryCut?.album ?? albumName
-                        let verifiedAlbumArtist = primaryCut?.albumArtist ?? artistName
+                    let albumSongs = albumSongsOpt ?? []
+                    if !albumSongs.isEmpty {
+                        let primaryCut = albumSongs.first(where: { !DeluxeAlbumDetector.isDeluxe(text: $0.album) }) ?? albumSongs.first
+                        let verifiedAlbumTitle = primaryCut?.album ?? batch.albumName
+                        let verifiedAlbumArtist = primaryCut?.albumArtist ?? batch.artistName
                         let verifiedGenre = primaryCut?.genre
                         let verifiedYear = primaryCut?.releaseYear
                         let verifiedArtworkURL = primaryCut?.artworkURL
 
                         var matchedCutIDs = Set<String>()
-                        for entry in entries {
-                            if let bestCut = DisambiguationMatcher.findTrackCutInAlbum(for: entry.track, signature: entry.signature, in: availableSongs, excludedCutIDs: matchedCutIDs) {
+                        for entry in batch.entries {
+                            if let bestCut = DisambiguationMatcher.findTrackCutInAlbum(for: entry.track, signature: entry.signature, in: albumSongs, excludedCutIDs: matchedCutIDs) {
                                 matchedCutIDs.insert(bestCut.id)
                                 scannedCount += 1
-                                stage2MatchedCount += 1
+                                stage1MatchedCount += 1
                                 currentUnmatched.remove(entry.track.id)
 
                                 let isLocalAlbumValid = !MetadataSanitizer.isUnknownAlbum(entry.track.album) &&
@@ -593,41 +468,179 @@ public actor BackgroundMetadataScanner {
                                     preserveLocalTitleAndArtist: true
                                 )
 
+                                let hasValidLocalYear = (entry.track.year ?? 0) >= 1900
                                 if diff.fieldsEnrichedCount > 0 {
-                                    currentGood.removeAll { $0.id == entry.track.id }
-                                    currentDiffs.removeAll { $0.id == entry.track.id }
-                                    currentDiffs.append(diff)
+                                    diffsByID[entry.track.id] = diff
+                                    goodByID.removeValue(forKey: entry.track.id)
+                                } else if hasValidLocalYear {
+                                    goodByID[entry.track.id] = diff
+                                    diffsByID.removeValue(forKey: entry.track.id)
                                 } else {
-                                    currentDiffs.removeAll { $0.id == entry.track.id }
-                                    currentGood.removeAll { $0.id == entry.track.id }
-                                    currentGood.append(diff)
+                                    diffsByID.removeValue(forKey: entry.track.id)
+                                    goodByID.removeValue(forKey: entry.track.id)
+                                    looseForStage2[batch.artistName.lowercased(), default: []].append(entry)
                                 }
                             } else {
-                                remainingForStage3.append(entry)
+                                // Track cut was not in this online album cut list: push to Stage 2 loose tracks for this artist
+                                looseForStage2[batch.artistName.lowercased(), default: []].append(entry)
                             }
                         }
                     } else {
-                        remainingForStage3.append(contentsOf: entries)
+                        // Album not found online: push all tracks to Stage 2 loose tracks for this artist
+                        looseForStage2[batch.artistName.lowercased(), default: []].append(contentsOf: batch.entries)
                     }
 
                     emitProgress(statusMessage: "Analyzed \(scannedCount) of \(total) tracks")
 
-                    if albumWorkIndex < unresolvedAlbums.count && !Task.isCancelled {
-                        let nextItem = unresolvedAlbums[albumWorkIndex]
-                        albumWorkIndex += 1
+                    if albumBatchIndex < sortedAlbumBatches.count && !Task.isCancelled {
+                        await self.waitIfPaused()
+                        let nextBatch = sortedAlbumBatches[albumBatchIndex]
+                        albumBatchIndex += 1
                         group.addTask {
-                            let nextAlbumSongs = await fetchAlbum(album: nextItem.album, artist: nextItem.artist)
-                            return (nextItem.artist, nextItem.album, nextItem.entries, nextAlbumSongs)
+                            let nextAlbumSongs = await fetchAlbum(album: nextBatch.albumName, artist: nextBatch.artistName)
+                            return (nextBatch, nextAlbumSongs)
                         }
                     }
                 }
             }
 
-            AppLogger.metadata.info("[Stage 2 Complete] Enriched \(stage2MatchedCount) tracks. \(remainingForStage3.count) tracks remaining for Stage 3.")
+            if Task.isCancelled {
+                let finalDiffs = Array(diffsByID.values)
+                let finalGood = Array(goodByID.values)
+                await self.persistScanState(diffs: finalDiffs, good: finalGood, unmatched: currentUnmatched, storageURL: storageDirectoryURL)
+                await self.finish(diffs: finalDiffs, good: finalGood, unmatched: currentUnmatched, onComplete: onComplete)
+                return
+            }
 
-            // MARK: - Stage 3: Song Fallback Search with Bounded Worker Pool
-            if !remainingForStage3.isEmpty {
-                let fallbackCount = remainingForStage3.count
+            // MARK: - STAGE 2: Artist Discography Concurrent Batch Ingestion (For Loose & Unresolved Tracks)
+            AppLogger.metadata.info("[Stage 1 Completed] Matched \(stage1MatchedCount) tracks. Stage 2 checking loose tracks across \(looseForStage2.count) artists...")
+            var stage2MatchedCount = 0
+
+            struct ArtistLooseBatch {
+                let artistName: String
+                let entries: [(track: Track, signature: TrackSignature)]
+            }
+
+            let sortedArtistLooseBatches: [ArtistLooseBatch] = looseForStage2.compactMap { (key, entries) in
+                guard !entries.isEmpty else { return nil }
+                let artistName = entries.first?.signature.primaryArtist ?? key
+                return ArtistLooseBatch(artistName: artistName, entries: entries)
+            }.sorted { $0.entries.count > $1.entries.count }
+
+            func fetchArtistCatalog(artist: String) async -> [OnlineTrackMetadata]? {
+                if Task.isCancelled { return nil }
+                return await MusicMetadataService.shared.searchArtistSongs(artist: artist, source: source)
+            }
+
+            let maxArtistWorkers = min(6, max(1, sortedArtistLooseBatches.count))
+            var artistBatchIndex = 0
+
+            await withTaskGroup(of: (ArtistLooseBatch, [OnlineTrackMetadata]?).self) { group in
+                while artistBatchIndex < sortedArtistLooseBatches.count && artistBatchIndex < maxArtistWorkers {
+                    let batch = sortedArtistLooseBatches[artistBatchIndex]
+                    artistBatchIndex += 1
+                    group.addTask {
+                        let catalog = await fetchArtistCatalog(artist: batch.artistName)
+                        return (batch, catalog)
+                    }
+                }
+
+                for await (batch, catalogOpt) in group {
+                    await self.waitIfPaused()
+                    if Task.isCancelled {
+                        group.cancelAll()
+                        break
+                    }
+
+                    let catalog = catalogOpt ?? []
+                    if !catalog.isEmpty {
+                        for entry in batch.entries {
+                            if let best = DisambiguationMatcher.bestMatch(for: entry.signature, in: catalog) {
+                                scannedCount += 1
+                                stage2MatchedCount += 1
+                                currentUnmatched.remove(entry.track.id)
+
+                                let isLocalAlbumValid = !MetadataSanitizer.isUnknownAlbum(entry.track.album) &&
+                                    !entry.track.album.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                                let isLocalArtistValid = !MetadataSanitizer.isUnknownArtist(entry.track.artist) &&
+                                    !entry.track.artist.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+
+                                let effectiveTrackNumber = (entry.track.trackNumber != nil && entry.track.trackNumber! > 0)
+                                    ? entry.track.trackNumber
+                                    : best.trackNumber
+
+                                let effectiveBest = OnlineTrackMetadata(
+                                    id: best.id,
+                                    title: best.title,
+                                    artist: isLocalArtistValid ? entry.track.artist : best.artist,
+                                    album: isLocalAlbumValid ? entry.track.album : best.album,
+                                    albumArtist: best.albumArtist,
+                                    releaseDate: best.releaseDate,
+                                    releaseYear: best.releaseYear ?? entry.track.year,
+                                    genre: best.genre ?? entry.track.genre,
+                                    trackNumber: effectiveTrackNumber,
+                                    totalTracks: best.totalTracks ?? entry.track.totalTracks,
+                                    discNumber: best.discNumber ?? entry.track.discNumber,
+                                    duration: best.duration ?? entry.track.duration,
+                                    artworkURL: best.artworkURL,
+                                    previewURL: best.previewURL,
+                                    sourceAPI: best.sourceAPI,
+                                    isCompilation: best.isCompilation
+                                )
+
+                                let diff = MetadataDiff(
+                                    localTrack: entry.track,
+                                    onlineMetadata: effectiveBest,
+                                    preserveLocalTitleAndArtist: true
+                                )
+
+                                let hasValidLocalYear = (entry.track.year ?? 0) >= 1900
+                                if diff.fieldsEnrichedCount > 0 {
+                                    diffsByID[entry.track.id] = diff
+                                    goodByID.removeValue(forKey: entry.track.id)
+                                } else if hasValidLocalYear {
+                                    goodByID[entry.track.id] = diff
+                                    diffsByID.removeValue(forKey: entry.track.id)
+                                } else {
+                                    diffsByID.removeValue(forKey: entry.track.id)
+                                    goodByID.removeValue(forKey: entry.track.id)
+                                    stage3Fallback.append(entry)
+                                }
+                            } else {
+                                stage3Fallback.append(entry)
+                            }
+                        }
+                    } else {
+                        stage3Fallback.append(contentsOf: batch.entries)
+                    }
+
+                    emitProgress(statusMessage: "Analyzed \(scannedCount) of \(total) tracks")
+
+                    if artistBatchIndex < sortedArtistLooseBatches.count && !Task.isCancelled {
+                        await self.waitIfPaused()
+                        let nextBatch = sortedArtistLooseBatches[artistBatchIndex]
+                        artistBatchIndex += 1
+                        group.addTask {
+                            let nextCatalog = await fetchArtistCatalog(artist: nextBatch.artistName)
+                            return (nextBatch, nextCatalog)
+                        }
+                    }
+                }
+            }
+
+            if Task.isCancelled {
+                let finalDiffs = Array(diffsByID.values)
+                let finalGood = Array(goodByID.values)
+                await self.persistScanState(diffs: finalDiffs, good: finalGood, unmatched: currentUnmatched, storageURL: storageDirectoryURL)
+                await self.finish(diffs: finalDiffs, good: finalGood, unmatched: currentUnmatched, onComplete: onComplete)
+                return
+            }
+
+            AppLogger.metadata.info("[Stage 2 Complete] Enriched \(stage2MatchedCount) tracks. \(stage3Fallback.count) tracks remaining for Stage 3.")
+
+            // MARK: - STAGE 3: Song Fallback Search with Bounded Worker Pool
+            if !stage3Fallback.isEmpty {
+                let fallbackCount = stage3Fallback.count
                 emitProgress(statusMessage: "Deep matching \(fallbackCount) remaining tracks...", force: true)
 
                 let maxSongWorkers = 2
@@ -635,7 +648,7 @@ public actor BackgroundMetadataScanner {
 
                 await withTaskGroup(of: (Track, OnlineTrackMetadata?).self) { group in
                     while trackIndex < fallbackCount && trackIndex < maxSongWorkers && !Task.isCancelled {
-                        let entry = remainingForStage3[trackIndex]
+                        let entry = stage3Fallback[trackIndex]
                         trackIndex += 1
                         group.addTask {
                             let match = await MusicMetadataService.shared.findExactMatch(for: entry.track, source: source)
@@ -644,6 +657,7 @@ public actor BackgroundMetadataScanner {
                     }
 
                     for await (track, match) in group {
+                        await self.waitIfPaused()
                         if Task.isCancelled {
                             group.cancelAll()
                             break
@@ -686,23 +700,26 @@ public actor BackgroundMetadataScanner {
                                 preserveLocalTitleAndArtist: true
                             )
 
+                            let hasValidLocalYear = (track.year ?? 0) >= 1900
                             if diff.fieldsEnrichedCount > 0 {
-                                currentGood.removeAll { $0.id == track.id }
-                                currentDiffs.removeAll { $0.id == track.id }
-                                currentDiffs.append(diff)
+                                diffsByID[track.id] = diff
+                                goodByID.removeValue(forKey: track.id)
                                 AppLogger.metadata.info("[Stage 3 Matched: Enriched] \"\(track.title)\" -> \"\(match.title)\" on \"\(effectiveMatch.album)\"")
+                            } else if hasValidLocalYear {
+                                goodByID[track.id] = diff
+                                diffsByID.removeValue(forKey: track.id)
                             } else {
-                                currentDiffs.removeAll { $0.id == track.id }
-                                currentGood.removeAll { $0.id == track.id }
-                                currentGood.append(diff)
+                                diffsByID.removeValue(forKey: track.id)
+                                goodByID.removeValue(forKey: track.id)
+                                currentUnmatched.insert(track.id)
                             }
                         } else {
-                            currentDiffs.removeAll { $0.id == track.id }
-                            currentGood.removeAll { $0.id == track.id }
+                            diffsByID.removeValue(forKey: track.id)
+                            goodByID.removeValue(forKey: track.id)
                             if MetadataSanitizer.hasAllSpotsFilled(track: track) {
                                 let synth = MetadataSanitizer.synthesizeVerifiedMetadata(for: track)
                                 let diff = MetadataDiff(localTrack: track, onlineMetadata: synth, preserveLocalTitleAndArtist: true)
-                                currentGood.append(diff)
+                                goodByID[track.id] = diff
                                 AppLogger.metadata.info("[Stage 3: Complete Local Track] \"\(track.title)\" has all spots filled locally. Moved to Looks Good.")
                             } else {
                                 currentUnmatched.insert(track.id)
@@ -712,7 +729,8 @@ public actor BackgroundMetadataScanner {
                         emitProgress(statusMessage: "Analyzing \"\(track.title)\" (\(scannedCount)/\(total))...")
 
                         if trackIndex < fallbackCount && !Task.isCancelled {
-                            let nextEntry = remainingForStage3[trackIndex]
+                            await self.waitIfPaused()
+                            let nextEntry = stage3Fallback[trackIndex]
                             trackIndex += 1
                             group.addTask {
                                 let nextMatch = await MusicMetadataService.shared.findExactMatch(for: nextEntry.track, source: source)
@@ -729,19 +747,21 @@ public actor BackgroundMetadataScanner {
             let elapsedSeconds = Date().timeIntervalSince(scanStartTime)
             // Formatted time
             let formattedTime = String(format: "%.2fs", elapsedSeconds)
-            AppLogger.metadata.info("[Pipeline Completed] Scanned \(scannedCount)/\(total) tracks in \(formattedTime). Enriched: \(currentDiffs.count), Verified Good: \(currentGood.count), Unmatched: \(currentUnmatched.count).")
+            let finalDiffs = Array(diffsByID.values)
+            let finalGood = Array(goodByID.values)
+            AppLogger.metadata.info("[Pipeline Completed] Scanned \(scannedCount)/\(total) tracks in \(formattedTime). Enriched: \(finalDiffs.count), Verified Good: \(finalGood.count), Unmatched: \(currentUnmatched.count).")
 
             // Persist scan results atomically
             await self.persistScanState(
-                diffs: currentDiffs,
-                good: currentGood,
+                diffs: finalDiffs,
+                good: finalGood,
                 unmatched: currentUnmatched,
                 storageURL: storageDirectoryURL
             )
 
             await self.finish(
-                diffs: currentDiffs,
-                good: currentGood,
+                diffs: finalDiffs,
+                good: finalGood,
                 unmatched: currentUnmatched,
                 onComplete: onComplete
             )

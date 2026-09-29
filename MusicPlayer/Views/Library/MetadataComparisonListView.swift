@@ -69,16 +69,6 @@ public struct MetadataComparisonListView: View {
             .background(appTheme.backgroundColor.ignoresSafeArea())
             .navigationTitle("METADATA ENRICHMENT")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    if !isEnrichingAll {
-                        Button("DONE") {
-                            dismiss()
-                        }
-                        .font(.system(size: 13, weight: .bold, design: .monospaced))
-                    }
-                }
-            }
             .sheet(item: $selectedTrackForCustomSearch) { track in
                 OnlineMetadataMatchSheet(track: track, libraryStore: libraryStore)
                     .tint(appTheme.accentColor)
@@ -447,9 +437,11 @@ public struct EnrichHeaderCardView: View {
 public struct SwipeableMetadataTrackCard: View {
     public let diff: MetadataDiff
     public let preserveFeatures: Bool
+    public let isRecheckingAPI: Bool
     public let onApply: (Set<MetadataField>) -> Void
     public let onKeepLocal: () -> Void
     public let onCustomSearch: (() -> Void)?
+    public let onSelectAPI: ((MetadataAPIOption) -> Void)?
 
     @State private var selectedPage: Int = 0 // 0 = Online, 1 = Local
     @State private var lockedFields: Set<MetadataField> = []
@@ -458,46 +450,54 @@ public struct SwipeableMetadataTrackCard: View {
     public init(
         diff: MetadataDiff,
         preserveFeatures: Bool,
+        isRecheckingAPI: Bool = false,
         onApply: @escaping (Set<MetadataField>) -> Void,
         onKeepLocal: @escaping () -> Void,
-        onCustomSearch: (() -> Void)? = nil
+        onCustomSearch: (() -> Void)? = nil,
+        onSelectAPI: ((MetadataAPIOption) -> Void)? = nil
     ) {
         self.diff = diff
         self.preserveFeatures = preserveFeatures
+        self.isRecheckingAPI = isRecheckingAPI
         self.onApply = onApply
         self.onKeepLocal = onKeepLocal
         self.onCustomSearch = onCustomSearch
+        self.onSelectAPI = onSelectAPI
     }
 
     public var body: some View {
         VStack(spacing: 16) {
-            // Page Indicator Tabs
-            HStack(spacing: 12) {
+            // Page Indicator Tabs + Top-Right Provider Selector
+            HStack(alignment: .center) {
+                // Page Indicator Tabs
+                HStack(spacing: 10) {
+                    Button(action: {
+                        withAnimation(.easeInOut(duration: 0.2)) { selectedPage = 0 }
+                    }) {
+                        Text("ONLINE METADATA")
+                            .font(.system(size: 11, weight: .black, design: .monospaced))
+                            .foregroundStyle(selectedPage == 0 ? Color.blue : Color.secondary.opacity(0.5))
+                    }
+                    .buttonStyle(.plain)
+
+                    Text("•")
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(.secondary.opacity(0.3))
+
+                    Button(action: {
+                        withAnimation(.easeInOut(duration: 0.2)) { selectedPage = 1 }
+                    }) {
+                        Text("ORIGINAL LOCAL")
+                            .font(.system(size: 11, weight: .black, design: .monospaced))
+                            .foregroundStyle(selectedPage == 1 ? Color.orange : Color.secondary.opacity(0.5))
+                    }
+                    .buttonStyle(.plain)
+                }
+
                 Spacer()
 
-                Button(action: {
-                    withAnimation(.easeInOut(duration: 0.2)) { selectedPage = 0 }
-                }) {
-                    Text("ONLINE METADATA")
-                        .font(.system(size: 11, weight: .black, design: .monospaced))
-                        .foregroundStyle(selectedPage == 0 ? Color.blue : Color.secondary.opacity(0.5))
-                }
-                .buttonStyle(.plain)
-
-                Text("•")
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundStyle(.secondary.opacity(0.3))
-
-                Button(action: {
-                    withAnimation(.easeInOut(duration: 0.2)) { selectedPage = 1 }
-                }) {
-                    Text("ORIGINAL LOCAL")
-                        .font(.system(size: 11, weight: .black, design: .monospaced))
-                        .foregroundStyle(selectedPage == 1 ? Color.orange : Color.secondary.opacity(0.5))
-                }
-                .buttonStyle(.plain)
-
-                Spacer()
+                // Top-Right API Source Badge / Switcher
+                apiSourceBadge
             }
 
             // Swipeable Card Pages
@@ -569,6 +569,47 @@ public struct SwipeableMetadataTrackCard: View {
         }
     }
 
+    // MARK: - API Source Badge & Interactive Switcher
+    private var apiSourceBadge: some View {
+        let currentSource = diff.onlineMetadata.sourceAPIOption
+        return Menu {
+            ForEach([MetadataAPIOption.itunes, .deezer, .musicBrainz], id: \.self) { source in
+                Button(action: {
+                    HapticFeedback.selectionChanged()
+                    onSelectAPI?(source)
+                }) {
+                    HStack {
+                        Text(source.displayName)
+                        if currentSource == source {
+                            Image(systemName: "checkmark")
+                        }
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 4) {
+                if isRecheckingAPI {
+                    ProgressView()
+                        .scaleEffect(0.65)
+                        .tint(Color.secondary)
+                }
+                Text(currentSource.displayName)
+                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+                    .foregroundStyle(Color.secondary)
+
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.system(size: 8, weight: .bold))
+                    .foregroundStyle(Color.secondary.opacity(0.7))
+            }
+            .padding(.horizontal, 7)
+            .padding(.vertical, 4)
+            .background(Color.white.opacity(0.08))
+            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
     // MARK: - Online Page View
     private var onlinePageView: some View {
         VStack(alignment: .center, spacing: 10) {
@@ -624,7 +665,7 @@ public struct SwipeableMetadataTrackCard: View {
                     } else {
                         HStack(spacing: 4) {
                             Text("USING ONLINE ARTWORK")
-                            Text("• \(diff.onlineMetadata.sourceAPI.uppercased())")
+                            Text("• \(diff.onlineMetadata.normalizedSourceAPI)")
                         }
                         .font(.system(size: 9, weight: .bold, design: .monospaced))
                         .foregroundStyle(Color.green)

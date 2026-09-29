@@ -120,16 +120,22 @@ public struct AudioScannerService: Sendable {
         for fileURL in audioFileURLs {
             let standardizedPath = fileURL.standardizedFileURL.path
             if let cachedTrack = existingTrackMap[standardizedPath] {
-                // Fast size check to verify file hasn't been modified on disk
-                if let cachedSize = cachedTrack.fileInfo?.fileSizeBytes, cachedSize > 0,
-                   let artKey = cachedTrack.artworkKey, !artKey.isEmpty {
-                    if let attr = try? fileManager.attributesOfItem(atPath: fileURL.path),
-                       let currentSize = (attr[.size] as? NSNumber)?.int64Value,
-                       currentSize == cachedSize {
-                        // Only reuse if artwork is confirmed available
-                        if await ArtworkCacheService.shared.hasArtwork(key: artKey) {
-                            scannedTracks.append(cachedTrack)
-                            continue
+                // Ensure track has valid artist and album before differential reuse; if unknown or missing, re-parse from disk
+                let isArtistValid = !cachedTrack.artist.isEmpty && !MetadataSanitizer.isUnknownArtist(cachedTrack.artist)
+                let isAlbumValid = !cachedTrack.album.isEmpty && !MetadataSanitizer.isUnknownAlbum(cachedTrack.album)
+
+                if isArtistValid && isAlbumValid {
+                    // Fast size check to verify file hasn't been modified on disk
+                    if let cachedSize = cachedTrack.fileInfo?.fileSizeBytes, cachedSize > 0,
+                       let artKey = cachedTrack.artworkKey, !artKey.isEmpty {
+                        if let attr = try? fileManager.attributesOfItem(atPath: fileURL.path),
+                           let currentSize = (attr[.size] as? NSNumber)?.int64Value,
+                           currentSize == cachedSize {
+                            // Only reuse if artwork is confirmed available
+                            if await ArtworkCacheService.shared.hasArtwork(key: artKey) {
+                                scannedTracks.append(cachedTrack)
+                                continue
+                            }
                         }
                     }
                 }
@@ -224,8 +230,8 @@ public struct AudioScannerService: Sendable {
         // MARK: - 1. Pure-Swift In-Process Direct Binary Metadata Extraction (<0.2ms per file)
         var parsedMeta = FastAudioMetadataReader.readMetadata(for: url)
 
-        // 2. Lightweight Fallback ONLY if binary reader was unable to parse the file
-        if parsedMeta == nil {
+        // 2. Comprehensive Fallback if binary reader was unable to parse the file or missed artist/author metadata
+        if parsedMeta == nil || ((parsedMeta?.artist == nil || isGenericArtist(parsedMeta?.artist ?? "")) && (parsedMeta?.author == nil || isGenericArtist(parsedMeta?.author ?? ""))) {
             let asset = AVURLAsset(url: url, options: [AVURLAssetPreferPreciseDurationAndTimingKey: false])
             var durationSeconds: TimeInterval = 0
             var allMetadata: [AVMetadataItem] = []
@@ -249,13 +255,17 @@ public struct AudioScannerService: Sendable {
                 if fallback.title == nil && (commonKey == .commonKeyTitle || keyLower.contains("titl") || keyLower.contains("name") || idLower.contains("titl") || idLower.contains("name")) {
                     fallback.title = extractString(from: item)
                 }
-                if fallback.artist == nil && (commonKey == .commonKeyArtist || keyLower.contains("art") || keyLower.contains("author") || idLower.contains("art")) {
-                    fallback.artist = extractString(from: item)
+                if fallback.artist == nil && (commonKey == .commonKeyArtist || commonKey == .commonKeyAuthor || keyLower.contains("art") || keyLower.contains("author") || keyLower.contains("auth") || idLower.contains("art") || idLower.contains("author") || idLower.contains("auth")) {
+                    let str = extractString(from: item)
+                    if fallback.author == nil && (commonKey == .commonKeyAuthor || keyLower.contains("author") || keyLower.contains("auth") || idLower.contains("author") || idLower.contains("auth")) {
+                        fallback.author = str
+                    }
+                    fallback.artist = str
                 }
                 if fallback.album == nil && (commonKey == .commonKeyAlbumName || keyLower.contains("alb") || idLower.contains("alb") || keyLower == "talb" || keyLower == "©alb") {
                     fallback.album = extractString(from: item)
                 }
-                if fallback.albumArtist == nil && (keyLower.contains("aart") || keyLower.contains("albumartist") || idLower.contains("aart")) {
+                if fallback.albumArtist == nil && (keyLower.contains("aart") || keyLower.contains("albumartist") || keyLower.contains("album_artist") || keyLower.contains("band") || idLower.contains("aart") || idLower.contains("albumartist") || idLower.contains("band") || commonKey?.rawValue.lowercased().contains("albumartist") == true) {
                     fallback.albumArtist = extractString(from: item)
                 }
                 if fallback.year == nil {
@@ -277,7 +287,33 @@ public struct AudioScannerService: Sendable {
                     }
                 }
             }
-            parsedMeta = fallback
+
+            if var existing = parsedMeta {
+                if (existing.artist == nil || isGenericArtist(existing.artist ?? "")) && fallback.artist != nil {
+                    existing.artist = fallback.artist
+                }
+                if (existing.author == nil || isGenericArtist(existing.author ?? "")) && fallback.author != nil {
+                    existing.author = fallback.author
+                }
+                if (existing.title == nil || isGenericTitle(existing.title ?? "")) && fallback.title != nil {
+                    existing.title = fallback.title
+                }
+                if (existing.album == nil || isGenericAlbum(existing.album ?? "")) && fallback.album != nil {
+                    existing.album = fallback.album
+                }
+                if (existing.albumArtist == nil || isGenericArtist(existing.albumArtist ?? "")) && fallback.albumArtist != nil {
+                    existing.albumArtist = fallback.albumArtist
+                }
+                if existing.artworkData == nil && fallback.artworkData != nil {
+                    existing.artworkData = fallback.artworkData
+                }
+                if existing.duration <= 0 && fallback.duration > 0 {
+                    existing.duration = fallback.duration
+                }
+                parsedMeta = existing
+            } else {
+                parsedMeta = fallback
+            }
         }
 
         var meta = parsedMeta ?? ParsedAudioMetadata()
@@ -298,9 +334,15 @@ public struct AudioScannerService: Sendable {
             return fileNameWithoutExtension
         }()
 
-        // Resolve Final Artist: embedded tag -> filename parsed artist -> Unknown Artist
+        // Resolve Final Artist: embedded tag (artist/author/albumArtist) -> filename parsed artist/albumArtist -> Unknown Artist
         let finalArtist: String = {
             if let a = meta.artist?.trimmingCharacters(in: .whitespacesAndNewlines), !a.isEmpty, !isGenericArtist(a) {
+                return a
+            }
+            if let a = meta.author?.trimmingCharacters(in: .whitespacesAndNewlines), !a.isEmpty, !isGenericArtist(a) {
+                return a
+            }
+            if let a = meta.albumArtist?.trimmingCharacters(in: .whitespacesAndNewlines), !a.isEmpty, !isGenericArtist(a) {
                 return a
             }
             if let a = fnMetadata.artist, !a.isEmpty {

@@ -79,9 +79,9 @@ public struct LyricsPlayerView: View {
         GeometryReader { geo in
             let totalHeight = geo.size.height
             let availableWidth = max(50, geo.size.width - 40)
-            // In compact mode: lyrics sit clearly above the duration progress bar (~240pt bottom clearance)
+            // In compact mode: lyrics sit clearly above the duration progress bar (~275pt bottom clearance)
             // In expanded mode: lyrics float over the entire fullscreen player (~8pt bottom margin)
-            let cardHeight: CGFloat = isExpanded ? max(220, totalHeight - 8) : max(100, totalHeight - 240)
+            let cardHeight: CGFloat = isExpanded ? max(220, totalHeight - 8) : max(100, totalHeight - 275)
 
             ZStack(alignment: .top) {
                 // Background Tap Target when Expanded to collapse back to compact mode
@@ -99,6 +99,14 @@ public struct LyricsPlayerView: View {
                 lyricsCard(height: cardHeight, availableWidth: availableWidth)
                     .frame(maxWidth: .infinity)
                     .frame(height: cardHeight)
+                    .background(
+                        GeometryReader { cardGeo in
+                            Color.clear.preference(
+                                key: LyricsGlobalFramePreferenceKey.self,
+                                value: cardGeo.frame(in: .global)
+                            )
+                        }
+                    )
                     .zIndex(isExpanded ? 10 : 1)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -256,7 +264,8 @@ public struct LyricsPlayerView: View {
                     .frame(width: 36, height: 4.0)
             }
             .frame(maxWidth: .infinity)
-            .frame(height: 34)
+            .frame(height: 24)
+            .padding(.bottom, 4)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -529,5 +538,15 @@ private struct LyricLineRow: View {
                 .animation(.easeInOut(duration: 0.75), value: distance)
         }
         .buttonStyle(.plain)
+    }
+}
+
+public struct LyricsGlobalFramePreferenceKey: PreferenceKey {
+    public static var defaultValue: CGRect = .zero
+    public static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
+        let next = nextValue()
+        if next != .zero {
+            value = next
+        }
     }
 }

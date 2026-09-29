@@ -5,16 +5,19 @@ import SwiftUI
 public struct LibraryView: View {
     @Bindable var libraryStore: LibraryStore
     @Bindable var playerService: AudioPlayerService
+    @Binding var isSearchFocused: Bool
     public let onOpenSettings: () -> Void
 
     // Initialize with configured properties
     public init(
         libraryStore: LibraryStore,
         playerService: AudioPlayerService,
+        isSearchFocused: Binding<Bool> = .constant(false),
         onOpenSettings: @escaping () -> Void
     ) {
         self.libraryStore = libraryStore
         self.playerService = playerService
+        self._isSearchFocused = isSearchFocused
         self.onOpenSettings = onOpenSettings
     }
 
@@ -26,16 +29,19 @@ public struct LibraryView: View {
                 categorySegmentPicker
 
                 // Active Category Content
-                switch libraryStore.selectedCategory {
-                case .artists:
-                    ArtistsListView(libraryStore: libraryStore, playerService: playerService)
-                case .albums:
-                    AlbumsListView(libraryStore: libraryStore, playerService: playerService)
-                case .playlists:
-                    PlaylistsListView(libraryStore: libraryStore, playerService: playerService)
-                case .tracks:
-                    AllTracksListView(libraryStore: libraryStore, playerService: playerService)
+                Group {
+                    switch libraryStore.selectedCategory {
+                    case .artists:
+                        ArtistsListView(libraryStore: libraryStore, playerService: playerService)
+                    case .albums:
+                        AlbumsListView(libraryStore: libraryStore, playerService: playerService)
+                    case .playlists:
+                        PlaylistsListView(libraryStore: libraryStore, playerService: playerService)
+                    case .tracks:
+                        AllTracksListView(libraryStore: libraryStore, playerService: playerService)
+                    }
                 }
+                .transaction { $0.animation = nil }
             }
             .padding(.vertical, 12)
             .padding(.bottom, 140) // Padding for floating mini player and tab bar
@@ -46,6 +52,7 @@ public struct LibraryView: View {
         .navigationBarTitleDisplayMode(.large)
         .searchable(
             text: $libraryStore.searchQuery,
+            isPresented: $isSearchFocused,
             placement: .navigationBarDrawer(displayMode: .always),
             prompt: searchPrompt
         )
@@ -82,20 +89,20 @@ public struct LibraryView: View {
     }
 
     private var headerSwipeGesture: some Gesture {
-        DragGesture(minimumDistance: 20, coordinateSpace: .local)
+        DragGesture(minimumDistance: 25, coordinateSpace: .local)
             .onEnded { value in
                 // Horizontal amount
                 let horizontalAmount = value.translation.width
                 // Vertical amount
                 let verticalAmount = value.translation.height
-                if abs(horizontalAmount) > abs(verticalAmount) {
-                    if horizontalAmount < -30 {
+                if abs(horizontalAmount) > abs(verticalAmount) * 2.0 {
+                    if horizontalAmount < -40 {
                         // Swiped Left -> Next tab in carousel
                         HapticFeedback.selectionChanged()
                         withAnimation(.spring(response: 0.25, dampingFraction: 0.8)) {
                             libraryStore.selectedCategory = libraryStore.selectedCategory.next
                         }
-                    } else if horizontalAmount > 30 {
+                    } else if horizontalAmount > 40 {
                         // Swiped Right -> Previous tab in carousel
                         HapticFeedback.selectionChanged()
                         withAnimation(.spring(response: 0.25, dampingFraction: 0.8)) {
@@ -131,6 +138,6 @@ public struct LibraryView: View {
         }
         .padding(.horizontal, 16)
         .contentShape(Rectangle())
-        .highPriorityGesture(headerSwipeGesture)
+        .simultaneousGesture(headerSwipeGesture)
     }
 }

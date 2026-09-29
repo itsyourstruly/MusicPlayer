@@ -13,6 +13,13 @@ public struct ArtistDetailView: View {
     @State private var selectedTrackForPlaylist: Track? = nil
     @State private var showingFavorites: Bool = false
     @State private var showingOnlineDiscovery: Bool = false
+    @State private var selectedSectionDestination: ArtistSectionDestination? = nil
+
+    private struct ArtistSectionDestination: Identifiable, Hashable {
+        var id: String { title }
+        let title: String
+        let albums: [Album]
+    }
 
     // Initialize with configured properties
     public init(
@@ -25,12 +32,25 @@ public struct ArtistDetailView: View {
         self.playerService = playerService
     }
 
+    /// Dynamically resolves the latest artist state from the library store to react to real-time metadata changes.
+    private var currentArtist: Artist {
+        if let direct = libraryStore.artists.first(where: { $0.id == artist.id }) {
+            return direct
+        }
+        if let found = libraryStore.findArtist(name: artist.name) {
+            return found
+        }
+        return artist
+    }
+
     // Main view layout structure
     public var body: some View {
-        let studioAlbumsList = ownStudioAlbums
-        let ownSinglesList = ownSingles
-        let alternatesList = ownAlternates
-        let featuredAlbumsList = featuredAlbums
+        let activeArtist = currentArtist
+        let discography = categorizeDiscography(for: activeArtist)
+        let studioAlbumsList = discography.studioAlbums
+        let ownSinglesList = discography.singles
+        let alternatesList = discography.alternates
+        let featuredAlbumsList = discography.featuredAlbums
         let tracksList = displayedArtistTracks
 
         ScrollView(.vertical, showsIndicators: false) {
@@ -41,8 +61,8 @@ public struct ArtistDetailView: View {
                 // Action Controls
                 HStack(spacing: 12) {
                     Button(action: {
-                        if let first = artist.tracks.first {
-                            playerService.play(track: first, inQueue: artist.tracks)
+                        if let first = activeArtist.tracks.first {
+                            playerService.play(track: first, inQueue: activeArtist.tracks)
                         }
                     }) {
                         Text("PLAY ALL")
@@ -50,7 +70,7 @@ public struct ArtistDetailView: View {
                     .buttonStyle(TypographicButtonStyle(variant: .primary, size: .regular))
 
                     Button(action: {
-                        var shuffled = artist.tracks
+                        var shuffled = activeArtist.tracks
                         shuffled.shuffle()
                         if let first = shuffled.first {
                             playerService.play(track: first, inQueue: shuffled)
@@ -64,13 +84,9 @@ public struct ArtistDetailView: View {
                 // 1. Studio Albums Section (Lead Artist, Pristine Studio Releases)
                 if !studioAlbumsList.isEmpty {
                     VStack(alignment: .leading, spacing: 10) {
-                        NavigationLink(destination: ArtistSectionFullListView(
-                            title: "ALBUMS",
-                            artistName: artist.name,
-                            albums: studioAlbumsList,
-                            libraryStore: libraryStore,
-                            playerService: playerService
-                        )) {
+                        Button(action: {
+                            selectedSectionDestination = ArtistSectionDestination(title: "ALBUMS", albums: studioAlbumsList)
+                        }) {
                             HStack {
                                 Text("ALBUMS (\(studioAlbumsList.count))")
                                     .font(.system(size: 12, weight: .bold, design: .monospaced))
@@ -89,7 +105,9 @@ public struct ArtistDetailView: View {
                         ScrollView(.horizontal, showsIndicators: false) {
                             LazyHStack(spacing: 12) {
                                 ForEach(studioAlbumsList) { album in
-                                    NavigationLink(destination: AlbumDetailView(album: album, libraryStore: libraryStore, playerService: playerService)) {
+                                    Button(action: {
+                                        selectedAlbumForNavigation = album
+                                    }) {
                                         albumCard(album: album)
                                     }
                                     .buttonStyle(.plain)
@@ -103,13 +121,9 @@ public struct ArtistDetailView: View {
                 // 2. Singles & EPs Section (Lead Artist, Singles)
                 if !ownSinglesList.isEmpty {
                     VStack(alignment: .leading, spacing: 10) {
-                        NavigationLink(destination: ArtistSectionFullListView(
-                            title: "SINGLES & EPs",
-                            artistName: artist.name,
-                            albums: ownSinglesList,
-                            libraryStore: libraryStore,
-                            playerService: playerService
-                        )) {
+                        Button(action: {
+                            selectedSectionDestination = ArtistSectionDestination(title: "SINGLES & EPs", albums: ownSinglesList)
+                        }) {
                             HStack {
                                 Text("SINGLES & EPs (\(ownSinglesList.count))")
                                     .font(.system(size: 12, weight: .bold, design: .monospaced))
@@ -128,7 +142,9 @@ public struct ArtistDetailView: View {
                         ScrollView(.horizontal, showsIndicators: false) {
                             LazyHStack(spacing: 12) {
                                 ForEach(ownSinglesList) { single in
-                                    NavigationLink(destination: AlbumDetailView(album: single, libraryStore: libraryStore, playerService: playerService)) {
+                                    Button(action: {
+                                        selectedAlbumForNavigation = single
+                                    }) {
                                         albumCard(album: single)
                                     }
                                     .buttonStyle(.plain)
@@ -142,13 +158,9 @@ public struct ArtistDetailView: View {
                 // 3. Alternates Section (Remixes, Live recordings, Alternate versions, Acoustic cuts)
                 if !alternatesList.isEmpty {
                     VStack(alignment: .leading, spacing: 10) {
-                        NavigationLink(destination: ArtistSectionFullListView(
-                            title: "ALTERNATES",
-                            artistName: artist.name,
-                            albums: alternatesList,
-                            libraryStore: libraryStore,
-                            playerService: playerService
-                        )) {
+                        Button(action: {
+                            selectedSectionDestination = ArtistSectionDestination(title: "ALTERNATES", albums: alternatesList)
+                        }) {
                             HStack {
                                 Text("ALTERNATES (\(alternatesList.count))")
                                     .font(.system(size: 12, weight: .bold, design: .monospaced))
@@ -167,7 +179,9 @@ public struct ArtistDetailView: View {
                         ScrollView(.horizontal, showsIndicators: false) {
                             LazyHStack(spacing: 12) {
                                 ForEach(alternatesList) { altAlbum in
-                                    NavigationLink(destination: AlbumDetailView(album: altAlbum, libraryStore: libraryStore, playerService: playerService)) {
+                                    Button(action: {
+                                        selectedAlbumForNavigation = altAlbum
+                                    }) {
                                         albumCard(album: altAlbum)
                                     }
                                     .buttonStyle(.plain)
@@ -181,13 +195,9 @@ public struct ArtistDetailView: View {
                 // 5. Featured On Section (Guest appearances on other artists' albums)
                 if !featuredAlbumsList.isEmpty {
                     VStack(alignment: .leading, spacing: 10) {
-                        NavigationLink(destination: ArtistSectionFullListView(
-                            title: "FEATURED ON",
-                            artistName: artist.name,
-                            albums: featuredAlbumsList,
-                            libraryStore: libraryStore,
-                            playerService: playerService
-                        )) {
+                        Button(action: {
+                            selectedSectionDestination = ArtistSectionDestination(title: "FEATURED ON", albums: featuredAlbumsList)
+                        }) {
                             HStack {
                                 Text("FEATURED ON (\(featuredAlbumsList.count))")
                                     .font(.system(size: 12, weight: .bold, design: .monospaced))
@@ -206,34 +216,10 @@ public struct ArtistDetailView: View {
                         ScrollView(.horizontal, showsIndicators: false) {
                             LazyHStack(spacing: 12) {
                                 ForEach(featuredAlbumsList) { featAlbum in
-                                    NavigationLink(destination: AlbumDetailView(album: featAlbum, libraryStore: libraryStore, playerService: playerService)) {
-                                        VStack(alignment: .leading, spacing: 6) {
-                                            AlbumArtworkView(
-                                                artworkKey: featAlbum.artworkKey,
-                                                title: featAlbum.title,
-                                                subtitle: featAlbum.artist,
-                                                cornerRadius: 8
-                                            )
-                                            .frame(width: 110, height: 110)
-
-                                            VStack(alignment: .leading, spacing: 2) {
-                                                Text(featAlbum.title)
-                                                    .font(.system(size: 12, weight: .bold))
-                                                    .foregroundStyle(Color.primary)
-                                                    .lineLimit(1)
-
-                                                Text(featAlbum.artist)
-                                                    .font(.system(size: 10))
-                                                    .foregroundStyle(.secondary)
-                                                    .lineLimit(1)
-
-                                                Text(featAlbum.formattedYear)
-                                                    .font(.system(size: 10, design: .monospaced))
-                                                    .foregroundStyle(.tertiary)
-                                                    .lineLimit(1)
-                                            }
-                                            .frame(width: 110, alignment: .leading)
-                                        }
+                                    Button(action: {
+                                        selectedAlbumForNavigation = featAlbum
+                                    }) {
+                                        featuredAlbumCard(album: featAlbum)
                                     }
                                     .buttonStyle(.plain)
                                     .albumContextMenu(album: featAlbum, libraryStore: libraryStore, playerService: playerService)
@@ -277,7 +263,7 @@ public struct ArtistDetailView: View {
                     let isTapToPlayNext = libraryStore.settings.tapToPlayNext
 
                     LazyVStack(spacing: 4) {
-                        ForEach(0..<tracksList.count, id: \.self) { index in
+                        ForEach(tracksList.indices, id: \.self) { index in
                             let track = tracksList[index]
                             let count = libraryStore.playCount(for: track.id)
                             let trailingLabel = showingFavorites ? (count == 1 ? "1 PLAY" : "\(count) PLAYS") : nil
@@ -328,7 +314,7 @@ public struct ArtistDetailView: View {
             .padding(.bottom, 64)
         }
         .background(libraryStore.settings.appTheme.backgroundColor.ignoresSafeArea())
-        .navigationTitle(artist.name)
+        .navigationTitle(currentArtist.name)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
@@ -337,7 +323,7 @@ public struct ArtistDetailView: View {
                         ForEach(MetadataAPIOption.allCases) { source in
                             Button(action: {
                                 HapticFeedback.lightImpact()
-                                libraryStore.scanArtistDiscographyMetadata(artistName: artist.name, source: source)
+                                libraryStore.scanArtistDiscographyMetadata(artistName: currentArtist.name, source: source)
                             }) {
                                 Text(source.displayName)
                             }
@@ -375,7 +361,7 @@ public struct ArtistDetailView: View {
                 GlobalSearchView(
                     libraryStore: libraryStore,
                     playerService: playerService,
-                    initialQuery: artist.name,
+                    initialQuery: currentArtist.name,
                     initialOnlineMode: true
                 )
             }
@@ -385,6 +371,15 @@ public struct ArtistDetailView: View {
         }
         .navigationDestination(item: $selectedArtistForNavigation) { artist in
             ArtistDetailView(artist: artist, libraryStore: libraryStore, playerService: playerService)
+        }
+        .navigationDestination(item: $selectedSectionDestination) { dest in
+            ArtistSectionFullListView(
+                title: dest.title,
+                artistName: currentArtist.name,
+                albums: dest.albums,
+                libraryStore: libraryStore,
+                playerService: playerService
+            )
         }
     }
 
@@ -433,25 +428,18 @@ public struct ArtistDetailView: View {
             }
             .navigationTitle("ADD TO PLAYLIST")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("DONE") {
-                        selectedTrackForPlaylist = nil
-                    }
-                    .font(.system(size: 13, weight: .bold, design: .monospaced))
-                }
-            }
         }
         .presentationDetents([.medium])
     }
 
     private var headerView: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        let activeArtist = currentArtist
+        return VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 16) {
                 AlbumArtworkView(
-                    artworkKey: artist.mostRecentArtworkKey,
-                    title: artist.name,
-                    subtitle: artist.discographySummary,
+                    artworkKey: activeArtist.mostRecentArtworkKey,
+                    title: activeArtist.name,
+                    subtitle: activeArtist.discographySummary,
                     cornerRadius: 12
                 )
                 .frame(width: 88, height: 88)
@@ -463,12 +451,14 @@ public struct ArtistDetailView: View {
                         .font(.system(size: 11, weight: .bold, design: .monospaced))
                         .foregroundStyle(.secondary)
 
-                    Text(artist.name)
+                    Text(activeArtist.name)
                         .font(.system(size: 22, weight: .bold))
                         .foregroundStyle(Color.primary)
                         .lineLimit(2)
 
-                    Text("\(artist.discographySummary) · \(TimeFormatting.formatSummaryDuration(seconds: artist.totalDuration))")
+                    Text(activeArtist.ownTotalDuration > 0
+                        ? "\(activeArtist.discographySummary) · \(TimeFormatting.formatSummaryDuration(seconds: activeArtist.ownTotalDuration))"
+                        : activeArtist.discographySummary)
                         .font(.system(size: 12, design: .monospaced))
                         .foregroundStyle(.secondary)
                 }
@@ -502,11 +492,10 @@ public struct ArtistDetailView: View {
     // MARK: - Filtered & Sorted Discography Rows
 
     private var displayedArtistTracks: [Track] {
+        let activeArtist = currentArtist
         if showingFavorites {
-            return artist.tracks.sorted { lhs, rhs in
-                // P l
+            return activeArtist.tracks.sorted { lhs, rhs in
                 let pL = libraryStore.playCount(for: lhs.id)
-                // P r
                 let pR = libraryStore.playCount(for: rhs.id)
                 if pL != pR {
                     return pL > pR
@@ -514,60 +503,44 @@ public struct ArtistDetailView: View {
                 return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
             }
         } else {
-            return artist.tracks
+            return activeArtist.tracks
         }
     }
 
-    private var ownStudioAlbums: [Album] {
+    private struct CategorizedDiscography {
+        var studioAlbums: [Album] = []
+        var singles: [Album] = []
+        var alternates: [Album] = []
+        var featuredAlbums: [Album] = []
+    }
+
+    private func categorizeDiscography(for activeArtist: Artist) -> CategorizedDiscography {
         let joined = libraryStore.settings.joinedArtists
-        let list = artist.albums.filter {
-            $0.isLeadOrCollaborativeAlbum(for: artist.name, joinedArtists: joined) && $0.isStudioAlbum
+        var result = CategorizedDiscography()
+        for album in activeArtist.albums {
+            if album.isFeaturedAlbum(for: activeArtist.name, joinedArtists: joined) {
+                result.featuredAlbums.append(album)
+            } else if album.isLeadOrCollaborativeAlbum(for: activeArtist.name, joinedArtists: joined) {
+                if album.isRemix || album.isLive {
+                    result.alternates.append(album)
+                } else if album.isSingle {
+                    result.singles.append(album)
+                } else {
+                    result.studioAlbums.append(album)
+                }
+            }
         }
-        return list.sorted { lhs, rhs in
+        let sortBlock: (Album, Album) -> Bool = { lhs, rhs in
             let yL = lhs.resolvedYear ?? 0
             let yR = rhs.resolvedYear ?? 0
             if yL != yR { return yL > yR }
             return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
         }
-    }
-
-    private var ownSingles: [Album] {
-        let joined = libraryStore.settings.joinedArtists
-        let list = artist.albums.filter {
-            $0.isLeadOrCollaborativeAlbum(for: artist.name, joinedArtists: joined) && $0.isSingle
-        }
-        return list.sorted { lhs, rhs in
-            let yL = lhs.resolvedYear ?? 0
-            let yR = rhs.resolvedYear ?? 0
-            if yL != yR { return yL > yR }
-            return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
-        }
-    }
-
-    private var ownAlternates: [Album] {
-        let joined = libraryStore.settings.joinedArtists
-        let list = artist.albums.filter {
-            $0.isLeadOrCollaborativeAlbum(for: artist.name, joinedArtists: joined) && ($0.isRemix || $0.isLive)
-        }
-        return list.sorted { lhs, rhs in
-            let yL = lhs.resolvedYear ?? 0
-            let yR = rhs.resolvedYear ?? 0
-            if yL != yR { return yL > yR }
-            return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
-        }
-    }
-
-    private var featuredAlbums: [Album] {
-        let joined = libraryStore.settings.joinedArtists
-        let list = artist.albums.filter {
-            $0.isFeaturedAlbum(for: artist.name, joinedArtists: joined)
-        }
-        return list.sorted { lhs, rhs in
-            let yL = lhs.resolvedYear ?? 0
-            let yR = rhs.resolvedYear ?? 0
-            if yL != yR { return yL > yR }
-            return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
-        }
+        result.studioAlbums.sort(by: sortBlock)
+        result.singles.sort(by: sortBlock)
+        result.alternates.sort(by: sortBlock)
+        result.featuredAlbums.sort(by: sortBlock)
+        return result
     }
 
     // Album card
@@ -590,6 +563,37 @@ public struct ArtistDetailView: View {
                 Text(album.formattedYear)
                     .font(.system(size: 11, design: .monospaced))
                     .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            .frame(width: 110, alignment: .leading)
+        }
+    }
+
+    // Featured album card
+    private func featuredAlbumCard(album: Album) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            AlbumArtworkView(
+                artworkKey: album.artworkKey,
+                title: album.title,
+                subtitle: album.artist,
+                cornerRadius: 8
+            )
+            .frame(width: 110, height: 110)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(album.title)
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(Color.primary)
+                    .lineLimit(1)
+
+                Text(album.artist)
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+
+                Text(album.formattedYear)
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(.tertiary)
                     .lineLimit(1)
             }
             .frame(width: 110, alignment: .leading)

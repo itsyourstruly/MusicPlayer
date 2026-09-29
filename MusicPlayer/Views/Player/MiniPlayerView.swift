@@ -84,7 +84,7 @@ public struct MiniPlayerView: View {
             .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
             .offset(x: dragOffset.width * 0.3, y: min(0, dragOffset.height * 0.4))
             .onTapGesture {
-                HapticFeedback.lightImpact()
+                HapticFeedback.snap(intensity: 0.52)
                 onExpand()
             }
             // Interactive drag and touch gesture handling
@@ -101,7 +101,7 @@ public struct MiniPlayerView: View {
 
                         // Swipe Up -> Expand Full Screen
                         if h < -35 && abs(h) > abs(w) {
-                            HapticFeedback.lightImpact()
+                            HapticFeedback.snap(intensity: 0.52)
                             withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
                                 dragOffset = .zero
                                 onExpand()
@@ -123,7 +123,7 @@ public struct MiniPlayerView: View {
                                 dragOffset = .zero
                             }
                             if abs(w) < 10 && abs(h) < 10 {
-                                HapticFeedback.lightImpact()
+                                HapticFeedback.snap(intensity: 0.52)
                                 onExpand()
                             }
                         }

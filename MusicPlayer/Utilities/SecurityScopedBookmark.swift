@@ -7,6 +7,7 @@ public final class SecurityScopedBookmark: @unchecked Sendable {
     private let userDefaultsKey: String = "linkedMusicDirectoryBookmark"
     // File path location
     private var activeSecurityScopedURL: URL?
+    private var isAccessActive: Bool = false
     private let lock = NSLock()
 
     public static let shared = SecurityScopedBookmark()
@@ -56,6 +57,7 @@ public final class SecurityScopedBookmark: @unchecked Sendable {
 
             UserDefaults.standard.set(bookmarkData, forKey: userDefaultsKey)
             self.activeSecurityScopedURL = url
+            self.isAccessActive = startedAccessing
             AppLogger.storage.info("Successfully persisted security-scoped bookmark for \(url.lastPathComponent)")
             return true
         } catch {
@@ -73,15 +75,9 @@ public final class SecurityScopedBookmark: @unchecked Sendable {
         // Cleanup upon exiting scope
         defer { lock.unlock() }
 
-        // If we already have an active URL, ensure active access and check disk existence
-        if let active = activeSecurityScopedURL {
-            _ = active.startAccessingSecurityScopedResource()
-            if FileManager.default.fileExists(atPath: active.path) {
-                return active
-            } else {
-                active.stopAccessingSecurityScopedResource()
-                self.activeSecurityScopedURL = nil
-            }
+        // Fast-path: return immediately if we already hold an active retained security access
+        if let active = activeSecurityScopedURL, isAccessActive {
+            return active
         }
 
         // Ensure preconditions are met before proceeding
@@ -113,8 +109,9 @@ public final class SecurityScopedBookmark: @unchecked Sendable {
                 _ = saveBookmarkLocked(for: resolvedURL)
             }
 
-            _ = resolvedURL.startAccessingSecurityScopedResource()
+            let didAccess = resolvedURL.startAccessingSecurityScopedResource()
             self.activeSecurityScopedURL = resolvedURL
+            self.isAccessActive = didAccess
             AppLogger.storage.info("Resolved & accessed security-scoped folder: \(resolvedURL.path)")
             return resolvedURL
         } catch {
@@ -129,15 +126,13 @@ public final class SecurityScopedBookmark: @unchecked Sendable {
         // Fm
         let fm = FileManager.default
 
-        // 1. Ensure security-scoped root directory is actively accessed
-        let rootFolderURL = resolveAndAccessBookmark()
-
-        // 2. Direct path check
+        // 1. Direct path check first
         if fm.fileExists(atPath: fileURL.path) {
             return fileURL
         }
 
-        // 3. Resolve against active security-scoped root directory
+        // 2. Ensure security-scoped root directory is actively accessed
+        let rootFolderURL = currentFolderURL ?? resolveAndAccessBookmark()
         guard let folderURL = rootFolderURL else {
             return fileURL
         }
@@ -251,8 +246,11 @@ public final class SecurityScopedBookmark: @unchecked Sendable {
     // Stop accessing active url locked
     private func stopAccessingActiveURLLocked() {
         if let active = activeSecurityScopedURL {
-            active.stopAccessingSecurityScopedResource()
+            if isAccessActive {
+                active.stopAccessingSecurityScopedResource()
+            }
             activeSecurityScopedURL = nil
+            isAccessActive = false
             AppLogger.storage.info("Stopped accessing active security-scoped resource.")
         }
     }

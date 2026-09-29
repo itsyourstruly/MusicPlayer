@@ -17,11 +17,23 @@ public struct Artist: Identifiable, Codable, Sendable, Hashable {
     // Search tokens
     public let searchTokens: String
 
+    /// Precomputed count of own albums & singles (excluding guest features on other artists' albums).
+    public let ownAlbumCount: Int
+    /// Precomputed count of tracks across own albums & singles.
+    public let ownTrackCount: Int
+    /// Precomputed total duration across own albums & singles.
+    public let ownTotalDuration: TimeInterval
+    /// Precomputed summary string (e.g. `2 ALBUMS · 24 TRACKS`) reflecting only own releases.
+    public let discographySummary: String
+    /// Precomputed primary visual avatar artwork key for this artist.
+    public let mostRecentArtworkKey: String?
+
     // Initialize with configured properties
-    public init(name: String, albums: [Album] = [], tracks: [Track] = []) {
+    public init(name: String, albums: [Album] = [], tracks: [Track] = [], joinedArtists: [String] = []) {
         self.name = name
         // Albums sorted newest-first so discography views show recent releases at the top.
-        self.albums = albums.sorted { ($0.resolvedYear ?? $0.year ?? 0) > ($1.resolvedYear ?? $1.year ?? 0) }
+        let sortedAlbums = albums.sorted { ($0.resolvedYear ?? $0.year ?? 0) > ($1.resolvedYear ?? $1.year ?? 0) }
+        self.albums = sortedAlbums
         // Tracks sorted alphabetically for the flat track list view.
         self.tracks = tracks.sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
 
@@ -29,6 +41,28 @@ public struct Artist: Identifiable, Codable, Sendable, Hashable {
         let nName = FuzzyMatcher.normalize(name)
         self.normalizedName = nName
         self.searchTokens = nName
+
+        // Precompute own counts once at creation time for zero-latency UI and search
+        var ownCount = 0
+        var seenTrackIDs = Set<UUID>()
+        var dur: TimeInterval = 0
+        for album in sortedAlbums {
+            if album.isLeadOrCollaborativeAlbum(for: name, joinedArtists: joinedArtists) {
+                ownCount += 1
+                for track in album.tracks {
+                    if seenTrackIDs.insert(track.id).inserted {
+                        dur += track.duration
+                    }
+                }
+            }
+        }
+        self.ownAlbumCount = ownCount
+        self.ownTrackCount = seenTrackIDs.count
+        self.ownTotalDuration = dur
+        let albumText = ownCount == 1 ? "1 ALBUM" : "\(ownCount) ALBUMS"
+        let trackText = seenTrackIDs.count == 1 ? "1 TRACK" : "\(seenTrackIDs.count) TRACKS"
+        self.discographySummary = "\(albumText) · \(trackText)"
+        self.mostRecentArtworkKey = Artist.resolveMostRecentArtworkKey(name: name, albums: sortedAlbums, tracks: self.tracks)
     }
 
     // MARK: - Codable
@@ -37,6 +71,7 @@ public struct Artist: Identifiable, Codable, Sendable, Hashable {
     private enum CodingKeys: String, CodingKey {
         // Name option
         case name, albums, tracks
+        case ownAlbumCount, ownTrackCount, ownTotalDuration, discographySummary, mostRecentArtworkKey
     }
 
     /// Custom decoder so sort order is enforced after loading from persisted JSON.
@@ -48,13 +83,52 @@ public struct Artist: Identifiable, Codable, Sendable, Hashable {
         let decodedAlbums = try container.decodeIfPresent([Album].self, forKey: .albums) ?? []
         // Decoded tracks
         let decodedTracks = try container.decodeIfPresent([Track].self, forKey: .tracks) ?? []
-        self.albums = decodedAlbums.sorted { ($0.resolvedYear ?? $0.year ?? 0) > ($1.resolvedYear ?? $1.year ?? 0) }
+        let sortedAlbums = decodedAlbums.sorted { ($0.resolvedYear ?? $0.year ?? 0) > ($1.resolvedYear ?? $1.year ?? 0) }
+        self.albums = sortedAlbums
         self.tracks = decodedTracks.sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
 
         // N name
         let nName = FuzzyMatcher.normalize(self.name)
         self.normalizedName = nName
         self.searchTokens = nName
+
+        // Fast-path: check if precomputed values were serialized to avoid expensive disk/loop resolution
+        if let decodedOwnAlbumCount = try container.decodeIfPresent(Int.self, forKey: .ownAlbumCount),
+           let decodedOwnTrackCount = try container.decodeIfPresent(Int.self, forKey: .ownTrackCount),
+           let decodedOwnDuration = try container.decodeIfPresent(TimeInterval.self, forKey: .ownTotalDuration),
+           let decodedSummary = try container.decodeIfPresent(String.self, forKey: .discographySummary) {
+            self.ownAlbumCount = decodedOwnAlbumCount
+            self.ownTrackCount = decodedOwnTrackCount
+            self.ownTotalDuration = decodedOwnDuration
+            self.discographySummary = decodedSummary
+        } else {
+            // Fallback for legacy persisted caches without serialized precomputed counts
+            var ownCount = 0
+            var seenTrackIDs = Set<UUID>()
+            var dur: TimeInterval = 0
+            for album in sortedAlbums {
+                if album.isLeadOrCollaborativeAlbum(for: self.name) {
+                    ownCount += 1
+                    for track in album.tracks {
+                        if seenTrackIDs.insert(track.id).inserted {
+                            dur += track.duration
+                        }
+                    }
+                }
+            }
+            self.ownAlbumCount = ownCount
+            self.ownTrackCount = seenTrackIDs.count
+            self.ownTotalDuration = dur
+            let albumText = ownCount == 1 ? "1 ALBUM" : "\(ownCount) ALBUMS"
+            let trackText = seenTrackIDs.count == 1 ? "1 TRACK" : "\(seenTrackIDs.count) TRACKS"
+            self.discographySummary = "\(albumText) · \(trackText)"
+        }
+
+        if let decodedArtwork = try container.decodeIfPresent(String.self, forKey: .mostRecentArtworkKey) {
+            self.mostRecentArtworkKey = decodedArtwork
+        } else {
+            self.mostRecentArtworkKey = Artist.resolveMostRecentArtworkKey(name: self.name, albums: sortedAlbums, tracks: self.tracks)
+        }
     }
 
     // Encode
@@ -64,23 +138,61 @@ public struct Artist: Identifiable, Codable, Sendable, Hashable {
         try container.encode(name, forKey: .name)
         try container.encode(albums, forKey: .albums)
         try container.encode(tracks, forKey: .tracks)
+        try container.encode(ownAlbumCount, forKey: .ownAlbumCount)
+        try container.encode(ownTrackCount, forKey: .ownTrackCount)
+        try container.encode(ownTotalDuration, forKey: .ownTotalDuration)
+        try container.encode(discographySummary, forKey: .discographySummary)
+        try container.encodeIfPresent(mostRecentArtworkKey, forKey: .mostRecentArtworkKey)
     }
 
     // MARK: - Computed Properties
 
-    /// Total number of tracks by this artist.
+    /// Returns albums primarily attributed to this artist (lead creator or co-lead collaborator), excluding guest feature appearances on others' albums.
+    public func ownAlbums(joinedArtists: [String] = []) -> [Album] {
+        if joinedArtists.isEmpty {
+            return albums.filter { $0.isLeadOrCollaborativeAlbum(for: name) }
+        }
+        return albums.filter { $0.isLeadOrCollaborativeAlbum(for: name, joinedArtists: joinedArtists) }
+    }
+
+    /// Returns unique tracks from this artist's own albums and singles (excluding guest feature appearances on other artists' albums).
+    public func ownTracks(joinedArtists: [String] = []) -> [Track] {
+        let own = ownAlbums(joinedArtists: joinedArtists)
+        var seenIDs = Set<UUID>()
+        var result: [Track] = []
+        for album in own {
+            for track in album.tracks {
+                if seenIDs.insert(track.id).inserted {
+                    result.append(track)
+                }
+            }
+        }
+        return result
+    }
+
+    /// Total number of tracks across this artist's own albums and singles (excluding guest feature appearances).
     public var totalTrackCount: Int {
+        ownTrackCount
+    }
+
+    /// Total number of albums by this artist (excluding guest feature appearances).
+    public var totalAlbumCount: Int {
+        ownAlbumCount
+    }
+
+    /// Total playback duration for this artist's own albums and singles.
+    public var totalDuration: TimeInterval {
+        ownTotalDuration
+    }
+
+    /// Total count of all tracks associated with this artist including guest features.
+    public var allTracksCount: Int {
         tracks.count
     }
 
-    /// Total number of albums by this artist.
-    public var totalAlbumCount: Int {
+    /// Total count of all albums associated with this artist including guest features.
+    public var allAlbumsCount: Int {
         albums.count
-    }
-
-    /// Total playback duration for this artist.
-    public var totalDuration: TimeInterval {
-        tracks.reduce(0) { $0 + $1.duration }
     }
 
     /// Formatted track count subtitle (e.g. `1 TRACK` or `28 TRACKS`).
@@ -88,24 +200,24 @@ public struct Artist: Identifiable, Codable, Sendable, Hashable {
         totalTrackCount == 1 ? "1 TRACK" : "\(totalTrackCount) TRACKS"
     }
 
-    /// Formatted album and track count subtitle (e.g., `3 ALBUMS · 28 TRACKS`).
-    public var discographySummary: String {
-        // Album text
-        let albumText = totalAlbumCount == 1 ? "1 ALBUM" : "\(totalAlbumCount) ALBUMS"
-        // Track text
-        let trackText = totalTrackCount == 1 ? "1 TRACK" : "\(totalTrackCount) TRACKS"
-        return "\(albumText) · \(trackText)"
+    /// Formatted album and track count subtitle (e.g., `3 ALBUMS · 28 TRACKS`) reflecting only own albums and singles.
+    public func discographySummary(joinedArtists: [String] = []) -> String {
+        if joinedArtists.isEmpty {
+            return discographySummary
+        }
+        let own = albums.filter { $0.isLeadOrCollaborativeAlbum(for: name, joinedArtists: joinedArtists) }
+        var seen = Set<UUID>()
+        for a in own {
+            for t in a.tracks { seen.insert(t.id) }
+        }
+        let albText = own.count == 1 ? "1 ALBUM" : "\(own.count) ALBUMS"
+        let trkText = seen.count == 1 ? "1 TRACK" : "\(seen.count) TRACKS"
+        return "\(albText) · \(trkText)"
     }
 
-    /// Indicates whether the given album is primarily attributed to this artist (not just a feature).
+    /// Indicates whether the given album is primarily attributed to this artist (lead creator or co-lead collaborator).
     public func isPrimaryAlbumArtist(for album: Album) -> Bool {
-        let normArtist = name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let normAlbumArtist = album.artist.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if normAlbumArtist == normArtist { return true }
-        if normAlbumArtist.hasPrefix("\(normArtist) ") || normAlbumArtist.hasPrefix("\(normArtist),") || normAlbumArtist.hasPrefix("\(normArtist) &") || normAlbumArtist.hasPrefix("\(normArtist) feat") {
-            return true
-        }
-        return false
+        album.isLeadOrCollaborativeAlbum(for: name)
     }
 
     /// The most recent studio album released by this artist (excluding singles, EPs, remixes, live albums, and guest features).
@@ -136,14 +248,14 @@ public struct Artist: Identifiable, Codable, Sendable, Hashable {
         return singles.first(where: { $0.effectiveArtworkKey != nil }) ?? singles.first ?? albums.first
     }
 
-    /// Primary visual avatar artwork key for this artist:
+    /// Resolves the primary visual avatar artwork key for this artist:
     /// 1. Prioritizes that artist's most recent studio album (lead artist, non-single, non-remix, non-live), even if released long ago.
     /// 2. If the artist has zero studio albums locally, falls back to their most recent single/remix/live release with artwork.
     /// 3. If no albums with artwork exist, falls back to any track where they are the primary artist.
-    public var mostRecentArtworkKey: String? {
+    private static func resolveMostRecentArtworkKey(name: String, albums: [Album], tracks: [Track]) -> String? {
         // 1. That artist's most recent studio album (lead artist, non-single, non-remix, non-live) sorted by year descending
         let studioLeadAlbums = albums
-            .filter { $0.isStudioAlbum && isPrimaryAlbumArtist(for: $0) }
+            .filter { $0.isStudioAlbum && $0.isLeadOrCollaborativeAlbum(for: name) }
             .sorted { ($0.year ?? 0) > ($1.year ?? 0) }
 
         for album in studioLeadAlbums {

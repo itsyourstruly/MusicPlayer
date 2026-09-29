@@ -7,6 +7,10 @@ import os
 
 @main
 struct MusicPlayerApp: App {
+    init() {
+        AppLogger.ui.info("LAC MusicPlayer application launched. Session logging active.")
+    }
+
     // Body
     var body: some Scene {
         WindowGroup {

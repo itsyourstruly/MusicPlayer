@@ -35,6 +35,21 @@ public struct AudioFileMetadataWriter: Sendable {
         return mutableData as Data
     }
 
+    /// Detects if a given file or directory URL is hosted inside iCloud Drive or another cloud synchronization container.
+    public static func isCloudStorageURL(_ url: URL) -> Bool {
+        let path = url.path
+        if path.contains("Mobile Documents/com~apple~CloudDocs") ||
+           path.contains("com~apple~CloudDocs") ||
+           path.contains("/CloudDocs") ||
+           path.contains("Library/Mobile Documents") {
+            return true
+        }
+        if let values = try? url.resourceValues(forKeys: [.isUbiquitousItemKey]), values.isUbiquitousItem == true {
+            return true
+        }
+        return false
+    }
+
     /// Safely writes updated metadata and artwork into the target audio file on disk without re-encoding audio samples.
     ///
     /// - Parameters:
@@ -48,6 +63,7 @@ public struct AudioFileMetadataWriter: Sendable {
     ///   - trackNumber: Optional track index number.
     ///   - totalTracks: Optional total track count.
     ///   - discNumber: Optional disc number.
+    ///   - discTotal: Optional disc total.
     ///   - artworkData: Optional binary image data (JPEG or PNG).
     /// - Returns: True if file metadata was successfully updated on disk; otherwise false.
     public func writeMetadata(
@@ -56,11 +72,14 @@ public struct AudioFileMetadataWriter: Sendable {
         artist: String,
         album: String,
         albumArtist: String? = nil,
+        composer: String? = nil,
+        performer: String? = nil,
         year: Int? = nil,
         genre: String? = nil,
         trackNumber: Int? = nil,
         totalTracks: Int? = nil,
         discNumber: Int? = nil,
+        discTotal: Int? = nil,
         artworkData: Data? = nil
     ) async -> Bool {
         // Optimize artwork data if provided
@@ -89,6 +108,12 @@ public struct AudioFileMetadataWriter: Sendable {
             return false
         }
 
+        // Check if file is stored in iCloud or cloud service
+        if Self.isCloudStorageURL(fileURL) {
+            AppLogger.storage.warning("AudioFileMetadataWriter: File is stored in iCloud Drive / cloud storage (\(fileURL.lastPathComponent)). Direct disk tag writing skipped; metadata retained in-app.")
+            return false
+        }
+
         // Ext
         let ext = fileURL.pathExtension.lowercased()
 
@@ -100,11 +125,14 @@ public struct AudioFileMetadataWriter: Sendable {
                 artist: artist,
                 album: album,
                 albumArtist: albumArtist,
+                composer: composer,
+                performer: performer,
                 year: year,
                 genre: genre,
                 trackNumber: trackNumber,
                 totalTracks: totalTracks,
                 discNumber: discNumber,
+                discTotal: discTotal,
                 artworkData: optimizedArtwork
             )
 
@@ -115,11 +143,14 @@ public struct AudioFileMetadataWriter: Sendable {
                 artist: artist,
                 album: album,
                 albumArtist: albumArtist,
+                composer: composer,
+                performer: performer,
                 year: year,
                 genre: genre,
                 trackNumber: trackNumber,
                 totalTracks: totalTracks,
                 discNumber: discNumber,
+                discTotal: discTotal,
                 artworkData: optimizedArtwork
             )
 
@@ -130,11 +161,14 @@ public struct AudioFileMetadataWriter: Sendable {
                 artist: artist,
                 album: album,
                 albumArtist: albumArtist,
+                composer: composer,
+                performer: performer,
                 year: year,
                 genre: genre,
                 trackNumber: trackNumber,
                 totalTracks: totalTracks,
                 discNumber: discNumber,
+                discTotal: discTotal,
                 artworkData: optimizedArtwork
             )
 
@@ -154,11 +188,14 @@ public struct AudioFileMetadataWriter: Sendable {
         artist: String,
         album: String,
         albumArtist: String?,
+        composer: String?,
+        performer: String?,
         year: Int?,
         genre: String?,
         trackNumber: Int?,
         totalTracks: Int?,
         discNumber: Int?,
+        discTotal: Int?,
         artworkData: Data?
     ) async -> Bool {
         // Temp directory
@@ -236,6 +273,26 @@ public struct AudioFileMetadataWriter: Sendable {
             metadataItems.append(item)
         }
 
+        // Composer (©wrt)
+        if let comp = composer, !comp.isEmpty {
+            let item = AVMutableMetadataItem()
+            item.keySpace = .iTunes
+            item.key = "\u{00A9}wrt" as NSString
+            item.value = comp as NSString
+            item.dataType = kCMMetadataBaseDataType_UTF8 as String
+            metadataItems.append(item)
+        }
+
+        // Performer (©ART)
+        if let perf = performer, !perf.isEmpty {
+            let item = AVMutableMetadataItem()
+            item.keySpace = .iTunes
+            item.key = "\u{00A9}ART" as NSString
+            item.value = perf as NSString
+            item.dataType = kCMMetadataBaseDataType_UTF8 as String
+            metadataItems.append(item)
+        }
+
         // Year / Release Date
         if let y = year, y > 0 {
             // Item
@@ -271,10 +328,11 @@ public struct AudioFileMetadataWriter: Sendable {
             metadataItems.append(item)
         }
 
-        // Disc Number (disk: 6-byte big-endian payload)
+        // Disc Number & Total (disk: 6-byte big-endian payload)
         if let discNum = discNumber, discNum > 0 {
+            let total = discTotal ?? 0
             // Disc bytes
-            let discBytes: [UInt8] = [0, 0, 0, UInt8(min(255, discNum)), 0, 0]
+            let discBytes: [UInt8] = [0, 0, 0, UInt8(min(255, discNum)), 0, UInt8(min(255, total))]
             // Item
             let item = AVMutableMetadataItem()
             item.keySpace = .iTunes
@@ -327,11 +385,14 @@ public struct AudioFileMetadataWriter: Sendable {
         artist: String,
         album: String,
         albumArtist: String?,
+        composer: String?,
+        performer: String?,
         year: Int?,
         genre: String?,
         trackNumber: Int?,
         totalTracks: Int?,
         discNumber: Int?,
+        discTotal: Int?,
         artworkData: Data?
     ) -> Bool {
         // Ensure preconditions are met before proceeding
@@ -388,6 +449,16 @@ public struct AudioFileMetadataWriter: Sendable {
             frameData.append(buildID3TextFrame(id: "TPE2", text: albArtist))
         }
 
+        // TCOM - Composer
+        if let comp = composer, !comp.isEmpty {
+            frameData.append(buildID3TextFrame(id: "TCOM", text: comp))
+        }
+
+        // TPE3 - Performer
+        if let perf = performer, !perf.isEmpty {
+            frameData.append(buildID3TextFrame(id: "TPE3", text: perf))
+        }
+
         // TYER / TDRC - Year
         if let y = year, y > 0 {
             frameData.append(buildID3TextFrame(id: "TYER", text: String(y)))
@@ -412,7 +483,13 @@ public struct AudioFileMetadataWriter: Sendable {
 
         // TPOS - Disc Number (e.g. "1" or "1/2")
         if let discNum = discNumber, discNum > 0 {
-            frameData.append(buildID3TextFrame(id: "TPOS", text: "\(discNum)"))
+            let str: String
+            if let tot = discTotal, tot > 0 {
+                str = "\(discNum)/\(tot)"
+            } else {
+                str = "\(discNum)"
+            }
+            frameData.append(buildID3TextFrame(id: "TPOS", text: str))
         }
 
         // APIC - Attached Picture (Cover Front 0x03)
@@ -548,11 +625,14 @@ public struct AudioFileMetadataWriter: Sendable {
         artist: String,
         album: String,
         albumArtist: String?,
+        composer: String?,
+        performer: String?,
         year: Int?,
         genre: String?,
         trackNumber: Int?,
         totalTracks: Int?,
         discNumber: Int?,
+        discTotal: Int?,
         artworkData: Data?
     ) -> Bool {
         // Ensure preconditions are met before proceeding
@@ -572,15 +652,15 @@ public struct AudioFileMetadataWriter: Sendable {
 
         while !isLast {
             // Ensure preconditions are met before proceeding
-            guard let header = try? fileHandle.read(upToCount: 4), header.count == 4 else { break }
+            guard let header = try? fileHandle.read(upToCount: 4), header.count == 4 else { return false }
             isLast = (header[0] & 0x80) != 0
             // Block type
             let blockType = header[0] & 0x7F
             // Block size
-            let blockSize = (Int(header[1]) << 16) | (Int(header[2]) << 8) | Int(header[3])
+            let length = (Int(header[1]) << 16) | (Int(header[2]) << 8) | Int(header[3])
 
             // Ensure preconditions are met before proceeding
-            guard let blockContent = try? fileHandle.read(upToCount: blockSize), blockContent.count == blockSize else { break }
+            guard let blockContent = try? fileHandle.read(upToCount: length), blockContent.count == length else { return false }
 
             if blockType == 0 { // STREAMINFO
                 // Clean header
@@ -601,11 +681,14 @@ public struct AudioFileMetadataWriter: Sendable {
         if !artist.isEmpty { comments.append("ARTIST=\(artist)") }
         if !album.isEmpty { comments.append("ALBUM=\(album)") }
         if let aart = albumArtist, !aart.isEmpty { comments.append("ALBUMARTIST=\(aart)") }
+        if let comp = composer, !comp.isEmpty { comments.append("COMPOSER=\(comp)") }
+        if let perf = performer, !perf.isEmpty { comments.append("PERFORMER=\(perf)") }
         if let y = year, y > 0 { comments.append("DATE=\(y)") }
         if let g = genre, !g.isEmpty { comments.append("GENRE=\(g)") }
         if let trk = trackNumber, trk > 0 { comments.append("TRACKNUMBER=\(trk)") }
         if let tot = totalTracks, tot > 0 { comments.append("TRACKTOTAL=\(tot)") }
         if let dsc = discNumber, dsc > 0 { comments.append("DISCNUMBER=\(dsc)") }
+        if let dtot = discTotal, dtot > 0 { comments.append("DISCTOTAL=\(dtot)") }
 
         // Vorbis payload
         let vorbisPayload = buildVorbisCommentPayload(comments: comments)

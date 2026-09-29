@@ -81,14 +81,6 @@ public struct EqualizerPresetsSheetView: View {
             .navigationTitle("PRESETS")
             .navigationBarTitleDisplayMode(.inline)
             .searchable(text: $searchQuery, prompt: "Search models, brands, signatures...")
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("DONE") {
-                        dismiss()
-                    }
-                    .font(.system(size: 13, weight: .bold, design: .monospaced))
-                }
-            }
         }
         .presentationDetents([.medium, .large])
     }

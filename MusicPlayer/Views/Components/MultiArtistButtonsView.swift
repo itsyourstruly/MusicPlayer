@@ -11,55 +11,80 @@ public struct ArtistFlowLayout: Layout {
         self.verticalSpacing = verticalSpacing
     }
 
-    // Size that fits
-    public func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        // Width
-        let width = proposal.width ?? .infinity
-        // Current x
-        var currentX: CGFloat = 0
-        // Current y
-        var currentY: CGFloat = 0
-        // Line height
-        var lineHeight: CGFloat = 0
-        // Max x
-        var maxX: CGFloat = 0
+    private struct Row {
+        var subviews: [LayoutSubview] = []
+        var subviewSizes: [CGSize] = []
+        var width: CGFloat = 0
+        var height: CGFloat = 0
+    }
+
+    private func calculateRows(proposal: ProposedViewSize, subviews: Subviews) -> [Row] {
+        guard !subviews.isEmpty else { return [] }
+        let maxAvailableWidth = proposal.width ?? .infinity
+
+        var rows: [Row] = []
+        var currentRow = Row()
 
         for subview in subviews {
-            // Size
-            let size = subview.sizeThatFits(.unspecified)
-            if currentX + size.width > width && currentX > 0 {
-                currentX = 0
-                currentY += lineHeight + verticalSpacing
-                lineHeight = 0
+            // Measure subview proposing maxAvailableWidth so that text components know their horizontal ceiling
+            let subviewSize = subview.sizeThatFits(ProposedViewSize(width: maxAvailableWidth.isFinite ? maxAvailableWidth : nil, height: nil))
+
+            let proposedRowWidth = currentRow.width + (currentRow.subviews.isEmpty ? 0 : horizontalSpacing) + subviewSize.width
+
+            if proposedRowWidth > maxAvailableWidth && !currentRow.subviews.isEmpty {
+                rows.append(currentRow)
+                currentRow = Row(subviews: [subview], subviewSizes: [subviewSize], width: subviewSize.width, height: subviewSize.height)
+            } else {
+                currentRow.subviews.append(subview)
+                currentRow.subviewSizes.append(subviewSize)
+                currentRow.width = proposedRowWidth
+                currentRow.height = max(currentRow.height, subviewSize.height)
             }
-            lineHeight = max(lineHeight, size.height)
-            currentX += size.width + horizontalSpacing
-            maxX = max(maxX, currentX)
         }
 
-        return CGSize(width: min(width, maxX), height: currentY + lineHeight)
+        if !currentRow.subviews.isEmpty {
+            rows.append(currentRow)
+        }
+
+        return rows
+    }
+
+    // Size that fits
+    public func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let rows = calculateRows(proposal: proposal, subviews: subviews)
+        guard !rows.isEmpty else { return .zero }
+
+        var totalHeight: CGFloat = 0
+        var maxWidth: CGFloat = 0
+
+        for (index, row) in rows.enumerated() {
+            totalHeight += row.height
+            if index < rows.count - 1 {
+                totalHeight += verticalSpacing
+            }
+            maxWidth = max(maxWidth, row.width)
+        }
+
+        return CGSize(width: maxWidth, height: totalHeight)
     }
 
     // Place subviews
     public func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        // Current x
-        var currentX = bounds.minX
-        // Current y
-        var currentY = bounds.minY
-        // Line height
-        var lineHeight: CGFloat = 0
+        let rows = calculateRows(proposal: ProposedViewSize(width: bounds.width, height: bounds.height), subviews: subviews)
+        var y = bounds.minY
 
-        for subview in subviews {
-            // Size
-            let size = subview.sizeThatFits(.unspecified)
-            if currentX + size.width > bounds.maxX && currentX > bounds.minX {
-                currentX = bounds.minX
-                currentY += lineHeight + verticalSpacing
-                lineHeight = 0
+        for (index, row) in rows.enumerated() {
+            var x = bounds.minX
+            for (subviewIdx, subview) in row.subviews.enumerated() {
+                let subviewSize = row.subviewSizes[subviewIdx]
+                let pt = CGPoint(x: x, y: y + (row.height - subviewSize.height) / 2)
+                subview.place(at: pt, proposal: ProposedViewSize(subviewSize))
+                x += subviewSize.width + horizontalSpacing
             }
-            subview.place(at: CGPoint(x: currentX, y: currentY), proposal: ProposedViewSize(size))
-            lineHeight = max(lineHeight, size.height)
-            currentX += size.width + horizontalSpacing
+            y += row.height
+            if index < rows.count - 1 {
+                y += verticalSpacing
+            }
         }
     }
 }
@@ -136,12 +161,13 @@ public struct MultiArtistButtonsView: View {
             ArtistFlowLayout(horizontalSpacing: 0, verticalSpacing: 3) {
                 buttonsContent
             }
+            .fixedSize(horizontal: false, vertical: true)
         }
     }
 
     @ViewBuilder
     private var buttonsContent: some View {
-        ForEach(segments) { segment in
+        ForEach(Array(segments.enumerated()), id: \.offset) { _, segment in
             Button(action: {
                 HapticFeedback.lightImpact()
                 onSelectArtist(segment.name)

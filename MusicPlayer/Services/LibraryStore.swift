@@ -5,7 +5,7 @@ import os
 
 /// Persistent cache record for a downloaded online track metadata result and artwork.
 public struct CachedTrackMetadataRecord: Codable, Sendable {
-    public let onlineMetadata: OnlineTrackMetadata
+    public var onlineMetadata: OnlineTrackMetadata
     public let localTrackSignature: String
     public let filePath: String
     public let fileName: String
@@ -91,13 +91,24 @@ public final class LibraryStore {
     // MARK: - Core State
 
     // All tracks loaded in the user library
-    public private(set) var tracks: [Track] = []
+    public private(set) var tracks: [Track] = [] {
+        didSet { invalidateSortedCaches() }
+    }
     // Grouped album entities
-    public private(set) var albums: [Album] = []
+    public private(set) var albums: [Album] = [] {
+        didSet {
+            invalidateSortedCaches()
+            rebuildAlbumLookups()
+        }
+    }
     // Grouped artist entities
-    public private(set) var artists: [Artist] = []
+    public private(set) var artists: [Artist] = [] {
+        didSet { invalidateSortedCaches() }
+    }
     // User-created and smart playlists
-    public private(set) var playlists: [Playlist] = []
+    public private(set) var playlists: [Playlist] = [] {
+        didSet { invalidateSortedCaches() }
+    }
     // Track playback counts keyed by track ID
     public private(set) var playCounts: [UUID: Int] = [:]
     // Track saved playback positions (in seconds) keyed by track ID
@@ -106,6 +117,21 @@ public final class LibraryStore {
     public private(set) var pinnedItemIDs: [PinnedItemIdentifier] = []
     // IDs of albums pinned to home view
     public private(set) var pinnedAlbumIDs: Set<String> = []
+    // Recently played album IDs (ordered most recent first, max 25)
+    public private(set) var recentAlbumIDs: [String] = []
+
+    /// Computed recently played albums matching known library albums
+    public var recentAlbums: [Album] {
+        recentAlbumIDs.compactMap { albumsByID[$0] }
+    }
+    // Recently played track IDs from Search Library (ordered most recent first, max 50)
+    public private(set) var recentSearchPlayedTrackIDs: [UUID] = []
+
+    /// Computed recently played tracks from Search Library matching known library tracks
+    public var recentSearchPlayedTracks: [Track] {
+        let trackMap = Dictionary(tracks.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        return recentSearchPlayedTrackIDs.compactMap { trackMap[$0] }
+    }
     // User preferences and configuration store
     public var settings: AppSettings = AppSettings()
 
@@ -123,6 +149,7 @@ public final class LibraryStore {
     public private(set) var downloadedMetadataCache = PersistentDownloadedMetadataCache()
     // Controls is background checking metadata
     public private(set) var isBackgroundCheckingMetadata: Bool = false
+    public private(set) var isBackgroundCheckingMetadataPaused: Bool = false
     public private(set) var backgroundCheckProgress: Double = 0.0
     public private(set) var backgroundCheckStatusText: String = ""
     public private(set) var backgroundCheckScannedCount: Int = 0
@@ -131,6 +158,8 @@ public final class LibraryStore {
     public private(set) var isEnrichingMetadata: Bool = false
     public private(set) var enrichProgress: Double = 0.0
     public private(set) var enrichStatusText: String = ""
+    public private(set) var enrichProcessedCount: Int = 0
+    public private(set) var enrichTotalCount: Int = 0
 
     public var verifiedGoodCount: Int {
         verifiedGoodDiffs.count
@@ -149,8 +178,10 @@ public final class LibraryStore {
     // Fast O(1) index mapping normalized artist name variants and IDs to Artist entities
     @ObservationIgnored private var artistLookupIndex: [String: Artist] = [:]
 
-    // MARK: - Scanning State
+    // MARK: - Scanning & Loading State
 
+    // Indicates initial background loading of persisted library data from disk
+    public private(set) var isInitialLoading: Bool = true
     // Indicates active file system audio scanning
     public private(set) var isScanning: Bool = false
     // Overall scanning completion progress (0.0 - 1.0)
@@ -203,6 +234,36 @@ public final class LibraryStore {
     @ObservationIgnored private var cachedSortedAlbums: [Album]? = nil
     @ObservationIgnored private var cachedSortedArtists: [Artist]? = nil
     @ObservationIgnored private var cachedSortedPlaylists: [Playlist]? = nil
+    @ObservationIgnored private var albumsByID: [String: Album] = [:]
+    @ObservationIgnored private var albumsByNormalizedKey: [String: Album] = [:]
+
+    /// Rebuilds fast O(1) indexed lookup tables for albums
+    private func rebuildAlbumLookups() {
+        var byID: [String: Album] = [:]
+        byID.reserveCapacity(albums.count)
+        var byKey: [String: Album] = [:]
+        byKey.reserveCapacity(albums.count)
+
+        for album in albums {
+            byID[album.id] = album
+            let key = "\(album.normalizedArtist)_\(album.normalizedTitle)"
+            if byKey[key] == nil {
+                byKey[key] = album
+            }
+        }
+        self.albumsByID = byID
+        self.albumsByNormalizedKey = byKey
+    }
+
+    /// Fast O(1) indexed lookup for an album by its stable ID.
+    public func album(forID id: String) -> Album? {
+        albumsByID[id]
+    }
+
+    /// Fast O(1) indexed lookup for an album by its normalized artist and title.
+    public func album(normalizedArtist: String, normalizedTitle: String) -> Album? {
+        albumsByNormalizedKey["\(normalizedArtist)_\(normalizedTitle)"]
+    }
 
     /// Invalidates all cached sorted collections
     public func invalidateSortedCaches() {
@@ -233,26 +294,27 @@ public final class LibraryStore {
         // Immediately resolve and retain security-scoped folder access
         _ = SecurityScopedBookmark.shared.resolveAndAccessBookmark()
 
-        loadPersistedState()
+        // 1. Instant sync load of lightweight preferences for immediate frame 1 paint
+        loadLightweightPreferences()
+
+        // 2. Stream heavy track library and cached collections asynchronously off main thread
+        loadPersistedStateAsync()
     }
 
     // MARK: - Computed Filtered Collections
 
     /// Returns resolved user-pinned albums and playlists in their customized display order.
     public var pinnedItems: [PinnedItem] {
-        // Results
         var results: [PinnedItem] = []
         for identifier in pinnedItemIDs {
             switch identifier.type {
             case .playlist:
-                // Unique identifier
                 if let plID = UUID(uuidString: identifier.targetID),
-                   // Pl
                    let pl = playlists.first(where: { $0.id == plID }) {
                     results.append(.playlist(pl))
                 }
             case .album:
-                if let al = albums.first(where: { $0.id == identifier.targetID }) {
+                if let al = albumsByID[identifier.targetID] {
                     results.append(.album(al))
                 }
             }
@@ -424,7 +486,8 @@ public final class LibraryStore {
         if let direct = albums.first(where: {
             guard $0.title.localizedCaseInsensitiveCompare(cleanTitle) == .orderedSame else { return false }
             if let artist {
-                return $0.artist.localizedCaseInsensitiveCompare(artist) == .orderedSame
+                return $0.artist.localizedCaseInsensitiveCompare(artist) == .orderedSame ||
+                       $0.isLeadOrCollaborativeAlbum(for: artist, joinedArtists: settings.joinedArtists)
             }
             return true
         }) {
@@ -518,7 +581,7 @@ public final class LibraryStore {
             let matchingAlbums = albums.filter { album in
                 album.tracks.contains { matchingTrackIDs.contains($0.id) }
             }
-            let synthesized = Artist(name: trimmedName, albums: matchingAlbums, tracks: matchingTracks)
+            let synthesized = Artist(name: trimmedName, albums: matchingAlbums, tracks: matchingTracks, joinedArtists: settings.joinedArtists)
             artistLookupIndex[canonicalKey] = synthesized
             return synthesized
         }
@@ -591,14 +654,26 @@ public final class LibraryStore {
             }
         }
 
+        let removedPaths = self.settings.removedTrackPaths
+        let filteredTracks = scannedTracks.filter { !removedPaths.contains($0.url.standardizedFileURL.path) }
+
         self.scanStatusText = "Building albums and artists..."
-        self.tracks = scannedTracks
+        self.tracks = filteredTracks
         rebuildAlbumsAndArtists()
 
         self.scanStatusText = "Re-attaching cached metadata & artwork..."
         let reattached = reattachCachedMetadataToTracks()
         if reattached > 0 {
             rebuildAlbumsAndArtists()
+        }
+
+        // Re-apply manual collaborative albums if any exist
+        if !self.settings.manualCollaborativeAlbumIDs.isEmpty {
+            for album in self.albums {
+                if self.settings.manualCollaborativeAlbumIDs.contains(album.id) {
+                    self.makeCollaborativeAlbum(album)
+                }
+            }
         }
 
         // Cache baseline metadata and artwork for all scanned tracks non-blockingly
@@ -614,6 +689,21 @@ public final class LibraryStore {
         saveLibrary()
         saveSettings()
         saveEnrichmentCache()
+
+        let currentTracks = self.tracks
+        let currentAlbums = self.albums
+        let currentArtists = self.artists
+        let currentPlaylists = self.playlists
+        let currentJoined = self.settings.joinedArtists
+        Task.detached(priority: .userInitiated) {
+            await SearchEngine.shared.updateIndex(
+                tracks: currentTracks,
+                albums: currentAlbums,
+                artists: currentArtists,
+                playlists: currentPlaylists,
+                joinedArtists: currentJoined
+            )
+        }
 
         Task {
             await self.recalculateDuplicates()
@@ -923,10 +1013,10 @@ public final class LibraryStore {
         // Ensure preconditions are met before proceeding
         guard !title.isEmpty else { return "unknown album" }
 
-        // Strip common deluxe / edition / version suffixes in parentheses, brackets, or after dashes:
+        // Strip common deluxe / edition / version / alternates suffixes in parentheses, brackets, or after dashes:
         let editionPatterns = [
-            #"\s*[\(\[](?:deluxe(?:\s+(?:edition|version|ep|set|package))?|expanded(?:\s+(?:edition|version))?|super\s+deluxe(?:\s+edition)?|special\s+edition|collector'?s?\s+edition|bonus\s+track(?:s)?\s*(?:version|edition)?|international\s+version|anniversary(?:\s+edition)?|remastered(?:\s+edition)?|standard\s+(?:version|edition)|explicit(?:\s+version)?|clean(?:\s+version)?)[\)\]]"#,
-            #"\s*-\s*(?:deluxe(?:\s+(?:edition|version|ep))?|expanded(?:\s+edition)?|super\s+deluxe|special\s+edition|remastered|anniversary\s+edition|bonus\s+tracks?)"#
+            #"\s*[\(\[](?:deluxe(?:\s+(?:edition|version|ep|set|package))?|expanded(?:\s+(?:edition|version))?|super\s+deluxe(?:\s+edition)?|special\s+edition|collector'?s?\s+edition|bonus\s+track(?:s)?\s*(?:version|edition)?|international\s+version|anniversary(?:\s+edition)?|remastered(?:\s+edition)?|standard\s+(?:version|edition)|explicit(?:\s+version)?|clean(?:\s+version)?|remix(?:es)?(?:\s+&\s+alternates?)?|alternates?|alternatives?|live(?:\s+recording(?:s)?)?|instrumentals?|acoustics?)[\)\]]"#,
+            #"\s*-\s*(?:deluxe(?:\s+(?:edition|version|ep))?|expanded(?:\s+edition)?|super\s+deluxe|special\s+edition|remastered|anniversary\s+edition|bonus\s+tracks?|remix(?:es)?|alternates?|alternatives?|live|instrumentals?|acoustics?)"#
         ]
 
         for pat in editionPatterns {
@@ -1040,38 +1130,6 @@ public final class LibraryStore {
             let baseAlbumTitle = first.album.isEmpty ? "Unknown Album" : first.album.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
             let albumTitle = baseAlbumTitle
 
-            // Display Artist determination strictly for this unified album: list out each individual artist
-            let explicitAlbumArtist = groupTracks.compactMap { $0.albumArtist?.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines) }.first { !$0.isEmpty && !MetadataSanitizer.isUnknownArtist($0) && $0.lowercased() != "various artists" && $0.lowercased() != "various" }
-            let displayArtist: String
-            if let explicit = explicitAlbumArtist {
-                displayArtist = explicit
-            } else {
-                var allTrackArtists: [String] = []
-                for t in groupTracks {
-                    let parsed = ArtistParser.parseArtists(from: t.artist)
-                    for a in parsed {
-                        let clean = a.trimmingCharacters(in: .whitespacesAndNewlines)
-                        if !clean.isEmpty && !MetadataSanitizer.isUnknownArtist(clean) && clean.lowercased() != "various artists" && clean.lowercased() != "various" && !allTrackArtists.contains(where: { $0.localizedCaseInsensitiveCompare(clean) == .orderedSame }) {
-                            allTrackArtists.append(clean)
-                        }
-                    }
-                }
-
-                if allTrackArtists.count == 1 {
-                    displayArtist = allTrackArtists[0]
-                } else if allTrackArtists.count == 2 {
-                    displayArtist = "\(allTrackArtists[0]) & \(allTrackArtists[1])"
-                } else if allTrackArtists.count >= 3 {
-                    let firstPart = allTrackArtists.dropLast().joined(separator: ", ")
-                    displayArtist = "\(firstPart) & \(allTrackArtists.last!)"
-                } else {
-                    displayArtist = first.artist.isEmpty ? "Unknown Artist" : first.artist
-                }
-            }
-
-            // Propagate artwork consensus across album tracks
-            let albumArtworkKey = groupTracks.compactMap({ $0.artworkKey }).first(where: { !$0.isEmpty })
-
             var seenTrackIDs = Set<UUID>()
             var uniqueClusterTracks: [Track] = []
             uniqueClusterTracks.reserveCapacity(groupTracks.count)
@@ -1080,6 +1138,21 @@ public final class LibraryStore {
                     uniqueClusterTracks.append(t)
                 }
             }
+
+            // Smart Display Artist determination: identify collaborative co-leads while excluding 1-2 track features
+            let explicitAlbumArtist = groupTracks.compactMap { $0.albumArtist?.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines) }.first { !$0.isEmpty && !MetadataSanitizer.isUnknownArtist($0) && $0.lowercased() != "various artists" && $0.lowercased() != "various" }
+            let resolvedArtists = ArtistParser.resolveAlbumArtists(
+                for: uniqueClusterTracks,
+                explicitAlbumArtist: explicitAlbumArtist,
+                joinedArtists: self.settings.joinedArtists
+            )
+            let displayArtist = ArtistParser.formatDisplayArtist(resolvedArtists)
+
+            // Propagate artwork consensus across album tracks (majority vote)
+            let albumArtworkKey = Album.computeConsensusArtworkKey(
+                tracks: uniqueClusterTracks,
+                fallbackKey: groupTracks.compactMap({ $0.artworkKey }).first(where: { !$0.isEmpty })
+            )
 
             // Instant Album Artwork Consensus Propagation:
             if let validArtworkKey = albumArtworkKey, !validArtworkKey.isEmpty {
@@ -1110,6 +1183,23 @@ public final class LibraryStore {
                         uniqueClusterTracks[i] = uniqueClusterTracks[i].withYear(validConsensusYear)
                         if let globalIdx = self.tracks.firstIndex(where: { $0.id == uniqueClusterTracks[i].id }) {
                             self.tracks[globalIdx] = self.tracks[globalIdx].withYear(validConsensusYear)
+                        }
+                    }
+                }
+            }
+
+            // Instant Album Artist Consensus Propagation:
+            // If it could not find any metadata for the artist on the tracks, but found an album artist,
+            // apply the album artist to the artist tag on all tracks in the album that are missing artist metadata.
+            // Never overwrite tracks that already have valid artist data.
+            let resolvedAlbumArtist = explicitAlbumArtist ?? (displayArtist.isEmpty || MetadataSanitizer.isUnknownArtist(displayArtist) ? nil : displayArtist)
+            if let validAlbumArtist = resolvedAlbumArtist, !validAlbumArtist.isEmpty, !MetadataSanitizer.isUnknownArtist(validAlbumArtist) {
+                for i in 0..<uniqueClusterTracks.count {
+                    let trackArtist = uniqueClusterTracks[i].artist.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if trackArtist.isEmpty || MetadataSanitizer.isUnknownArtist(trackArtist) {
+                        uniqueClusterTracks[i] = uniqueClusterTracks[i].withArtist(validAlbumArtist)
+                        if let globalIdx = self.tracks.firstIndex(where: { $0.id == uniqueClusterTracks[i].id }) {
+                            self.tracks[globalIdx] = self.tracks[globalIdx].withArtist(validAlbumArtist)
                         }
                     }
                 }
@@ -1277,7 +1367,8 @@ public final class LibraryStore {
             let artist = Artist(
                 name: artistName,
                 albums: relevantAlbums,
-                tracks: artistTracks
+                tracks: artistTracks,
+                joinedArtists: settings.joinedArtists
             )
             newArtists.append(artist)
         }
@@ -1359,6 +1450,15 @@ public final class LibraryStore {
                 }
                 return $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending
             }
+        case .newest:
+            sorted = list.sorted { t1, t2 in
+                let d1 = max(t1.dateAdded, t1.fileInfo?.creationDate ?? .distantPast)
+                let d2 = max(t2.dateAdded, t2.fileInfo?.creationDate ?? .distantPast)
+                if d1 != d2 {
+                    return isReversed ? (d1 < d2) : (d1 > d2)
+                }
+                return t1.title.localizedCaseInsensitiveCompare(t2.title) == .orderedAscending
+            }
         }
         return sorted
     }
@@ -1374,6 +1474,19 @@ public final class LibraryStore {
                     return isReversed ? ($0.tracks.count < $1.tracks.count) : ($0.tracks.count > $1.tracks.count)
                 }
                 return $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+            }
+        case .newest:
+            let artistDates = Dictionary(uniqueKeysWithValues: list.map { artist in
+                let maxDate = artist.tracks.map { max($0.dateAdded, $0.fileInfo?.creationDate ?? .distantPast) }.max() ?? .distantPast
+                return (artist.id, maxDate)
+            })
+            return list.sorted { a1, a2 in
+                let d1 = artistDates[a1.id] ?? .distantPast
+                let d2 = artistDates[a2.id] ?? .distantPast
+                if d1 != d2 {
+                    return isReversed ? (d1 < d2) : (d1 > d2)
+                }
+                return a1.name.localizedCaseInsensitiveCompare(a2.name) == .orderedAscending
             }
         }
     }
@@ -1403,6 +1516,19 @@ public final class LibraryStore {
                     return isReversed ? ($0.totalDuration < $1.totalDuration) : ($0.totalDuration > $1.totalDuration)
                 }
                 return $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending
+            }
+        case .newest:
+            let albumDates = Dictionary(uniqueKeysWithValues: list.map { album in
+                let maxDate = album.tracks.map { max($0.dateAdded, $0.fileInfo?.creationDate ?? .distantPast) }.max() ?? .distantPast
+                return (album.id, maxDate)
+            })
+            return list.sorted { a1, a2 in
+                let d1 = albumDates[a1.id] ?? .distantPast
+                let d2 = albumDates[a2.id] ?? .distantPast
+                if d1 != d2 {
+                    return isReversed ? (d1 < d2) : (d1 > d2)
+                }
+                return a1.title.localizedCaseInsensitiveCompare(a2.title) == .orderedAscending
             }
         }
     }
@@ -1494,6 +1620,9 @@ public final class LibraryStore {
         }
 
         if !deletedIDs.isEmpty {
+            for track in tracksToDelete {
+                self.settings.removedTrackPaths.insert(track.url.standardizedFileURL.path)
+            }
             self.tracks.removeAll { deletedIDs.contains($0.id) }
             for i in 0..<playlists.count {
                 playlists[i].trackIDs.removeAll { deletedIDs.contains($0) }
@@ -1514,6 +1643,24 @@ public final class LibraryStore {
         // Res
         let res = await deleteDuplicateTracks(tracksToDelete: [track])
         return res.successCount > 0
+    }
+
+    /// Removes a track from the app's library and hides it, while leaving the audio file intact on disk.
+    public func removeTrackFromLibrary(track: Track) {
+        let path = track.url.standardizedFileURL.path
+        self.settings.removedTrackPaths.insert(path)
+        self.tracks.removeAll { $0.id == track.id }
+        for i in 0..<playlists.count {
+            playlists[i].trackIDs.removeAll { $0 == track.id }
+        }
+        rebuildAlbumsAndArtists()
+        Task {
+            await recalculateDuplicates()
+        }
+        self.settings.totalScannedFiles = self.tracks.count
+        saveLibrary()
+        savePlaylists()
+        saveSettings()
     }
 
     // MARK: - Online Metadata Enrichment
@@ -1730,7 +1877,11 @@ public final class LibraryStore {
         self.enrichmentDiffs.removeAll { $0.id == trackID }
         self.unmatchedTrackIDs.remove(trackID)
         self.verifiedGoodDiffs.removeAll { $0.id == trackID }
-        self.verifiedGoodDiffs.append(diff)
+        if (updatedTrack.year ?? 0) >= 1900 {
+            self.verifiedGoodDiffs.append(diff)
+        } else {
+            self.unmatchedTrackIDs.insert(trackID)
+        }
         self.saveEnrichmentCache()
 
         // Permanently record in downloaded metadata cache
@@ -1843,7 +1994,11 @@ public final class LibraryStore {
         self.enrichmentDiffs.removeAll { $0.id == trackID }
         self.unmatchedTrackIDs.remove(trackID)
         self.verifiedGoodDiffs.removeAll { $0.id == trackID }
-        self.verifiedGoodDiffs.append(diff)
+        if (updatedTrack.year ?? 0) >= 1900 {
+            self.verifiedGoodDiffs.append(diff)
+        } else {
+            self.unmatchedTrackIDs.insert(trackID)
+        }
         self.saveEnrichmentCache()
 
         self.cacheDownloadedMetadata(
@@ -1866,7 +2021,9 @@ rebuildAlbumsAndArtists()
         onlineAlbum: OnlineAlbumItem,
         onlineTracks: [OnlineTrackMetadata],
         preserveLocalTitleAndArtist: Bool = true,
-        specificTracksToApply: [Track]? = nil
+        specificTracksToApply: [Track]? = nil,
+        specificAssignments: [DisambiguationMatcher.AlbumCutAssignment]? = nil,
+        unmatchedActions: [UUID: UnmatchedTrackAction]? = nil
     ) async -> Bool {
         // 1. Download artwork if available
         var artworkKey: String? = nil
@@ -1880,23 +2037,28 @@ rebuildAlbumsAndArtists()
             }
         }
 
-        // Determine target candidate tracks: specific passed tracks, or album tracks, or all library candidates
-        let candidatePool: [Track]
-        if let specific = specificTracksToApply, !specific.isEmpty {
-            candidatePool = specific
-        } else if let alb = album, !alb.tracks.isEmpty {
-            candidatePool = alb.tracks
+        // Determine assignments: use verified specific assignments if passed, or run bipartite matching
+        let assignments: [DisambiguationMatcher.AlbumCutAssignment]
+        if let specific = specificAssignments, !specific.isEmpty {
+            assignments = specific
         } else {
-            candidatePool = self.tracks
-        }
+            let candidatePool: [Track]
+            if let specificTracks = specificTracksToApply, !specificTracks.isEmpty {
+                candidatePool = specificTracks
+            } else if let alb = album, !alb.tracks.isEmpty {
+                candidatePool = alb.tracks
+            } else {
+                candidatePool = self.tracks
+            }
 
-        // Run bipartite tracklist alignment
-        let (assignments, _) = DisambiguationMatcher.matchAlbumTracklistToCandidates(
-            onlineTracks: onlineTracks,
-            albumTitle: onlineAlbum.title,
-            albumArtist: onlineAlbum.artistName,
-            candidateTracks: candidatePool
-        )
+            let (computed, _) = DisambiguationMatcher.matchAlbumTracklistToCandidates(
+                onlineTracks: onlineTracks,
+                albumTitle: onlineAlbum.title,
+                albumArtist: onlineAlbum.artistName,
+                candidateTracks: candidatePool
+            )
+            assignments = computed
+        }
 
         var processedTrackIDs: Set<UUID> = []
         var trackIndexMap: [UUID: Int] = [:]
@@ -1906,6 +2068,7 @@ rebuildAlbumsAndArtists()
 
         var fileTaggingQueue: [(url: URL, track: Track, artworkData: Data?)] = []
 
+        // Process matched official cuts
         for assignment in assignments {
             guard let localTrack = assignment.localTrack,
                   let trackIndex = trackIndexMap[localTrack.id],
@@ -1914,19 +2077,34 @@ rebuildAlbumsAndArtists()
             let existingTrack = tracks[trackIndex]
             let cut = assignment.cut
 
-            let finalTitle = preserveLocalTitleAndArtist ? existingTrack.title : cut.title
-            let finalArtist = preserveLocalTitleAndArtist ? existingTrack.artist : cut.artist
-            let rawAlbum = onlineAlbum.title
-            let isTrackRemix = MetadataSanitizer.isRemixOrAlternateVersion(title: finalTitle, album: rawAlbum)
-            let isTrackLive = MetadataSanitizer.isLiveRecording(title: finalTitle, album: rawAlbum)
-            let finalAlbum: String
-            if isTrackRemix {
-                finalAlbum = MetadataSanitizer.remixAlbumName(forStandardAlbum: rawAlbum)
-            } else if isTrackLive {
-                finalAlbum = MetadataSanitizer.liveAlbumName(forStandardAlbum: rawAlbum)
-            } else {
-                finalAlbum = rawAlbum
-            }
+            let hasLocalFeatureInTitle = existingTrack.title.lowercased().contains("feat") || existingTrack.title.lowercased().contains("ft.")
+            let hasOnlineFeatureInTitle = cut.title.lowercased().contains("feat") || cut.title.lowercased().contains("ft.")
+            let shouldPreserveLocalTitle = (preserveLocalTitleAndArtist || (hasLocalFeatureInTitle && !hasOnlineFeatureInTitle)) &&
+                                           !existingTrack.title.isEmpty && !existingTrack.title.lowercased().hasPrefix("track")
+            let finalTitle = shouldPreserveLocalTitle ? existingTrack.title : cut.title
+
+            let cutArtist = !cut.artist.isEmpty ? cut.artist : onlineAlbum.artistName
+            let finalArtist: String = {
+                if !preserveLocalTitleAndArtist {
+                    return cutArtist
+                }
+                // If local artist is empty or unknown, adopt the official online artist
+                if existingTrack.artist.isEmpty || MetadataSanitizer.isUnknownArtist(existingTrack.artist) {
+                    return cutArtist
+                }
+                // If local artist has feature / multiple artists (e.g. "Artist A feat. Artist B"), preserve the collaborative credit
+                let parsedArtists = ArtistParser.parseArtists(from: existingTrack.artist)
+                if parsedArtists.count > 1 {
+                    return existingTrack.artist
+                }
+                // If local artist matched the old album artist and has no features, update to the new album artist
+                if let alb = album, existingTrack.artist.localizedCaseInsensitiveCompare(alb.artist) == .orderedSame {
+                    return cutArtist
+                }
+                return existingTrack.artist
+            }()
+
+            let finalAlbum = onlineAlbum.title
             let finalYear = onlineAlbum.releaseYear ?? cut.releaseYear ?? existingTrack.year
             let finalGenre = onlineAlbum.genre ?? cut.genre ?? existingTrack.genre
             let finalTrackNumber = (existingTrack.trackNumber ?? 0) > 0 ? existingTrack.trackNumber : cut.trackNumber
@@ -1951,7 +2129,8 @@ rebuildAlbumsAndArtists()
                 artworkKey: finalArtworkKey,
                 dateAdded: existingTrack.dateAdded,
                 fileInfo: existingTrack.fileInfo,
-                lyrics: existingTrack.lyrics
+                lyrics: existingTrack.lyrics,
+                isAlternate: false
             )
 
             tracks[trackIndex] = updatedTrack
@@ -1987,6 +2166,207 @@ rebuildAlbumsAndArtists()
             )
         }
 
+        // Process remaining unmatched local tracks in the album
+        if let alb = album {
+            let candidateLibraryAlbums = self.albums
+            for localTrack in alb.tracks {
+                guard !processedTrackIDs.contains(localTrack.id),
+                      let trackIndex = trackIndexMap[localTrack.id],
+                      trackIndex < tracks.count else { continue }
+
+                let existingTrack = tracks[trackIndex]
+
+                let action: UnmatchedTrackAction
+                if let preAction = unmatchedActions?[localTrack.id] {
+                    action = preAction
+                } else {
+                    action = await AlbumOrganizationService.shared.resolveUnmatchedTrack(
+                        track: existingTrack,
+                        currentAlbum: alb,
+                        onlineAlbum: onlineAlbum,
+                        onlineCuts: onlineTracks,
+                        libraryAlbums: candidateLibraryAlbums
+                    )
+                }
+
+                let updatedTrack: Track
+                switch action {
+                case .moveToAlternates:
+                    let rawAlbum = onlineAlbum.title
+                    let finalAlbum: String
+                    if MetadataSanitizer.isRemixOrAlternateVersion(title: existingTrack.title, album: rawAlbum) {
+                        finalAlbum = MetadataSanitizer.remixAlbumName(forStandardAlbum: rawAlbum)
+                    } else if MetadataSanitizer.isLiveRecording(title: existingTrack.title, album: rawAlbum) {
+                        finalAlbum = MetadataSanitizer.liveAlbumName(forStandardAlbum: rawAlbum)
+                    } else {
+                        finalAlbum = rawAlbum
+                    }
+                    let finalArtworkKey = artworkKey ?? existingTrack.artworkKey
+                    let finalYear = onlineAlbum.releaseYear ?? existingTrack.year
+                    let finalArtist: String = {
+                        if !preserveLocalTitleAndArtist {
+                            return onlineAlbum.artistName
+                        }
+                        if existingTrack.artist.isEmpty || MetadataSanitizer.isUnknownArtist(existingTrack.artist) {
+                            return onlineAlbum.artistName
+                        }
+                        let parsedArtists = ArtistParser.parseArtists(from: existingTrack.artist)
+                        if parsedArtists.count > 1 {
+                            return existingTrack.artist
+                        }
+                        if let alb = album, existingTrack.artist.localizedCaseInsensitiveCompare(alb.artist) == .orderedSame {
+                            return onlineAlbum.artistName
+                        }
+                        return existingTrack.artist
+                    }()
+
+                    updatedTrack = Track(
+                        id: existingTrack.id,
+                        title: existingTrack.title,
+                        artist: finalArtist,
+                        album: finalAlbum,
+                        albumArtist: onlineAlbum.artistName,
+                        genre: onlineAlbum.genre ?? existingTrack.genre,
+                        year: finalYear,
+                        trackNumber: existingTrack.trackNumber,
+                        originalTrackNumber: existingTrack.originalTrackNumber,
+                        deluxeTrackNumber: existingTrack.deluxeTrackNumber,
+                        totalTracks: onlineAlbum.trackCount ?? existingTrack.totalTracks,
+                        discNumber: existingTrack.discNumber,
+                        duration: existingTrack.duration,
+                        url: existingTrack.url,
+                        artworkKey: finalArtworkKey,
+                        dateAdded: existingTrack.dateAdded,
+                        fileInfo: existingTrack.fileInfo,
+                        lyrics: existingTrack.lyrics,
+                        isAlternate: true
+                    )
+                    fileTaggingQueue.append((url: existingTrack.url, track: updatedTrack, artworkData: artworkData))
+
+                case .moveToAlbum(
+                    let targetAlbumTitle,
+                    let targetArtist,
+                    let actionYear,
+                    let actionGenre,
+                    let actionArtworkKey,
+                    let actionArtworkURL,
+                    let actionTrackNumber,
+                    let actionTotalTracks,
+                    let actionDiscNumber,
+                    _
+                ):
+                    let matchingAlbum = candidateLibraryAlbums.first(where: {
+                        FuzzyMatcher.normalize($0.title) == FuzzyMatcher.normalize(targetAlbumTitle)
+                    })
+                    let finalAlbum = targetAlbumTitle
+                    let finalArtist = !targetArtist.isEmpty ? targetArtist : (matchingAlbum?.artist ?? existingTrack.artist)
+                    let finalAlbumArtist: String = {
+                        if let matching = matchingAlbum {
+                            if let trackAlbumArtist = matching.tracks.compactMap({ $0.albumArtist }).first(where: { !$0.isEmpty }) {
+                                return trackAlbumArtist
+                            }
+                            return matching.artist
+                        }
+                        if !targetArtist.isEmpty {
+                            return targetArtist
+                        }
+                        return existingTrack.albumArtist ?? existingTrack.artist
+                    }()
+                    let finalYear = matchingAlbum?.year ?? actionYear ?? existingTrack.year
+                    let finalGenre = matchingAlbum?.genre ?? actionGenre ?? existingTrack.genre
+                    let finalTrackNumber = actionTrackNumber ?? existingTrack.trackNumber
+                    let finalTotalTracks = matchingAlbum?.tracks.count ?? actionTotalTracks ?? existingTrack.totalTracks
+                    let finalDiscNumber = actionDiscNumber ?? existingTrack.discNumber
+                    let targetArtworkKey = matchingAlbum?.artworkKey ?? actionArtworkKey ?? existingTrack.artworkKey
+
+                    var targetArtworkData: Data? = nil
+                    if let key = targetArtworkKey {
+                        targetArtworkData = await ArtworkCacheService.shared.loadArtwork(key: key)
+                    }
+                    if targetArtworkData == nil, let artURL = actionArtworkURL {
+                        if let downloaded = await MusicMetadataService.shared.downloadArtworkData(from: artURL), !downloaded.isEmpty {
+                            let key = targetArtworkKey ?? ArtworkCacheService.albumArtworkKey(artist: finalAlbumArtist, album: finalAlbum)
+                            await ArtworkCacheService.shared.saveArtwork(data: downloaded, key: key)
+                            targetArtworkData = downloaded
+                        }
+                    }
+
+                    let isAlt = MetadataSanitizer.isRemixOrAlternateVersion(title: existingTrack.title, album: targetAlbumTitle) ||
+                                MetadataSanitizer.isLiveRecording(title: existingTrack.title, album: targetAlbumTitle)
+
+                    updatedTrack = Track(
+                        id: existingTrack.id,
+                        title: existingTrack.title,
+                        artist: finalArtist,
+                        album: finalAlbum,
+                        albumArtist: finalAlbumArtist,
+                        genre: finalGenre,
+                        year: finalYear,
+                        trackNumber: finalTrackNumber,
+                        originalTrackNumber: existingTrack.originalTrackNumber ?? finalTrackNumber,
+                        deluxeTrackNumber: existingTrack.deluxeTrackNumber,
+                        totalTracks: finalTotalTracks,
+                        discNumber: finalDiscNumber,
+                        duration: existingTrack.duration,
+                        url: existingTrack.url,
+                        artworkKey: targetArtworkKey,
+                        dateAdded: existingTrack.dateAdded,
+                        fileInfo: existingTrack.fileInfo,
+                        lyrics: existingTrack.lyrics,
+                        isAlternate: isAlt
+                    )
+                    fileTaggingQueue.append((url: existingTrack.url, track: updatedTrack, artworkData: targetArtworkData))
+
+                case .keepInMain:
+                    let rawAlbum = onlineAlbum.title
+                    let finalArtworkKey = artworkKey ?? existingTrack.artworkKey
+                    let finalYear = onlineAlbum.releaseYear ?? existingTrack.year
+                    let finalArtist: String = {
+                        if !preserveLocalTitleAndArtist {
+                            return onlineAlbum.artistName
+                        }
+                        if existingTrack.artist.isEmpty || MetadataSanitizer.isUnknownArtist(existingTrack.artist) {
+                            return onlineAlbum.artistName
+                        }
+                        let parsedArtists = ArtistParser.parseArtists(from: existingTrack.artist)
+                        if parsedArtists.count > 1 {
+                            return existingTrack.artist
+                        }
+                        if let alb = album, existingTrack.artist.localizedCaseInsensitiveCompare(alb.artist) == .orderedSame {
+                            return onlineAlbum.artistName
+                        }
+                        return existingTrack.artist
+                    }()
+
+                    updatedTrack = Track(
+                        id: existingTrack.id,
+                        title: existingTrack.title,
+                        artist: finalArtist,
+                        album: rawAlbum,
+                        albumArtist: onlineAlbum.artistName,
+                        genre: onlineAlbum.genre ?? existingTrack.genre,
+                        year: finalYear,
+                        trackNumber: existingTrack.trackNumber,
+                        originalTrackNumber: existingTrack.originalTrackNumber,
+                        deluxeTrackNumber: existingTrack.deluxeTrackNumber,
+                        totalTracks: onlineAlbum.trackCount ?? existingTrack.totalTracks,
+                        discNumber: existingTrack.discNumber,
+                        duration: existingTrack.duration,
+                        url: existingTrack.url,
+                        artworkKey: finalArtworkKey,
+                        dateAdded: existingTrack.dateAdded,
+                        fileInfo: existingTrack.fileInfo,
+                        lyrics: existingTrack.lyrics,
+                        isAlternate: false
+                    )
+                    fileTaggingQueue.append((url: existingTrack.url, track: updatedTrack, artworkData: artworkData))
+                }
+
+                tracks[trackIndex] = updatedTrack
+                processedTrackIDs.insert(existingTrack.id)
+            }
+        }
+
         // Clean up diff lists
         self.enrichmentDiffs.removeAll { processedTrackIDs.contains($0.id) }
         self.unmatchedTrackIDs.subtract(processedTrackIDs)
@@ -2015,6 +2395,14 @@ rebuildAlbumsAndArtists()
         await recalculateDuplicates()
         saveLibrary()
         self.saveDownloadedMetadataCache()
+
+        // Sync currently playing track in player service if updated
+        if let sharedPlayer = AudioPlayerService.shared,
+           let currentPlaying = sharedPlayer.currentTrack,
+           let updated = self.tracks.first(where: { $0.id == currentPlaying.id }) {
+            sharedPlayer.syncTrackMetadata(updatedTrack: updated)
+        }
+
         return true
     }
 
@@ -2028,10 +2416,17 @@ rebuildAlbumsAndArtists()
     public func applyBatchOnlineMetadata(
         diffs: [MetadataDiff],
         preserveLocalTitleAndArtist: Bool = true,
-        onProgress: ((Double, String) -> Void)? = nil
+        onProgress: ((Double, String) -> Void)? = nil,
+        onCountProgress: ((Int, Int) -> Void)? = nil
     ) async -> Int {
         // Ensure preconditions are met before proceeding
         guard !diffs.isEmpty else { return 0 }
+
+        self.isEnrichingMetadata = true
+        self.enrichProcessedCount = 0
+        self.enrichTotalCount = diffs.count
+        self.enrichProgress = 0.0
+        self.enrichStatusText = "Preparing batch enrichment for \(diffs.count) tracks..."
 
         // Ensure root linked folder security-scoped access is active across all file writes
         let rootFolderURL = SecurityScopedBookmark.shared.resolveAndAccessBookmark()
@@ -2042,10 +2437,14 @@ rebuildAlbumsAndArtists()
             if isRootAccessing, let root = rootFolderURL {
                 root.stopAccessingSecurityScopedResource()
             }
+            self.isEnrichingMetadata = false
+            self.enrichProcessedCount = 0
+            self.enrichTotalCount = 0
         }
 
         // Total
         let total = diffs.count
+        onCountProgress?(0, total)
         onProgress?(0.02, "Preparing batch enrichment for \(total) tracks...")
 
         // MARK: - Step 1: Parallel Artwork Deduplication by Album Key
@@ -2322,25 +2721,30 @@ rebuildAlbumsAndArtists()
                 onlineMetadata: onlineMetadata,
                 preserveLocalTitleAndArtist: preserveLocalTitleAndArtist
             )
-            newVerifiedGood.append(updatedDiff)
+            if (updatedTrack.year ?? 0) >= 1900 {
+                newVerifiedGood.append(updatedDiff)
+            } else {
+                self.unmatchedTrackIDs.insert(updatedTrack.id)
+            }
 
             let progressVal = 0.35 + (Double(idx + 1) / Double(total)) * 0.40
+            if !settings.writeMetadataToAudioFiles {
+                self.enrichProcessedCount = idx + 1
+                onCountProgress?(idx + 1, total)
+            }
             if idx % 10 == 0 || idx == total - 1 {
                 onProgress?(progressVal, "Step 2/3: Applying metadata (\(idx + 1)/\(total)): \(finalTitle)")
                 await Task.yield()
             }
         }
 
-        // Clean up diff lists and update verified good tracks
-        self.enrichmentDiffs.removeAll { processedTrackIDs.contains($0.id) }
-        self.unmatchedTrackIDs.subtract(processedTrackIDs)
-        self.verifiedGoodDiffs.removeAll { processedTrackIDs.contains($0.id) }
-        self.verifiedGoodDiffs.append(contentsOf: newVerifiedGood)
-
         // MARK: - Step 2.5: Lossless Audio File Tag Writing with Bounded Worker Pool & On-Demand Artwork Loading
         if settings.writeMetadataToAudioFiles && !fileTaggingQueue.isEmpty {
             let taggingTotal = fileTaggingQueue.count
             var taggingDone = 0
+            self.enrichTotalCount = taggingTotal
+            self.enrichProcessedCount = 0
+            onCountProgress?(0, taggingTotal)
             onProgress?(0.75, "Step 3/3: Embedding tags into audio files on disk (0/\(taggingTotal))...")
 
             let maxTagWorkers = 4
@@ -2375,6 +2779,9 @@ rebuildAlbumsAndArtists()
 
                 for await _ in group {
                     taggingDone += 1
+                    self.enrichProcessedCount = taggingDone
+                    self.enrichTotalCount = taggingTotal
+                    onCountProgress?(taggingDone, taggingTotal)
                     let p = 0.75 + (Double(taggingDone) / Double(max(1, taggingTotal))) * 0.15
                     let activeTrackName = taggingDone <= fileTaggingQueue.count ? fileTaggingQueue[taggingDone - 1].track.title : ""
                     onProgress?(p, "Writing audio tags (\(taggingDone)/\(taggingTotal)): \(activeTrackName)")
@@ -2417,6 +2824,12 @@ rebuildAlbumsAndArtists()
         saveLibrary()
         saveEnrichmentCache()
         saveDownloadedMetadataCache()
+
+        // Clean up diff lists and update verified good tracks only AFTER file tagging and persistence are complete
+        self.enrichmentDiffs.removeAll { processedTrackIDs.contains($0.id) }
+        self.unmatchedTrackIDs.subtract(processedTrackIDs)
+        self.verifiedGoodDiffs.removeAll { processedTrackIDs.contains($0.id) }
+        self.verifiedGoodDiffs.append(contentsOf: newVerifiedGood)
 
         // MARK: - Step 4: Verification & Resource Cleanup (Purge memory cache)
         onProgress?(0.99, "Verifying applied changes and finalizing...")
@@ -2579,16 +2992,14 @@ rebuildAlbumsAndArtists()
         guard !tracksToScan.isEmpty else { return }
 
         isBackgroundCheckingMetadata = true
+        isBackgroundCheckingMetadataPaused = false
         backgroundCheckProgress = 0.0
         backgroundCheckScannedCount = 0
         backgroundCheckTotalCount = tracksToScan.count
         backgroundCheckStatusText = "Initializing metadata scan..."
 
-        if forceRecheck && customTracks == nil {
-            self.enrichmentDiffs.removeAll()
-            self.verifiedGoodDiffs.removeAll()
-            self.unmatchedTrackIDs.removeAll()
-        }
+        // Immediately index any tracks with complete tags so they're recognized as Good right away
+        self.indexCompleteTracksIntoVerifiedGood()
 
         // Diffs
         let diffs = self.enrichmentDiffs
@@ -2614,9 +3025,11 @@ rebuildAlbumsAndArtists()
                         self.backgroundCheckScannedCount = progress.scannedCount
                         self.backgroundCheckTotalCount = progress.totalCount
                         self.backgroundCheckStatusText = progress.statusText
-                        self.enrichmentDiffs = progress.enrichmentDiffs
-                        self.verifiedGoodDiffs = progress.verifiedGoodDiffs
-                        self.unmatchedTrackIDs = progress.unmatchedTrackIDs
+                        if !progress.enrichmentDiffs.isEmpty || !progress.verifiedGoodDiffs.isEmpty || !progress.unmatchedTrackIDs.isEmpty {
+                            self.enrichmentDiffs = progress.enrichmentDiffs
+                            self.verifiedGoodDiffs = progress.verifiedGoodDiffs
+                            self.unmatchedTrackIDs = progress.unmatchedTrackIDs
+                        }
                     }
                 },
                 onComplete: { [weak self] result in
@@ -2626,12 +3039,34 @@ rebuildAlbumsAndArtists()
                         self.verifiedGoodDiffs = result.verifiedGoodDiffs
                         self.unmatchedTrackIDs = result.unmatchedTrackIDs
                         self.isBackgroundCheckingMetadata = false
+                        self.isBackgroundCheckingMetadataPaused = false
                         self.backgroundCheckProgress = 1.0
                         self.backgroundCheckScannedCount = self.backgroundCheckTotalCount
                         self.backgroundCheckStatusText = "Library analysis complete."
+                        self.saveEnrichmentCache()
                     }
                 }
             )
+        }
+    }
+
+    /// Pauses any currently active background scan.
+    public func pauseBackgroundMetadataScan() {
+        Task {
+            await BackgroundMetadataScanner.shared.pause()
+            await MainActor.run {
+                self.isBackgroundCheckingMetadataPaused = true
+            }
+        }
+    }
+
+    /// Resumes a paused background scan.
+    public func resumeBackgroundMetadataScan() {
+        Task {
+            await BackgroundMetadataScanner.shared.resume()
+            await MainActor.run {
+                self.isBackgroundCheckingMetadataPaused = false
+            }
         }
     }
 
@@ -2641,13 +3076,211 @@ rebuildAlbumsAndArtists()
             await BackgroundMetadataScanner.shared.cancel()
             await MainActor.run {
                 self.isBackgroundCheckingMetadata = false
+                self.isBackgroundCheckingMetadataPaused = false
+                self.saveEnrichmentCache()
             }
         }
     }
 
     /// Triggers a full rescan of all metadata from scratch.
     public func rescanAllMetadata() {
-        startBackgroundMetadataScan(forceRecheck: true)
+        startBackgroundMetadataScan(forceRecheck: false)
+    }
+
+    /// Audits all library tracks and immediately indexes any tracks whose tags are filled in the app's cache into `verifiedGoodDiffs`.
+    public func indexCompleteTracksIntoVerifiedGood() {
+        let currentTracks = self.tracks
+        let currentExistingIDs = Set(verifiedGoodDiffs.map { $0.localTrack.id })
+        let currentDiffIDs = Set(enrichmentDiffs.map { $0.localTrack.id })
+
+        Task.detached(priority: .background) { [weak self] in
+            var newGood: [MetadataDiff] = []
+            var existingIDs = currentExistingIDs
+
+            for track in currentTracks {
+                if existingIDs.contains(track.id) || currentDiffIDs.contains(track.id) {
+                    continue
+                }
+
+                var effectiveTrack = track
+                var isComplete = effectiveTrack.isComplete7CoreTags
+
+                // If artwork key is nil, check if album artwork is available in the app's cache
+                if !isComplete && effectiveTrack.artworkKey == nil {
+                    let albumKey = ArtworkCacheService.albumArtworkKey(artist: effectiveTrack.artist, album: effectiveTrack.album)
+                    if ArtworkCacheService.hasCachedArtworkFile(key: albumKey) {
+                        effectiveTrack = effectiveTrack.withArtworkKey(albumKey)
+                        isComplete = effectiveTrack.isComplete7CoreTags
+                    }
+                }
+
+                if isComplete {
+                    let syntheticOnline = OnlineTrackMetadata(
+                        id: "local_verified_\(effectiveTrack.id)",
+                        title: effectiveTrack.title,
+                        artist: effectiveTrack.artist,
+                        album: effectiveTrack.album,
+                        albumArtist: effectiveTrack.albumArtist,
+                        releaseDate: nil,
+                        releaseYear: effectiveTrack.year,
+                        genre: effectiveTrack.genre,
+                        trackNumber: effectiveTrack.trackNumber,
+                        totalTracks: effectiveTrack.totalTracks,
+                        discNumber: effectiveTrack.discNumber,
+                        duration: effectiveTrack.duration,
+                        artworkURL: nil,
+                        previewURL: nil,
+                        sourceAPI: "Cache Tags Verified",
+                        isCompilation: false
+                    )
+                    let diff = MetadataDiff(localTrack: effectiveTrack, onlineMetadata: syntheticOnline, preserveLocalTitleAndArtist: true)
+                    newGood.append(diff)
+                    existingIDs.insert(effectiveTrack.id)
+                }
+            }
+
+            if !newGood.isEmpty {
+                await MainActor.run { [weak self] in
+                    guard let self = self else { return }
+                    self.verifiedGoodDiffs.append(contentsOf: newGood)
+                    let addedIDs = Set(newGood.map { $0.localTrack.id })
+                    self.unmatchedTrackIDs.subtract(addedIDs)
+                    self.saveEnrichmentCache()
+                    AppLogger.metadata.info("[LibraryStore] Indexed \(newGood.count) complete cached tracks directly into Verified Good.")
+                }
+            }
+        }
+    }
+
+    // MARK: - Manual Collaborative Albums
+
+    /// Checks if an album is manually designated as a collaborative album.
+    public func isCollaborativeAlbum(_ album: Album) -> Bool {
+        if settings.manualCollaborativeAlbumIDs.contains(album.id) {
+            return true
+        }
+        let trackIDStrings = album.tracks.map { $0.id.uuidString }
+        if !trackIDStrings.isEmpty && trackIDStrings.allSatisfy({ settings.originalAlbumArtistsByTrackID[$0] != nil }) {
+            return true
+        }
+        return false
+    }
+
+    /// Toggles the collaborative status of an album.
+    public func toggleCollaborativeAlbum(_ album: Album) {
+        if isCollaborativeAlbum(album) {
+            revertCollaborativeAlbum(album)
+        } else {
+            makeCollaborativeAlbum(album)
+        }
+    }
+
+    /// Marks an album as collaborative, setting all artists in each track as album artists, and persisting the original values.
+    public func makeCollaborativeAlbum(_ album: Album) {
+        settings.manualCollaborativeAlbumIDs.insert(album.id)
+
+        // Find all tracks in the library belonging to this album
+        let albumTrackIDs = Set(album.tracks.map { $0.id })
+        guard !albumTrackIDs.isEmpty else { return }
+
+        // Find all artists present across the album tracks (ONLY track.artist, strictly excluding title features!)
+        var distinctArtists: [String] = []
+        var seenArtists = Set<String>()
+        for track in album.tracks {
+            let artistsOnTrack = ArtistParser.parseArtists(from: track.artist)
+            for artist in artistsOnTrack {
+                let clean = artist.trimmingCharacters(in: .whitespacesAndNewlines)
+                let canon = ArtistParser.canonicalArtistKey(clean)
+                if !canon.isEmpty && !ArtistParser.isGenericArtistName(clean) && seenArtists.insert(canon).inserted {
+                    distinctArtists.append(clean)
+                }
+            }
+        }
+        guard !distinctArtists.isEmpty else { return }
+        let unifiedAlbumArtist = ArtistParser.formatDisplayArtist(distinctArtists)
+
+        for i in 0..<tracks.count {
+            if albumTrackIDs.contains(tracks[i].id) {
+                let trackIDStr = tracks[i].id.uuidString
+                // Preserve original album artist if not already stored
+                if settings.originalAlbumArtistsByTrackID[trackIDStr] == nil {
+                    settings.originalAlbumArtistsByTrackID[trackIDStr] = tracks[i].albumArtist ?? "__NIL__"
+                }
+
+                // Set all album tracks uniformly to the unified album artist
+                tracks[i] = tracks[i].withAlbumArtist(unifiedAlbumArtist)
+            }
+        }
+
+        rebuildAlbumsAndArtists()
+
+        // Also track the newly generated album ID so lookup by ID remains instant
+        if let firstTrackID = album.tracks.first?.id,
+           let newAlbum = self.albums.first(where: { $0.tracks.contains(where: { $0.id == firstTrackID }) }) {
+            settings.manualCollaborativeAlbumIDs.insert(newAlbum.id)
+        }
+
+        saveLibrary()
+        saveSettings()
+
+        // Update search engine index asynchronously so searching the album from any artist is instant
+        let currentTracks = self.tracks
+        let currentAlbums = self.albums
+        let currentArtists = self.artists
+        let currentPlaylists = self.playlists
+        let currentJoined = self.settings.joinedArtists
+        Task.detached(priority: .userInitiated) {
+            await SearchEngine.shared.updateIndex(
+                tracks: currentTracks,
+                albums: currentAlbums,
+                artists: currentArtists,
+                playlists: currentPlaylists,
+                joinedArtists: currentJoined
+            )
+        }
+    }
+
+    /// Reverts an album back to default, restoring original album artists for each track.
+    public func revertCollaborativeAlbum(_ album: Album) {
+        settings.manualCollaborativeAlbumIDs.remove(album.id)
+
+        let albumTrackIDs = Set(album.tracks.map { $0.id })
+        for i in 0..<tracks.count {
+            if albumTrackIDs.contains(tracks[i].id) {
+                let trackIDStr = tracks[i].id.uuidString
+                if let original = settings.originalAlbumArtistsByTrackID[trackIDStr] {
+                    tracks[i] = tracks[i].withAlbumArtist(original == "__NIL__" ? nil : original)
+                    settings.originalAlbumArtistsByTrackID.removeValue(forKey: trackIDStr)
+                }
+            }
+        }
+
+        rebuildAlbumsAndArtists()
+
+        // Remove any new/reverted IDs from manualCollaborativeAlbumIDs
+        if let firstTrackID = album.tracks.first?.id,
+           let revertedAlbum = self.albums.first(where: { $0.tracks.contains(where: { $0.id == firstTrackID }) }) {
+            settings.manualCollaborativeAlbumIDs.remove(revertedAlbum.id)
+        }
+
+        saveLibrary()
+        saveSettings()
+
+        // Update search engine index
+        let currentTracks = self.tracks
+        let currentAlbums = self.albums
+        let currentArtists = self.artists
+        let currentPlaylists = self.playlists
+        let currentJoined = self.settings.joinedArtists
+        Task.detached(priority: .userInitiated) {
+            await SearchEngine.shared.updateIndex(
+                tracks: currentTracks,
+                albums: currentAlbums,
+                artists: currentArtists,
+                playlists: currentPlaylists,
+                joinedArtists: currentJoined
+            )
+        }
     }
 
     /// Re-checks a single verified good track against online database.
@@ -2708,6 +3341,29 @@ rebuildAlbumsAndArtists()
         }
     }
 
+    /// Re-checks a single track against a specific online provider (Apple Music, Deezer, MusicBrainz).
+    /// If an exact match is found, updates `enrichmentDiffs` or `verifiedGoodDiffs` and caches the metadata.
+    /// Returns the newly found `OnlineTrackMetadata` if matched.
+    public func recheckTrackWithSpecificAPI(track: Track, source: MetadataAPIOption) async -> OnlineTrackMetadata? {
+        let match = await MusicMetadataService.shared.findExactMatch(for: track, source: source)
+        if let match = match {
+            let diff = MetadataDiff(localTrack: track, onlineMetadata: match, preserveLocalTitleAndArtist: true)
+            enrichmentDiffs.removeAll { $0.localTrack.id == track.id }
+            verifiedGoodDiffs.removeAll { $0.localTrack.id == track.id }
+            unmatchedTrackIDs.remove(track.id)
+
+            if diff.fieldsEnrichedCount > 0 {
+                enrichmentDiffs.append(diff)
+            } else {
+                verifiedGoodDiffs.append(diff)
+            }
+            saveEnrichmentCache()
+            cacheDownloadedMetadata(track: track, onlineMetadata: match, wasApplied: false)
+            return match
+        }
+        return nil
+    }
+
     /// Re-checks all currently unmatched / ignored tracks in the background queue.
     public func recheckAllUnmatchedTracks() {
         let unmatchedList = unmatchedTracks
@@ -2729,18 +3385,26 @@ rebuildAlbumsAndArtists()
         let candidates = tracks.filter { $0.artworkKey == nil || $0.year == nil || $0.trackNumber == nil }
         // Total
         let total = candidates.count
+        self.enrichTotalCount = total
+        self.enrichProcessedCount = 0
+
+        defer {
+            self.isEnrichingMetadata = false
+            self.enrichProcessedCount = 0
+            self.enrichTotalCount = 0
+        }
 
         // Ensure preconditions are met before proceeding
         guard total > 0 else {
             self.enrichProgress = 1.0
             self.enrichStatusText = "All tracks already have complete metadata and artwork."
-            self.isEnrichingMetadata = false
             return
         }
 
         // Enriched count
         var enrichedCount = 0
         for (idx, track) in candidates.enumerated() {
+            self.enrichProcessedCount = idx + 1
             self.enrichProgress = Double(idx + 1) / Double(total)
             self.enrichStatusText = "Enriching (\(idx + 1)/\(total)): \(track.title)"
 
@@ -2768,13 +3432,20 @@ rebuildAlbumsAndArtists()
 
         self.enrichProgress = 1.0
         self.enrichStatusText = "Enrichment complete. Updated \(enrichedCount) tracks."
-        self.isEnrichingMetadata = false
     }
 
     // MARK: - Persistence Engine
 
     // File path location
     private var libraryFileURL: URL { storageDirectoryURL.appendingPathComponent("library.json") }
+    // Cached pre-computed albums for instant cold boot
+    private var albumsFileURL: URL { storageDirectoryURL.appendingPathComponent("albums.json") }
+    // Cached pre-computed artists for instant cold boot
+    private var artistsFileURL: URL { storageDirectoryURL.appendingPathComponent("artists.json") }
+    // Recently played album IDs
+    private var recentAlbumsFileURL: URL { storageDirectoryURL.appendingPathComponent("recent_albums.json") }
+    // Recently played track IDs from Search Library
+    private var recentSearchTracksFileURL: URL { storageDirectoryURL.appendingPathComponent("recent_search_tracks.json") }
     // File path location
     private var playlistsFileURL: URL { storageDirectoryURL.appendingPathComponent("playlists.json") }
     // File path location
@@ -2825,11 +3496,80 @@ rebuildAlbumsAndArtists()
 
         try? fileManager.removeItem(at: downloadedMetadataCacheFileURL)
         saveEnrichmentCache()
+        AppLogger.storage.info("Manually cleared downloaded metadata cache.")
+    }
 
+    // Manually clear artwork cache
+    public func clearArtworkCache() {
         Task.detached(priority: .utility) {
             await ArtworkCacheService.shared.clearCache()
         }
-        AppLogger.storage.info("Manually cleared downloaded metadata and artwork cache.")
+        AppLogger.storage.info("Manually cleared artwork cache.")
+    }
+
+    // Record an album played for LATEST PLAYS
+    public func recordAlbumPlayed(albumID: String) {
+        guard !albumID.isEmpty else { return }
+        var updated = recentAlbumIDs.filter { $0 != albumID }
+        updated.insert(albumID, at: 0)
+        if updated.count > 25 {
+            updated = Array(updated.prefix(25))
+        }
+        self.recentAlbumIDs = updated
+        saveRecentAlbums()
+    }
+
+    // Record track played and update its album in LATEST PLAYS
+    public func recordTrackPlayed(_ track: Track) {
+        if let album = findAlbum(title: track.album, artist: track.albumArtist ?? track.artist) ?? findAlbum(title: track.album) {
+            recordAlbumPlayed(albumID: album.id)
+        } else {
+            let cleanArtist = (track.albumArtist ?? track.artist).trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            let cleanTitle = track.album.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            if let y = track.year, y > 0 {
+                recordAlbumPlayed(albumID: "\(cleanArtist)_\(cleanTitle)_\(y)")
+            } else {
+                recordAlbumPlayed(albumID: "\(cleanArtist)_\(cleanTitle)")
+            }
+        }
+    }
+
+    // Save recent albums asynchronously
+    public func saveRecentAlbums() {
+        let ids = self.recentAlbumIDs
+        let url = self.recentAlbumsFileURL
+        Task.detached(priority: .utility) {
+            if let data = try? JSONEncoder().encode(ids) {
+                try? data.write(to: url, options: .atomic)
+            }
+        }
+    }
+
+    /// Records a track played from the Search Library page and persists to disk.
+    public func recordSearchPlayedTrack(_ track: Track) {
+        recentSearchPlayedTrackIDs.removeAll { $0 == track.id }
+        recentSearchPlayedTrackIDs.insert(track.id, at: 0)
+        if recentSearchPlayedTrackIDs.count > 50 {
+            recentSearchPlayedTrackIDs = Array(recentSearchPlayedTrackIDs.prefix(50))
+        }
+        saveRecentSearchPlayedTracks()
+    }
+
+    /// Clears recently played tracks history from Search Library.
+    public func clearRecentSearchPlayedTracks() {
+        recentSearchPlayedTrackIDs.removeAll()
+        saveRecentSearchPlayedTracks()
+    }
+
+    /// Persists recently played tracks from Search Library asynchronously.
+    public func saveRecentSearchPlayedTracks() {
+        let ids = self.recentSearchPlayedTrackIDs
+        let url = self.recentSearchTracksFileURL
+        Task.detached(priority: .utility) {
+            if let data = try? JSONEncoder().encode(ids) {
+                try? data.write(to: url, options: .atomic)
+            }
+        }
     }
 
     /// Stores or rewrites a downloaded online track metadata record across multiple lookup indices.
@@ -2895,8 +3635,10 @@ rebuildAlbumsAndArtists()
             let fileSig = computeFileSignature(fileName: track.url.lastPathComponent, size: track.fileInfo?.fileSizeBytes ?? 0)
 
             if let existing = downloadedMetadataCache.recordsByFilePath[path] {
-                // If the track was updated locally or has new artwork, ensure indices are synchronized
-                if existing.cachedArtworkKey != track.artworkKey || existing.filePath != path {
+                // If the track was updated locally, has new artwork, or gained a valid artist over stale unknown, update cache record
+                let existingArtist = existing.appliedArtist ?? ""
+                let gainedValidArtist = !track.artist.isEmpty && !MetadataSanitizer.isUnknownArtist(track.artist) && MetadataSanitizer.isUnknownArtist(existingArtist)
+                if existing.cachedArtworkKey != track.artworkKey || existing.filePath != path || gainedValidArtist {
                     let updated = CachedTrackMetadataRecord(
                         onlineMetadata: existing.onlineMetadata,
                         localTrackSignature: sig,
@@ -2907,7 +3649,7 @@ rebuildAlbumsAndArtists()
                         downloadedAt: existing.downloadedAt,
                         wasApplied: existing.wasApplied,
                         appliedTitle: existing.appliedTitle,
-                        appliedArtist: existing.appliedArtist,
+                        appliedArtist: gainedValidArtist ? track.artist : existing.appliedArtist,
                         appliedAlbum: existing.appliedAlbum,
                         appliedAlbumArtist: existing.appliedAlbumArtist,
                         appliedGenre: existing.appliedGenre,
@@ -3016,12 +3758,31 @@ rebuildAlbumsAndArtists()
                 var currentTrack = track
 
                 if record.wasApplied {
-                    // Restore fully applied metadata and artwork
+                    // Restore fully applied metadata and artwork, preserving valid track values if record has unknown/empty
+                    let appliedArtist: String = {
+                        if let art = record.appliedArtist, !art.isEmpty, !MetadataSanitizer.isUnknownArtist(art) {
+                            return art
+                        }
+                        return track.artist
+                    }()
+                    let appliedAlbum: String = {
+                        if let alb = record.appliedAlbum, !alb.isEmpty, !MetadataSanitizer.isUnknownAlbum(alb) {
+                            return alb
+                        }
+                        return track.album
+                    }()
+                    let appliedTitle: String = {
+                        if let tit = record.appliedTitle, !tit.isEmpty, !MetadataSanitizer.isUnknownTitle(tit) {
+                            return tit
+                        }
+                        return track.title
+                    }()
+
                     currentTrack = Track(
                         id: track.id,
-                        title: record.appliedTitle ?? track.title,
-                        artist: record.appliedArtist ?? track.artist,
-                        album: record.appliedAlbum ?? track.album,
+                        title: appliedTitle,
+                        artist: appliedArtist,
+                        album: appliedAlbum,
                         albumArtist: record.appliedAlbumArtist ?? track.albumArtist,
                         genre: record.appliedGenre ?? track.genre,
                         year: record.appliedYear ?? track.year,
@@ -3067,9 +3828,14 @@ rebuildAlbumsAndArtists()
         }
         self.enrichmentDiffs = Array(existingDiffMap.values)
 
-        var existingGoodMap = Dictionary(verifiedGoodDiffs.map { ($0.localTrack.id, $0) }, uniquingKeysWith: { first, _ in first })
+        var existingGoodMap = Dictionary(
+            verifiedGoodDiffs.filter { ($0.localTrack.year ?? 0) >= 1900 }.map { ($0.localTrack.id, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
         for g in newVerified {
-            existingGoodMap[g.localTrack.id] = g
+            if (g.localTrack.year ?? 0) >= 1900 {
+                existingGoodMap[g.localTrack.id] = g
+            }
         }
         self.verifiedGoodDiffs = Array(existingGoodMap.values)
 
@@ -3125,6 +3891,7 @@ rebuildAlbumsAndArtists()
 
     // Save settings asynchronously
     public func saveSettings() {
+        HapticManager.shared.isEnabled = self.settings.isHapticsEnabled
         let currentSettings = self.settings
         let url = self.settingsFileURL
         Task.detached(priority: .utility) {
@@ -3134,15 +3901,104 @@ rebuildAlbumsAndArtists()
         }
     }
 
-    // Save library tracks asynchronously
+    // Save library tracks, albums, and artists asynchronously
     public func saveLibrary() {
         let tracksToSave = self.tracks
-        let url = self.libraryFileURL
+        let albumsToSave = self.albums
+        let artistsToSave = self.artists
+        let trackUrl = self.libraryFileURL
+        let albumUrl = self.albumsFileURL
+        let artistUrl = self.artistsFileURL
         Task.detached(priority: .utility) {
             if let data = try? JSONEncoder().encode(tracksToSave) {
-                try? data.write(to: url, options: .atomic)
+                try? data.write(to: trackUrl, options: .atomic)
+            }
+            if let data = try? JSONEncoder().encode(albumsToSave) {
+                try? data.write(to: albumUrl, options: .atomic)
+            }
+            if let data = try? JSONEncoder().encode(artistsToSave) {
+                try? data.write(to: artistUrl, options: .atomic)
             }
         }
+    }
+
+    /// Writes new tag metadata to the underlying audio file on disk, updates memory and cache records, and persists changes.
+    public func updateTrackMetadata(
+        for trackID: UUID,
+        title: String,
+        artist: String,
+        album: String,
+        albumArtist: String?,
+        composer: String?,
+        performer: String?,
+        genre: String?,
+        year: Int?,
+        trackNumber: Int?,
+        totalTracks: Int?,
+        discNumber: Int?,
+        discTotal: Int?
+    ) async -> Bool {
+        guard let index = tracks.firstIndex(where: { $0.id == trackID }) else { return false }
+        let existingTrack = tracks[index]
+
+        let success = await AudioFileMetadataWriter.shared.writeMetadata(
+            to: existingTrack.url,
+            title: title,
+            artist: artist,
+            album: album,
+            albumArtist: albumArtist,
+            composer: composer,
+            performer: performer,
+            year: year,
+            genre: genre,
+            trackNumber: trackNumber,
+            totalTracks: totalTracks,
+            discNumber: discNumber,
+            discTotal: discTotal
+        )
+
+        guard success else { return false }
+
+        let updatedTrack = existingTrack.withUpdatedTags(
+            title: title,
+            artist: artist,
+            album: album,
+            albumArtist: albumArtist,
+            composer: composer,
+            performer: performer,
+            genre: genre,
+            year: year,
+            trackNumber: trackNumber,
+            totalTracks: totalTracks,
+            discNumber: discNumber,
+            discTotal: discTotal
+        )
+
+        self.tracks[index] = updatedTrack
+        rebuildAlbumsAndArtists()
+        saveLibrary()
+
+        // Update persistent downloaded metadata cache if present
+        let path = updatedTrack.url.standardizedFileURL.path
+        if var record = downloadedMetadataCache.recordsByFilePath[path] {
+            let synth = OnlineTrackMetadata(
+                title: title,
+                artist: artist,
+                album: album,
+                albumArtist: albumArtist,
+                releaseYear: year,
+                genre: genre,
+                trackNumber: trackNumber,
+                totalTracks: totalTracks,
+                discNumber: discNumber,
+                sourceAPI: record.onlineMetadata.sourceAPI
+            )
+            record.onlineMetadata = synth
+            downloadedMetadataCache.recordsByFilePath[path] = record
+            saveDownloadedMetadataCache()
+        }
+
+        return true
     }
 
     // Save playlists asynchronously
@@ -3213,100 +4069,196 @@ rebuildAlbumsAndArtists()
         }
     }
 
-    // Load persisted state
-    private func loadPersistedState() {
-        // Load Downloaded Metadata Cache first
-        loadDownloadedMetadataCache()
-
-        // Load Settings
+    // Instant sync load of lightweight preferences for immediate frame 1 paint
+    private func loadLightweightPreferences() {
         if let data = try? Data(contentsOf: settingsFileURL),
            let loaded = try? JSONDecoder().decode(AppSettings.self, from: data) {
             self.settings = loaded
             self.selectedCategory = loaded.defaultLibraryCategory
         }
+        HapticManager.shared.isEnabled = self.settings.isHapticsEnabled
 
-        // Load Enrichment Diffs, Verified Good, & Unmatched before reattachment
-        if let data = try? Data(contentsOf: enrichmentFileURL),
-           let loadedDiffs = try? JSONDecoder().decode([MetadataDiff].self, from: data) {
-            self.enrichmentDiffs = loadedDiffs
-        }
-
-        if let data = try? Data(contentsOf: verifiedGoodFileURL),
-           let loadedGood = try? JSONDecoder().decode([MetadataDiff].self, from: data) {
-            self.verifiedGoodDiffs = loadedGood
-        }
-
-        if let data = try? Data(contentsOf: unmatchedFileURL),
-           let loadedUnmatched = try? JSONDecoder().decode([UUID].self, from: data) {
-            self.unmatchedTrackIDs = Set(loadedUnmatched)
-        }
-
-        // Load Library Tracks
-        if let data = try? Data(contentsOf: libraryFileURL),
-           let loadedTracks = try? JSONDecoder().decode([Track].self, from: data) {
-            self.tracks = loadedTracks
-            rebuildAlbumsAndArtists()
-        }
-
-        // Reattach cached metadata & artwork to loaded library tracks
-        if !self.tracks.isEmpty {
-            let reattached = reattachCachedMetadataToTracks()
-            if reattached > 0 {
-                rebuildAlbumsAndArtists()
-            }
-        }
-
-        // Load Duplicates
-        if let data = try? Data(contentsOf: duplicatesFileURL),
-           let loadedDuplicates = try? JSONDecoder().decode([DuplicateGroup].self, from: data) {
-            self.duplicateGroups = loadedDuplicates
-        } else if !self.tracks.isEmpty {
-            Task {
-                await self.recalculateDuplicates()
-            }
-        }
-
-        // Load Playlists
-        if let data = try? Data(contentsOf: playlistsFileURL),
-           // Loaded playlists
-           let loadedPlaylists = try? JSONDecoder().decode([Playlist].self, from: data) {
-            self.playlists = loadedPlaylists
-        }
-
-        // Load Play Counts
-        if let data = try? Data(contentsOf: playCountsFileURL),
-           // Loaded counts
-           let loadedCounts = try? JSONDecoder().decode([String: Int].self, from: data) {
-            self.playCounts = Dictionary(loadedCounts.compactMap { key, val in
-                UUID(uuidString: key).map { ($0, val) }
-            }, uniquingKeysWith: { first, _ in first })
-        }
-
-        // Load Playback Positions
-        if let data = try? Data(contentsOf: playbackPositionsFileURL),
-           // Loaded positions
-           let loadedPositions = try? JSONDecoder().decode([String: TimeInterval].self, from: data) {
-            self.playbackPositions = Dictionary(loadedPositions.compactMap { key, val in
-                UUID(uuidString: key).map { ($0, val) }
-            }, uniquingKeysWith: { first, _ in first })
-        }
-
-        // Load Pins
         if let data = try? Data(contentsOf: pinsFileURL),
-           // Loaded pins
            let loadedPins = try? JSONDecoder().decode([PinnedItemIdentifier].self, from: data) {
             self.pinnedItemIDs = loadedPins
             self.pinnedAlbumIDs = Set(loadedPins.filter { $0.type == .album }.map { $0.targetID })
-        } else {
-            // Initial pins
-            var initialPins: [PinnedItemIdentifier] = []
-            for pl in playlists where pl.isPinned {
-                initialPins.append(PinnedItemIdentifier(type: .playlist, targetID: pl.id.uuidString))
-            }
-            self.pinnedItemIDs = initialPins
-            self.pinnedAlbumIDs = []
         }
 
-        AppLogger.storage.info("Persisted state loaded: \(self.tracks.count) tracks, \(self.playlists.count) playlists, \(self.pinnedItemIDs.count) pins, \(self.duplicateGroups.count) duplicate groups, \(self.enrichmentDiffs.count) enrichment diffs, \(self.unmatchedTrackIDs.count) unmatched.")
+        if let data = try? Data(contentsOf: recentAlbumsFileURL),
+           let loadedRecent = try? JSONDecoder().decode([String].self, from: data) {
+            self.recentAlbumIDs = loadedRecent
+        }
+
+        if let data = try? Data(contentsOf: recentSearchTracksFileURL),
+           let loadedSearchTracks = try? JSONDecoder().decode([UUID].self, from: data) {
+            self.recentSearchPlayedTrackIDs = loadedSearchTracks
+        }
+    }
+
+    // Rebuilds fast lookup index from loaded artist entities
+    public func rebuildArtistLookupIndex() {
+        var lookup: [String: Artist] = [:]
+        for artist in artists {
+            let canon = ArtistParser.canonicalArtistKey(artist.name)
+            lookup[canon] = artist
+            lookup[artist.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()] = artist
+            lookup[artist.id] = artist
+        }
+        self.artistLookupIndex = lookup
+    }
+
+    // Streams heavy track library and cached collections asynchronously off main thread
+    private func loadPersistedStateAsync() {
+        let libURL = self.libraryFileURL
+        let albURL = self.albumsFileURL
+        let artURL = self.artistsFileURL
+        let playURL = self.playlistsFileURL
+        let countsURL = self.playCountsFileURL
+        let posURL = self.playbackPositionsFileURL
+        let dupURL = self.duplicatesFileURL
+        let enrichURL = self.enrichmentFileURL
+        let goodURL = self.verifiedGoodFileURL
+        let unmatchURL = self.unmatchedFileURL
+        let metaCacheURL = self.downloadedMetadataCacheFileURL
+
+        // Tier 1: Instant Core Library (High Priority)
+        // Decodes only vital playback and navigation entities immediately so UI and search initialize in milliseconds
+        Task.detached(priority: .userInitiated) { [weak self] in
+            async let tracksTask: [Track]? = {
+                guard let data = try? Data(contentsOf: libURL) else { return nil }
+                return try? JSONDecoder().decode([Track].self, from: data)
+            }()
+
+            async let albumsTask: [Album]? = {
+                guard let data = try? Data(contentsOf: albURL) else { return nil }
+                return try? JSONDecoder().decode([Album].self, from: data)
+            }()
+
+            async let artistsTask: [Artist]? = {
+                guard let data = try? Data(contentsOf: artURL) else { return nil }
+                return try? JSONDecoder().decode([Artist].self, from: data)
+            }()
+
+            async let playlistsTask: [Playlist]? = {
+                guard let data = try? Data(contentsOf: playURL) else { return nil }
+                return try? JSONDecoder().decode([Playlist].self, from: data)
+            }()
+
+            async let countsTask: [String: Int]? = {
+                guard let data = try? Data(contentsOf: countsURL) else { return nil }
+                return try? JSONDecoder().decode([String: Int].self, from: data)
+            }()
+
+            async let posTask: [String: TimeInterval]? = {
+                guard let data = try? Data(contentsOf: posURL) else { return nil }
+                return try? JSONDecoder().decode([String: TimeInterval].self, from: data)
+            }()
+
+            let loadedTracks = await tracksTask
+            let loadedAlbums = await albumsTask
+            let loadedArtists = await artistsTask
+            let loadedPlaylists = await playlistsTask
+            let loadedCounts = await countsTask
+            let loadedPositions = await posTask
+
+            await MainActor.run { [weak self] in
+                guard let self = self else { return }
+                self.isInitialLoading = false
+
+                if let t = loadedTracks {
+                    self.tracks = t
+                }
+                if let a = loadedAlbums, let ar = loadedArtists, !a.isEmpty {
+                    self.albums = a
+                    self.artists = ar
+                    self.rebuildArtistLookupIndex()
+                } else if !self.tracks.isEmpty {
+                    self.rebuildAlbumsAndArtists()
+                    self.saveLibrary()
+                }
+
+                if let p = loadedPlaylists {
+                    self.playlists = p
+                }
+                if let c = loadedCounts {
+                    self.playCounts = Dictionary(c.compactMap { key, val in
+                        UUID(uuidString: key).map { ($0, val) }
+                    }, uniquingKeysWith: { first, _ in first })
+                }
+                if let pos = loadedPositions {
+                    self.playbackPositions = Dictionary(pos.compactMap { key, val in
+                        UUID(uuidString: key).map { ($0, val) }
+                    }, uniquingKeysWith: { first, _ in first })
+                }
+
+                self.invalidateSortedCaches()
+                AppLogger.storage.info("Core library loaded instantly: \(self.tracks.count) tracks, \(self.albums.count) albums, \(self.artists.count) artists.")
+
+                // Proactively warm and update search index so search library is instant on frame 1
+                let currentTracks = self.tracks
+                let currentAlbums = self.albums
+                let currentArtists = self.artists
+                let currentPlaylists = self.playlists
+                let currentJoined = self.settings.joinedArtists
+                Task.detached(priority: .userInitiated) {
+                    await SearchEngine.shared.updateIndex(
+                        tracks: currentTracks,
+                        albums: currentAlbums,
+                        artists: currentArtists,
+                        playlists: currentPlaylists,
+                        joinedArtists: currentJoined
+                    )
+                }
+            }
+
+            // Tier 2: Background Secondary Metadata Cache (Utility Priority)
+            // Loads heavy offline metadata caches, verified good tags, and duplicate groups without blocking app initialization.
+            Task.detached(priority: .utility) { [weak self] in
+                async let dupTask: [DuplicateGroup]? = {
+                    guard let data = try? Data(contentsOf: dupURL) else { return nil }
+                    return try? JSONDecoder().decode([DuplicateGroup].self, from: data)
+                }()
+
+                async let diffsTask: [MetadataDiff]? = {
+                    guard let data = try? Data(contentsOf: enrichURL) else { return nil }
+                    return try? JSONDecoder().decode([MetadataDiff].self, from: data)
+                }()
+
+                async let goodTask: [MetadataDiff]? = {
+                    guard let data = try? Data(contentsOf: goodURL) else { return nil }
+                    return try? JSONDecoder().decode([MetadataDiff].self, from: data)
+                }()
+
+                async let unmatchedTask: [UUID]? = {
+                    guard let data = try? Data(contentsOf: unmatchURL) else { return nil }
+                    return try? JSONDecoder().decode([UUID].self, from: data)
+                }()
+
+                async let metaCacheTask: PersistentDownloadedMetadataCache? = {
+                    guard let data = try? Data(contentsOf: metaCacheURL) else { return nil }
+                    return try? JSONDecoder().decode(PersistentDownloadedMetadataCache.self, from: data)
+                }()
+
+                let loadedDuplicates = await dupTask
+                let loadedDiffs = await diffsTask
+                let loadedGood = await goodTask
+                let loadedUnmatched = await unmatchedTask
+                let loadedMetaCache = await metaCacheTask
+
+                await MainActor.run { [weak self] in
+                    guard let self = self else { return }
+                    if let d = loadedDuplicates { self.duplicateGroups = d }
+                    if let df = loadedDiffs { self.enrichmentDiffs = df }
+                    if let g = loadedGood { self.verifiedGoodDiffs = g.filter { ($0.localTrack.year ?? 0) >= 1900 } }
+                    if let u = loadedUnmatched { self.unmatchedTrackIDs = Set(u) }
+                    if let mc = loadedMetaCache { self.downloadedMetadataCache = mc }
+
+                    // Run tag verification audit when idle
+                    Task(priority: .background) { [weak self] in
+                        self?.indexCompleteTracksIntoVerifiedGood()
+                    }
+                }
+            }
+        }
     }
 }

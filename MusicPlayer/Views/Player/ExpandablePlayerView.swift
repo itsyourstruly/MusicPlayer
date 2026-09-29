@@ -16,6 +16,12 @@ public struct ExpandablePlayerView: View {
     @State private var expansionProgress: CGFloat = 0.0
     @State private var dragStartProgress: CGFloat = 0.0
     @State private var isDragging: Bool = false
+    @State private var isCollapsingToMini: Bool = false
+
+    /// Strict guard preventing button presses while dragging, flicking, or collapsing the player.
+    private var canTriggerButtonPress: Bool {
+        !isDragging && !isCollapsingToMini
+    }
 
     @State private var palette: ArtworkColorExtractor.ColorPalette = ArtworkColorExtractor.ColorPalette(
         primaryColor: Color(red: 0.16, green: 0.16, blue: 0.18),
@@ -28,6 +34,8 @@ public struct ExpandablePlayerView: View {
     @State private var showingPlaylistPicker: Bool = false
     @State private var selectedArtistForNavigation: Artist? = nil
     @State private var selectedAlbumForNavigation: Album? = nil
+    @State private var selectedTrackForInfo: Track? = nil
+    @State private var selectedTrackForPlaylist: Track? = nil
 
     // Initialize with configured properties
     public init(
@@ -101,43 +109,70 @@ public struct ExpandablePlayerView: View {
                     bottomSafeArea: bottomSafeArea,
                     collapsedBottomOffset: collapsedBottomOffset,
                     isExpanded: isExpanded,
+                    isDragging: isDragging,
+                    canTriggerButtonPress: {
+                        canTriggerButtonPress
+                    },
                     onTapMiniPlayer: {
+                        isCollapsingToMini = false
+                        isDragging = false
                         expandPlayer()
                     },
                     onTapCollapse: {
                         collapsePlayer()
                     },
                     onOpenQueue: {
-                        HapticFeedback.lightImpact()
+                        guard canTriggerButtonPress else { return }
                         showingQueue = true
                     },
                     onOpenInfo: {
-                        showingFileInfo = true
+                        guard canTriggerButtonPress else { return }
+                        HapticFeedback.lightImpact()
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                            showingFileInfo = true
+                        }
                     },
                     onOpenPlayback: {
-                        showingPlaybackSheet = true
+                        guard canTriggerButtonPress else { return }
+                        HapticFeedback.lightImpact()
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                            showingPlaybackSheet = true
+                        }
                     },
                     onOpenPlaylistPicker: {
-                        showingPlaylistPicker = true
+                        guard canTriggerButtonPress else { return }
+                        HapticFeedback.lightImpact()
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                            showingPlaylistPicker = true
+                        }
+                    },
+                    onOpenDevicePicker: {
+                        guard canTriggerButtonPress else { return }
+                        HapticFeedback.lightImpact()
+                        RoutePickerManager.shared.presentRoutePicker()
                     },
                     onSelectArtist: { artist in
+                        guard canTriggerButtonPress else { return }
                         selectedArtistForNavigation = artist
                     },
                     onSelectAlbum: { album in
+                        guard canTriggerButtonPress else { return }
                         selectedAlbumForNavigation = album
                     },
                     onDragChanged: { translation in
+                        let deltaY = translation.height
+                        let deltaX = translation.width
+
+                        // Only begin driving drag once there is any slight movement (avoids hijacking static taps)
+                        guard abs(deltaY) > 0.5 || abs(deltaX) > 0.5 || isDragging else { return }
+
                         if !isDragging {
                             isDragging = true
-                            dragStartProgress = expansionProgress
+                            dragStartProgress = min(1.0, max(0.0, expansionProgress))
                         }
 
-                        // Delta y
-                        let deltaY = translation.height
-                        // Computed
                         let computed = dragStartProgress - (deltaY / totalTravelDistance)
 
-                        // Transaction
                         var transaction = Transaction()
                         transaction.disablesAnimations = true
                         withTransaction(transaction) {
@@ -145,7 +180,7 @@ public struct ExpandablePlayerView: View {
                         }
                     },
                     onDragEnded: { translation, predictedEnd in
-                        isDragging = false
+                        guard isDragging else { return }
                         let h = translation.height
                         let w = translation.width
                         let predictedH = predictedEnd.height
@@ -158,14 +193,18 @@ public struct ExpandablePlayerView: View {
                                 skipPrevious()
                             }
                             snapTo(expanded: dragStartProgress > 0.5)
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                                isDragging = false
+                            }
                             return
                         }
 
                         // Vertical gesture handling with momentum flick support
                         if dragStartProgress < 0.5 {
                             // Started from Miniplayer
-                            if h < -35 || predictedH < -70 || expansionProgress > 0.35 {
+                            if h < -25 || predictedH < -50 || expansionProgress > 0.30 {
                                 // Upward drag/flick threshold met -> Expand to Fullscreen
+                                isCollapsingToMini = false
                                 expandPlayer()
                             } else {
                                 // Snap back to Miniplayer
@@ -173,9 +212,13 @@ public struct ExpandablePlayerView: View {
                             }
                         } else {
                             // Started from Fullscreen or mid-transition
-                            if h > 40 || predictedH > 80 || expansionProgress < 0.65 {
+                            if h > 30 || predictedH > 60 || expansionProgress < 0.70 {
                                 // Downward drag/flick threshold met -> Collapse to Miniplayer
+                                isCollapsingToMini = true
                                 collapsePlayer()
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.38) {
+                                    isCollapsingToMini = false
+                                }
                             } else if h < -35 || predictedH < -60 {
                                 // Upward swipe while in Fullscreen -> Open Queue!
                                 snapTo(expanded: true)
@@ -185,8 +228,14 @@ public struct ExpandablePlayerView: View {
                                 snapTo(expanded: true)
                             }
                         }
+
+                        // Maintain isDragging for 150ms to suppress any button actions fired on touch-release
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                            isDragging = false
+                        }
                     }
                 )
+                .environment(\.isPlayerDraggingOrDismissing, isDragging || isCollapsingToMini)
             }
             // Modal presentation sheet
             .sheet(isPresented: $showingQueue) {
@@ -200,6 +249,8 @@ public struct ExpandablePlayerView: View {
             .sheet(isPresented: $showingPlaybackSheet) {
                 PlaybackControlsSheetView(playerService: playerService)
                     .environment(\.appTheme, libraryStore.settings.appTheme)
+                    .presentationDetents([.large])
+                    .presentationDragIndicator(.visible)
             }
             .sheet(isPresented: $showingPlaylistPicker) {
                 playlistPickerSheet(for: track)
@@ -212,14 +263,6 @@ public struct ExpandablePlayerView: View {
                         libraryStore: libraryStore,
                         playerService: playerService
                     )
-                    .toolbar {
-                        ToolbarItem(placement: .topBarTrailing) {
-                            Button("DONE") {
-                                selectedArtistForNavigation = nil
-                            }
-                            .font(.system(size: 13, weight: .bold, design: .monospaced))
-                        }
-                    }
                 }
             }
             // Modal presentation sheet
@@ -230,14 +273,6 @@ public struct ExpandablePlayerView: View {
                         libraryStore: libraryStore,
                         playerService: playerService
                     )
-                    .toolbar {
-                        ToolbarItem(placement: .topBarTrailing) {
-                            Button("DONE") {
-                                selectedAlbumForNavigation = nil
-                            }
-                            .font(.system(size: 13, weight: .bold, design: .monospaced))
-                        }
-                    }
                 }
             }// Always maintain full-screen frame so geometry and safe area insets NEVER jump during drag or springs.
             // Hit testing is strictly constrained to the card and active backdrop, preserving 100% interactive background taps.
@@ -245,18 +280,31 @@ public struct ExpandablePlayerView: View {
             .ignoresSafeArea()
             // Triggered when view appears
             .onAppear {
+                isDragging = false
+                isCollapsingToMini = false
                 expansionProgress = isExpanded ? 1.0 : 0.0
             }
             // React to state changes
             .onChange(of: isExpanded) { _, newValue in
                 // Ensure preconditions are met before proceeding
                 guard !isDragging else { return }
+                if newValue {
+                    isCollapsingToMini = false
+                }
                 // Target
                 let target: CGFloat = newValue ? 1.0 : 0.0
                 // Ensure preconditions are met before proceeding
                 guard expansionProgress != target else { return }
                 withAnimation(.spring(response: 0.38, dampingFraction: 0.84, blendDuration: 0.08)) {
                     expansionProgress = target
+                }
+            }
+            .onChange(of: playerService.isSeeking) { _, isSeeking in
+                if isSeeking && isDragging && isExpanded {
+                    isDragging = false
+                    withAnimation(.spring(response: 0.30, dampingFraction: 0.84)) {
+                        expansionProgress = 1.0
+                    }
                 }
             }
             // Async lifecycle task
@@ -277,7 +325,8 @@ public struct ExpandablePlayerView: View {
 
     // Expand player
     private func expandPlayer() {
-        HapticFeedback.lightImpact()
+        isCollapsingToMini = false
+        HapticFeedback.snap(intensity: 0.52)
         withAnimation(.spring(response: 0.38, dampingFraction: 0.84, blendDuration: 0.08)) {
             isExpanded = true
             expansionProgress = 1.0
@@ -286,7 +335,7 @@ public struct ExpandablePlayerView: View {
 
     // Collapse player
     private func collapsePlayer() {
-        HapticFeedback.lightImpact()
+        HapticFeedback.snap(intensity: 0.46)
         withAnimation(.spring(response: 0.38, dampingFraction: 0.84, blendDuration: 0.08)) {
             isExpanded = false
             expansionProgress = 0.0
@@ -295,6 +344,7 @@ public struct ExpandablePlayerView: View {
 
     // Snap to
     private func snapTo(expanded: Bool) {
+        HapticFeedback.snap(intensity: expanded ? 0.52 : 0.46)
         withAnimation(.spring(response: 0.34, dampingFraction: 0.86, blendDuration: 0.08)) {
             isExpanded = expanded
             expansionProgress = expanded ? 1.0 : 0.0
@@ -305,7 +355,7 @@ public struct ExpandablePlayerView: View {
     private func skipNext() {
         // Ensure preconditions are met before proceeding
         guard playerService.hasNextTrack else { return }
-        HapticFeedback.selectionChanged()
+        HapticFeedback.trackSkip(forward: true)
         playerService.next()
     }
 
@@ -313,7 +363,7 @@ public struct ExpandablePlayerView: View {
     private func skipPrevious() {
         // Ensure preconditions are met before proceeding
         guard playerService.hasPreviousTrack else { return }
-        HapticFeedback.selectionChanged()
+        HapticFeedback.trackSkip(forward: false)
         playerService.previous()
     }
 
@@ -353,14 +403,6 @@ public struct ExpandablePlayerView: View {
             }
             .navigationTitle("ADD TO PLAYLIST")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("DONE") {
-                        showingPlaylistPicker = false
-                    }
-                    .font(.system(size: 13, weight: .bold, design: .monospaced))
-                }
-            }
         }
         .presentationDetents([.medium, .large])
     }
@@ -395,6 +437,8 @@ private struct MorphingPlayerCard: View, Animatable {
     let collapsedBottomOffset: CGFloat
     // Flag indicating if expanded
     let isExpanded: Bool
+    let isDragging: Bool
+    let canTriggerButtonPress: () -> Bool
 
     // On tap mini player
     let onTapMiniPlayer: () -> Void
@@ -407,6 +451,7 @@ private struct MorphingPlayerCard: View, Animatable {
     // On open playlist picker
     let onOpenPlayback: () -> Void
     let onOpenPlaylistPicker: () -> Void
+    let onOpenDevicePicker: () -> Void
     // On select artist
     let onSelectArtist: (Artist) -> Void
     // On select album
@@ -435,7 +480,24 @@ private struct MorphingPlayerCard: View, Animatable {
     @State private var isLyricsExpanded: Bool = false
 
     private var isLyricsViewActive: Bool {
-        isLyricsViewPreferred && currentTrackHasLyrics
+        isLyricsViewPreferred
+    }
+
+    @State private var lyricsGlobalFrame: CGRect = .zero
+
+    private func isLocationInsideLyrics(_ location: CGPoint) -> Bool {
+        // If a card drag is already actively ongoing, don't interrupt it
+        guard !isDragging else { return false }
+        guard isLyricsViewActive && (progress > 0.75 || isExpanded) else { return false }
+        if lyricsGlobalFrame != .zero {
+            let expandedFrame = lyricsGlobalFrame.insetBy(dx: -4, dy: -4)
+            if expandedFrame.contains(location) {
+                return true
+            }
+        }
+        let topBoundary = topSafeArea + 50
+        let bottomBoundary = isLyricsExpanded ? (screenHeight - 40) : (screenHeight - 160)
+        return location.y >= topBoundary && location.y <= bottomBoundary
     }
 
     @State private var currentPitch: Double = 0.0
@@ -536,10 +598,6 @@ private struct MorphingPlayerCard: View, Animatable {
                 miniplayerContent(miniArtworkSize: miniArtworkSize)
                     .opacity(miniOpacity)
                     .offset(x: -clampedProgress * 24)
-                    .contentShape(Rectangle())
-                    .onTapGesture {
-                        onTapMiniPlayer()
-                    }
                     .allowsHitTesting(clampedProgress < 0.25)
                     .zIndex(2)
 
@@ -569,27 +627,29 @@ private struct MorphingPlayerCard: View, Animatable {
                 // Effective raw stretch y
                 let effectiveRawStretchY: CGFloat = isTouchingArtwork ? touchStretchY : currentStretchY
 
-                // Pitch degrees (only active in standard artwork mode)
-                let pitchDegrees: Double = (isPlaying && !isLyricsViewActive) ? (effectiveRawPitch * Double(clampedProgress)) : 0.0
-                // Yaw degrees (only active in standard artwork mode)
-                let yawDegrees: Double = (isPlaying && !isLyricsViewActive) ? (effectiveRawYaw * Double(clampedProgress)) : 0.0
-                // Roll degrees (only active in standard artwork mode)
-                let rollDegrees: Double = (isPlaying && !isLyricsViewActive) ? (effectiveRawRoll * Double(clampedProgress)) : 0.0
+                // Pitch degrees (smoothly adopts 3D pitch, centering cleanly when paused or lyrics active)
+                let pitchDegrees: Double = !isLyricsViewActive ? (effectiveRawPitch * Double(clampedProgress)) : 0.0
+                // Yaw degrees
+                let yawDegrees: Double = !isLyricsViewActive ? (effectiveRawYaw * Double(clampedProgress)) : 0.0
+                // Roll degrees
+                let rollDegrees: Double = !isLyricsViewActive ? (effectiveRawRoll * Double(clampedProgress)) : 0.0
                 // Elevation val
-                let elevationVal: CGFloat = (isPlaying && !isLyricsViewActive) ? (effectiveRawElevation * clampedProgress) : 0.0
+                let elevationVal: CGFloat = !isLyricsViewActive ? (effectiveRawElevation * clampedProgress) : 0.0
                 // Stretch x val
-                let stretchXVal: CGFloat = (isPlaying && !isLyricsViewActive) ? (1.0 + (effectiveRawStretchX - 1.0) * clampedProgress) : 1.0
+                let stretchXVal: CGFloat = !isLyricsViewActive ? (1.0 + (effectiveRawStretchX - 1.0) * clampedProgress) : 1.0
                 // Stretch y val
-                let stretchYVal: CGFloat = (isPlaying && !isLyricsViewActive) ? (1.0 + (effectiveRawStretchY - 1.0) * clampedProgress) : 1.0
+                let stretchYVal: CGFloat = !isLyricsViewActive ? (1.0 + (effectiveRawStretchY - 1.0) * clampedProgress) : 1.0
 
-                // Shadow offset x
-                let shadowOffsetX: CGFloat = (isPlaying && !isLyricsViewActive) ? CGFloat((effectiveRawYaw * -1.85 + effectiveRawRoll * 0.7) * Double(clampedProgress)) : 0
-                // Base shadow offset y
-                let baseShadowOffsetY: Double = (11.5 + pitchDegrees * 1.5 + Double(elevationVal * 0.75)) * Double(clampedProgress)
-                // Shadow offset y
-                let shadowOffsetY: CGFloat = (isPlaying && !isLyricsViewActive) ? CGFloat(baseShadowOffsetY) : 0
-                // Dynamic shadow radius
-                let dynamicShadowRadius: CGFloat = (isPlaying && !isLyricsViewActive) ? lerp(start: 0, end: max(14.0, 24.0 + elevationVal * 1.2), t: clampedProgress) : 0
+                // Shadow calculations (gracefully transitions between playing dynamic depth and subtle grounded pause shadow)
+                let shadowBaseOpacity: Double = isPlaying ? 0.32 : 0.16
+                let shadowBaseRadius: CGFloat = isPlaying ? max(14.0, 24.0 + elevationVal * 1.2) : 10.0
+                let shadowOffsetYVal: CGFloat = isPlaying ? (11.5 + pitchDegrees * 1.5 + Double(elevationVal * 0.75)) : 5.0
+                let shadowOffsetXVal: CGFloat = isPlaying ? CGFloat((effectiveRawYaw * -1.85 + effectiveRawRoll * 0.7) * Double(clampedProgress)) : 0.0
+
+                let dynamicShadowRadius: CGFloat = !isLyricsViewActive ? lerp(start: 0, end: shadowBaseRadius, t: clampedProgress) : 0
+                let dynamicShadowOffsetY: CGFloat = !isLyricsViewActive ? CGFloat(shadowOffsetYVal * Double(clampedProgress)) : 0
+                let dynamicShadowOffsetX: CGFloat = !isLyricsViewActive ? shadowOffsetXVal : 0
+                let dynamicShadowOpacity: Double = !isLyricsViewActive ? (shadowBaseOpacity * Double(clampedProgress)) : 0
 
                 // 4. SINGLE SHARED ALBUM ARTWORK (Hero continuous transition with subtle 3D floating depth & touch press & 180 flip)
                 ZStack {
@@ -603,6 +663,7 @@ private struct MorphingPlayerCard: View, Animatable {
                         .clipShape(RoundedRectangle(cornerRadius: currentArtworkCorner, style: .continuous))
                         .contentShape(RoundedRectangle(cornerRadius: currentArtworkCorner, style: .continuous))
                         .onTapGesture {
+                            guard canTriggerButtonPress() else { return }
                             if clampedProgress < 0.25 {
                                 onTapMiniPlayer()
                             } else if isLyricsViewActive {
@@ -611,7 +672,7 @@ private struct MorphingPlayerCard: View, Animatable {
                                     isLyricsViewPreferred = false
                                 }
                             } else if clampedProgress > 0.85 {
-                                HapticFeedback.selectionChanged()
+                                HapticFeedback.cardFlip()
                                 withAnimation(.spring(response: 0.52, dampingFraction: 0.76)) {
                                     isArtworkFlipped = true
                                 }
@@ -625,28 +686,16 @@ private struct MorphingPlayerCard: View, Animatable {
                 .frame(width: currentArtworkSize, height: currentArtworkSize)
                 // Multi-tier 3D Floating Shadows (Active in standard mode, subtle in lyrics mode)
                 .shadow(
-                    color: isAlbumColor ?
-                        Color.black.opacity(isPlaying ? (0.35 * Double(clampedProgress)) : 0.0) :
-                        palette.primaryColor.opacity(isPlaying ? (0.28 * Double(clampedProgress)) : 0.0),
+                    color: Color.black.opacity(dynamicShadowOpacity),
                     radius: dynamicShadowRadius,
-                    x: shadowOffsetX,
-                    y: shadowOffsetY
+                    x: dynamicShadowOffsetX,
+                    y: dynamicShadowOffsetY
                 )
                 .shadow(
-                    color: Color.black.opacity(
-                        isPlaying ? ((isAlbumColor ? 0.30 : 0.24) * Double(clampedProgress)) : 0.0
-                    ),
-                    radius: (isPlaying && !isLyricsViewActive) ? lerp(start: 0, end: 16, t: clampedProgress) : 0,
-                    x: shadowOffsetX * 0.7,
-                    y: shadowOffsetY * 0.75
-                )
-                .shadow(
-                    color: Color.black.opacity(
-                        isPlaying ? ((isAlbumColor ? 0.16 : 0.10) * Double(clampedProgress)) : 0.0
-                    ),
-                    radius: (isPlaying && !isLyricsViewActive) ? lerp(start: 0, end: 6, t: clampedProgress) : 0,
-                    x: shadowOffsetX * 0.35,
-                    y: shadowOffsetY * 0.35
+                    color: Color.black.opacity(dynamicShadowOpacity * 0.5),
+                    radius: !isLyricsViewActive ? lerp(start: 0, end: isPlaying ? 12 : 5, t: clampedProgress) : 0,
+                    x: dynamicShadowOffsetX * 0.5,
+                    y: dynamicShadowOffsetY * 0.6
                 )
                 // Floating vertical altitude bob
                 .offset(y: elevationVal)
@@ -674,13 +723,13 @@ private struct MorphingPlayerCard: View, Animatable {
                 )
                 // Dynamic Play/Pause Spring Scale Effect
                 .scaleEffect(dynamicArtworkScale, anchor: .center)
-                .animation(.spring(response: 0.46, dampingFraction: 0.72), value: isPlaying)
+                .animation(.spring(response: 0.38, dampingFraction: 0.74), value: isPlaying)
                 // Interactive drag and touch gesture handling
                 .gesture(
                     LongPressGesture(minimumDuration: 1.0)
                         .sequenced(before: DragGesture(minimumDistance: 0, coordinateSpace: .local))
                         .onChanged { value in
-                            guard clampedProgress > 0.75 && !isArtworkFlipped && !isLyricsViewActive else { return }
+                            guard clampedProgress > 0.75 && !isArtworkFlipped && !isLyricsViewActive && !isDragging else { return }
                             switch value {
                             case .second(true, let drag):
                                 if let drag = drag {
@@ -691,7 +740,7 @@ private struct MorphingPlayerCard: View, Animatable {
                             }
                         }
                         .onEnded { value in
-                            guard clampedProgress > 0.75 && !isArtworkFlipped && !isLyricsViewActive else { return }
+                            guard clampedProgress > 0.75 && !isArtworkFlipped && !isLyricsViewActive && !isDragging else { return }
                             switch value {
                             case .second(true, _):
                                 handleArtworkTouchEnded()
@@ -717,20 +766,27 @@ private struct MorphingPlayerCard: View, Animatable {
                 y: lerp(start: 4, end: 12, t: clampedProgress)
             )
             .contentShape(RoundedRectangle(cornerRadius: cardCornerRadius, style: .continuous))
-            // Interactive drag and touch gesture handling
-            .gesture(
-                DragGesture(minimumDistance: 4, coordinateSpace: .global)
+            // Interactive drag gesture (minimum 8pt threshold prevents interfering with tap gestures)
+            .simultaneousGesture(
+                DragGesture(minimumDistance: 8, coordinateSpace: .global)
                     .onChanged { value in
                         // Ensure preconditions are met before proceeding
                         guard !isTouchingArtwork else { return }
+                        guard !playerService.isSeeking else { return }
+                        guard !isLocationInsideLyrics(value.startLocation) else { return }
                         onDragChanged(value.translation)
                     }
                     .onEnded { value in
                         // Ensure preconditions are met before proceeding
                         guard !isTouchingArtwork else { return }
+                        guard !playerService.isSeeking else { return }
+                        guard !isLocationInsideLyrics(value.startLocation) else { return }
                         onDragEnded(value.translation, value.predictedEndTranslation)
                     }
             )
+            .onPreferenceChange(LyricsGlobalFramePreferenceKey.self) { frame in
+                self.lyricsGlobalFrame = frame
+            }
             .padding(.horizontal, horizontalMargin)
             .padding(.bottom, bottomPadding)
         }
@@ -795,6 +851,7 @@ private struct MorphingPlayerCard: View, Animatable {
             if !expanded {
                 isArtworkFlipped = false
                 isLyricsExpanded = false
+                swayAnimationTask?.cancel()
             } else if playerService.playbackStatus.isPlaying && isArtworkAnimationEnabled {
                 start3DFloatingAnimationLoop()
             }
@@ -825,7 +882,7 @@ private struct MorphingPlayerCard: View, Animatable {
 
         if !isTouchingArtwork {
             isTouchingArtwork = true
-            HapticFeedback.lightImpact()
+            HapticFeedback.dragPickup()
         }
 
         // Max angle
@@ -875,6 +932,15 @@ private struct MorphingPlayerCard: View, Animatable {
     // Start 3 d floating animation loop
     private func start3DFloatingAnimationLoop() {
         swayAnimationTask?.cancel()
+        guard isExpanded && playerService.playbackStatus.isPlaying && isArtworkAnimationEnabled else {
+            currentPitch = 0.0
+            currentYaw = 0.0
+            currentRoll = 0.0
+            currentElevation = 0.0
+            currentStretchX = 1.0
+            currentStretchY = 1.0
+            return
+        }
         swayAnimationTask = Task { @MainActor in
             // 1. Initial 1.5-second delay when opening or starting playback with perfectly centered artwork
             withAnimation(.easeInOut(duration: 0.45)) {
@@ -887,10 +953,10 @@ private struct MorphingPlayerCard: View, Animatable {
             }
 
             try? await Task.sleep(nanoseconds: 1_500_000_000)
-            if Task.isCancelled || !playerService.playbackStatus.isPlaying { return }
+            if Task.isCancelled || !isExpanded || !playerService.playbackStatus.isPlaying { return }
 
             // Infinite continuous fluid wander loop
-            while !Task.isCancelled && playerService.playbackStatus.isPlaying {
+            while !Task.isCancelled && isExpanded && playerService.playbackStatus.isPlaying {
                 if isTouchingArtwork {
                     try? await Task.sleep(nanoseconds: 100_000_000)
                     continue
@@ -901,7 +967,7 @@ private struct MorphingPlayerCard: View, Animatable {
                 // Phase start time
                 let phaseStartTime = Date()
 
-                while !Task.isCancelled && playerService.playbackStatus.isPlaying && Date().timeIntervalSince(phaseStartTime) < activePhaseTargetDuration {
+                while !Task.isCancelled && isExpanded && playerService.playbackStatus.isPlaying && Date().timeIntervalSince(phaseStartTime) < activePhaseTargetDuration {
                     if isTouchingArtwork {
                         try? await Task.sleep(nanoseconds: 100_000_000)
                         continue
@@ -1060,32 +1126,38 @@ private struct MorphingPlayerCard: View, Animatable {
     // Miniplayer content
     private func miniplayerContent(miniArtworkSize: CGFloat) -> some View {
         HStack(spacing: 12) {
-            // Space reserved for the shared artwork
-            Color.clear
-                .frame(width: miniArtworkSize, height: miniArtworkSize)
+            // Tappable leading area to expand player
+            HStack(spacing: 12) {
+                // Space reserved for the shared artwork
+                Color.clear
+                    .frame(width: miniArtworkSize, height: miniArtworkSize)
 
-            // Track Title & Artist
-            VStack(alignment: .leading, spacing: 2) {
-                Text(track.title)
-                    .font(.system(size: 14, weight: .bold))
-                    .foregroundStyle(Color.white)
-                    .lineLimit(1)
+                // Track Title & Artist
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(track.title)
+                        .font(.system(size: 14, weight: .bold))
+                        .foregroundStyle(Color.white)
+                        .lineLimit(1)
 
-                Text(track.artist)
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(Color.white.opacity(0.75))
-                    .lineLimit(1)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-
-            Spacer(minLength: 4)
-
-            // Play / Pause Button
-            Button(action: {
-                HapticFeedback.lightImpact()
-                withAnimation(.spring(response: 0.32, dampingFraction: 0.76)) {
-                    playerService.togglePlayPause()
+                    Text(track.artist)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(Color.white.opacity(0.75))
+                        .lineLimit(1)
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                Spacer(minLength: 4)
+            }
+            .contentShape(Rectangle())
+            .onTapGesture {
+                onTapMiniPlayer()
+            }
+
+            // Play / Pause Button with immediate zero-latency touch delivery
+            Button(action: {
+                guard canTriggerButtonPress() else { return }
+                HapticFeedback.lightImpact()
+                playerService.togglePlayPause()
             }) {
                 Text(playerService.playbackStatus.isPlaying ? "PAUSE" : "PLAY")
                     .font(.system(size: 12, weight: .black, design: .monospaced))
@@ -1121,20 +1193,27 @@ private struct MorphingPlayerCard: View, Animatable {
                         PlaybackProgressBar(
                             playerService: playerService,
                             foregroundColor: Color.white,
-                            secondaryForegroundColor: Color.white.opacity(0.65)
+                            secondaryForegroundColor: Color.white.opacity(0.65),
+                            style: .fullscreen,
+                            useProgressBar: libraryStore.settings.useProgressBar,
+                            onCollapse: onTapCollapse
                         )
                         .padding(.horizontal, 28)
 
                         PlayerControlsView(
                             playerService: playerService,
                             foregroundColor: Color.white,
-                            secondaryForegroundColor: Color.white.opacity(0.65)
+                            secondaryForegroundColor: Color.white.opacity(0.65),
+                            canPerformAction: canTriggerButtonPress
                         )
                         .padding(.vertical, 4)
 
                         // Bottom Action Bar (QUEUE on left, Audio Route on right)
                         HStack(spacing: 24) {
-                            Button(action: onOpenQueue) {
+                            Button(action: {
+                                guard canTriggerButtonPress() else { return }
+                                onOpenQueue()
+                            }) {
                                 HStack(spacing: 6) {
                                     Text("QUEUE")
                                         .font(.system(size: 13, weight: .bold, design: .monospaced))
@@ -1151,7 +1230,8 @@ private struct MorphingPlayerCard: View, Animatable {
 
                             AirPlayButtonView(
                                 routeName: playerService.currentAudioRouteName,
-                                foregroundColor: Color.white
+                                foregroundColor: Color.white,
+                                onTap: onOpenDevicePicker
                             )
                         }
                         .padding(.horizontal, 28)
@@ -1169,6 +1249,7 @@ private struct MorphingPlayerCard: View, Animatable {
                         foregroundColor: Color.white,
                         secondaryForegroundColor: Color.white.opacity(0.65),
                         onSeek: { targetTime in
+                            HapticFeedback.scrubCommit()
                             playerService.seek(to: targetTime)
                         },
                         onLyricsAvailabilityChanged: { hasLyrics in
@@ -1226,11 +1307,15 @@ private struct MorphingPlayerCard: View, Animatable {
 
                 Spacer(minLength: 12)
 
-                // 3. Interactive Seek Scrubber
+                // 3. Interactive Seek Scrubber with Audio Specs under needle
                 PlaybackProgressBar(
                     playerService: playerService,
                     foregroundColor: Color.white,
-                    secondaryForegroundColor: Color.white.opacity(0.65)
+                    secondaryForegroundColor: Color.white.opacity(0.65),
+                    style: .fullscreen,
+                    audioSpecs: libraryStore.settings.showAudioSpecsInPlayer ? track.technicalSummary : nil,
+                    useProgressBar: libraryStore.settings.useProgressBar,
+                    onCollapse: onTapCollapse
                 )
                 .padding(.horizontal, 28)
 
@@ -1240,7 +1325,8 @@ private struct MorphingPlayerCard: View, Animatable {
                 PlayerControlsView(
                     playerService: playerService,
                     foregroundColor: Color.white,
-                    secondaryForegroundColor: Color.white.opacity(0.65)
+                    secondaryForegroundColor: Color.white.opacity(0.65),
+                    canPerformAction: canTriggerButtonPress
                 )
                 .padding(.vertical, 4)
 
@@ -1248,7 +1334,10 @@ private struct MorphingPlayerCard: View, Animatable {
 
                 // Bottom Action Bar (QUEUE on left, Audio Route on right)
                 HStack(spacing: 24) {
-                    Button(action: onOpenQueue) {
+                    Button(action: {
+                        guard canTriggerButtonPress() else { return }
+                        onOpenQueue()
+                    }) {
                         HStack(spacing: 6) {
                             Text("QUEUE")
                                 .font(.system(size: 13, weight: .bold, design: .monospaced))
@@ -1260,12 +1349,19 @@ private struct MorphingPlayerCard: View, Animatable {
                         .padding(.vertical, 8)
                     }
                     .buttonStyle(.plain)
+                    .highPriorityGesture(
+                        TapGesture().onEnded {
+                            guard canTriggerButtonPress() else { return }
+                            onOpenQueue()
+                        }
+                    )
 
                     Spacer()
 
                     AirPlayButtonView(
                         routeName: playerService.currentAudioRouteName,
-                        foregroundColor: Color.white
+                        foregroundColor: Color.white,
+                        onTap: onOpenDevicePicker
                     )
                 }
                 .padding(.horizontal, 28)
@@ -1273,13 +1369,17 @@ private struct MorphingPlayerCard: View, Animatable {
             }
         }
         .frame(width: screenWidth, height: screenHeight, alignment: .top)
-        .contentShape(Rectangle())
-        .onTapGesture {
+        .overlay {
             if isArtworkFlipped {
-                HapticFeedback.selectionChanged()
-                withAnimation(.spring(response: 0.52, dampingFraction: 0.76)) {
-                    isArtworkFlipped = false
-                }
+                Color.black.opacity(0.001)
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        guard canTriggerButtonPress() else { return }
+                        HapticFeedback.cardFlip()
+                        withAnimation(.spring(response: 0.52, dampingFraction: 0.76)) {
+                            isArtworkFlipped = false
+                        }
+                    }
             }
         }
     }
@@ -1292,9 +1392,11 @@ private struct MorphingPlayerCard: View, Animatable {
                 .fill(Color.white.opacity(0.35))
                 .frame(width: 38, height: 5)
                 .contentShape(Rectangle())
-                .onTapGesture {
-                    onTapCollapse()
-                }
+                .highPriorityGesture(
+                    TapGesture().onEnded {
+                        onTapCollapse()
+                    }
+                )
 
             ZStack {
                 if isLyricsViewActive {
@@ -1328,6 +1430,7 @@ private struct MorphingPlayerCard: View, Animatable {
                             .foregroundStyle(Color.white.opacity(0.65))
 
                         Button(action: {
+                            guard canTriggerButtonPress() else { return }
                             HapticFeedback.lightImpact()
                             if let albumObj = libraryStore.findAlbum(title: track.album, artist: track.artist) {
                                 onSelectAlbum(albumObj)
@@ -1341,6 +1444,23 @@ private struct MorphingPlayerCard: View, Animatable {
                                 .truncationMode(.tail)
                         }
                         .buttonStyle(.plain)
+                        .contextMenu {
+                            Button {
+                                HapticFeedback.notificationSuccess()
+                                playAlbumNext(for: track)
+                            } label: {
+                                Label("PLAY ALBUM NEXT", systemImage: "text.line.first.and.arrowtriangle.forward")
+                            }
+                        }
+                        .simultaneousGesture(
+                            TapGesture().onEnded {
+                                guard canTriggerButtonPress() else { return }
+                                HapticFeedback.lightImpact()
+                                if let albumObj = libraryStore.findAlbum(title: track.album, artist: track.artist) {
+                                    onSelectAlbum(albumObj)
+                                }
+                            }
+                        )
                     }
                     .padding(.horizontal, 64)
                     .frame(maxWidth: .infinity, alignment: .center)
@@ -1354,7 +1474,8 @@ private struct MorphingPlayerCard: View, Animatable {
                     if isLyricsViewActive && isLyricsExpanded {
                         HStack(spacing: 16) {
                             Button(action: {
-                                HapticFeedback.mediumImpact()
+                                guard canTriggerButtonPress() else { return }
+                                HapticFeedback.trackSkip(forward: false)
                                 playerService.previous()
                             }) {
                                 Image(systemName: "chevron.left.chevron.left.dotted")
@@ -1364,7 +1485,8 @@ private struct MorphingPlayerCard: View, Animatable {
                             .buttonStyle(.plain)
 
                             Button(action: {
-                                HapticFeedback.mediumImpact()
+                                guard canTriggerButtonPress() else { return }
+                                HapticFeedback.playPause(isPlaying: !playerService.playbackStatus.isPlaying)
                                 playerService.togglePlayPause()
                             }) {
                                 Image(systemName: playerService.playbackStatus.isPlaying ? "pause.fill" : "play.fill")
@@ -1374,7 +1496,8 @@ private struct MorphingPlayerCard: View, Animatable {
                             .buttonStyle(.plain)
 
                             Button(action: {
-                                HapticFeedback.mediumImpact()
+                                guard canTriggerButtonPress() else { return }
+                                HapticFeedback.trackSkip(forward: true)
                                 playerService.next()
                             }) {
                                 Image(systemName: "chevron.right.dotted.chevron.right")
@@ -1386,13 +1509,22 @@ private struct MorphingPlayerCard: View, Animatable {
                         .transition(.opacity.combined(with: .scale(scale: 0.92)))
                     } else {
                         Menu {
-                            Button(action: onOpenPlayback) {
+                            Button(action: {
+                                guard canTriggerButtonPress() else { return }
+                                onOpenPlayback()
+                            }) {
                                 Text("PLAYBACK")
                             }
-                            Button(action: onOpenPlaylistPicker) {
+                            Button(action: {
+                                guard canTriggerButtonPress() else { return }
+                                onOpenPlaylistPicker()
+                            }) {
                                 Text("ADD TO PLAYLIST")
                             }
-                            Button(action: onOpenInfo) {
+                            Button(action: {
+                                guard canTriggerButtonPress() else { return }
+                                onOpenInfo()
+                            }) {
                                 Text("FILE INFO")
                             }
                         } label: {
@@ -1410,15 +1542,34 @@ private struct MorphingPlayerCard: View, Animatable {
         }
     }
 
+    private func playAlbumNext(for track: Track) {
+        let albumTracks: [Track]
+        if let albumObj = libraryStore.findAlbum(title: track.album, artist: track.artist), !albumObj.tracks.isEmpty {
+            albumTracks = albumObj.tracks
+        } else {
+            let matched = libraryStore.tracks.filter {
+                $0.album.localizedCaseInsensitiveCompare(track.album) == .orderedSame &&
+                ($0.artist.localizedCaseInsensitiveCompare(track.artist) == .orderedSame ||
+                 $0.albumArtist?.localizedCaseInsensitiveCompare(track.artist) == .orderedSame)
+            }
+            albumTracks = matched.isEmpty ? libraryStore.tracks.filter {
+                $0.album.localizedCaseInsensitiveCompare(track.album) == .orderedSame
+            } : matched
+        }
+        guard !albumTracks.isEmpty else { return }
+        playerService.insertPlayNextFront(tracks: albumTracks)
+    }
+
     // MARK: - Artwork Back View
 
     private func artworkBackView(dimension: CGFloat) -> some View {
         VStack(spacing: 26) {
             Spacer()
 
-            // 1. LYRICS Button (Large text, no background, blue when enabled)
+            // 1. LYRICS Button (Large text, no background, theme accent color when enabled)
             Button(action: {
-                HapticFeedback.lightImpact()
+                guard canTriggerButtonPress() else { return }
+                HapticFeedback.modeToggle(isOn: !isLyricsViewPreferred)
                 withAnimation(.spring(response: 0.42, dampingFraction: 0.82)) {
                     isLyricsViewPreferred.toggle()
                     if isLyricsViewPreferred {
@@ -1429,13 +1580,14 @@ private struct MorphingPlayerCard: View, Animatable {
             }) {
                 Text("LYRICS")
                     .font(.system(size: 20, weight: .bold, design: .monospaced))
-                    .foregroundStyle(isLyricsViewPreferred ? Color.blue : Color.white.opacity(0.40))
+                    .foregroundStyle(isLyricsViewPreferred ? libraryStore.settings.appTheme.accentColor : Color.white.opacity(0.40))
             }
             .buttonStyle(.plain)
 
             // 2. ANIMATE ARTWORK Toggle Button (Large text, no background)
             Button(action: {
-                HapticFeedback.lightImpact()
+                guard canTriggerButtonPress() else { return }
+                HapticFeedback.modeToggle(isOn: !isArtworkAnimationEnabled)
                 withAnimation(.easeInOut(duration: 0.2)) {
                     isArtworkAnimationEnabled.toggle()
                     if !isArtworkAnimationEnabled {
@@ -1453,7 +1605,7 @@ private struct MorphingPlayerCard: View, Animatable {
             }) {
                 Text("ANIMATE ARTWORK")
                     .font(.system(size: 16, weight: .bold, design: .monospaced))
-                    .foregroundStyle(isArtworkAnimationEnabled ? Color.blue : Color.white.opacity(0.40))
+                    .foregroundStyle(isArtworkAnimationEnabled ? libraryStore.settings.appTheme.accentColor : Color.white.opacity(0.40))
             }
             .buttonStyle(.plain)
 
@@ -1466,6 +1618,7 @@ private struct MorphingPlayerCard: View, Animatable {
                 HStack(spacing: 14) {
                     ForEach(PlayerBackgroundStyle.allCases, id: \.self) { style in
                         Button(action: {
+                            guard canTriggerButtonPress() else { return }
                             HapticFeedback.selectionChanged()
                             withAnimation(.easeInOut(duration: 0.2)) {
                                 libraryStore.settings.playerBackgroundStyle = style
@@ -1505,7 +1658,7 @@ private struct MorphingPlayerCard: View, Animatable {
         )
         .contentShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
         .onTapGesture {
-            HapticFeedback.selectionChanged()
+            HapticFeedback.cardFlip()
             withAnimation(.spring(response: 0.52, dampingFraction: 0.76)) {
                 isArtworkFlipped = false
             }

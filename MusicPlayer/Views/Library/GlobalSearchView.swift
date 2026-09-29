@@ -86,6 +86,10 @@ public struct GlobalSearchResults: Sendable, Equatable {
         !artistTreeNodes.isEmpty || !playlists.isEmpty || !directMatchedAlbums.isEmpty || !directMatchedTracks.isEmpty
     }
 
+    public var isEmpty: Bool {
+        !hasResults
+    }
+
     public static func == (lhs: GlobalSearchResults, rhs: GlobalSearchResults) -> Bool {
         lhs.totalArtistsCount == rhs.totalArtistsCount &&
         lhs.totalAlbumsCount == rhs.totalAlbumsCount &&
@@ -227,16 +231,14 @@ public struct GlobalSearchView: View {
     }
 
     public var body: some View {
-        ZStack(alignment: .top) {
-            libraryStore.settings.appTheme.backgroundColor
-                .ignoresSafeArea()
-
+        Group {
             if isOnlineMode {
                 onlineContentView
             } else {
                 libraryContentView
             }
         }
+        .background(libraryStore.settings.appTheme.backgroundColor.ignoresSafeArea())
         .navigationTitle(isOnlineMode ? "SEARCH ONLINE" : "SEARCH LIBRARY")
         .navigationBarTitleDisplayMode(.inline)
         .searchable(
@@ -272,35 +274,26 @@ public struct GlobalSearchView: View {
             playlistPickerSheet(for: track)
         }
         .onAppear {
-            let t = libraryStore.tracks
-            let a = libraryStore.albums
-            let ar = libraryStore.artists
-            let p = libraryStore.playlists
-            let j = libraryStore.settings.joinedArtists
-            Task.detached(priority: .utility) {
-                await SearchEngine.shared.updateIndex(
-                    tracks: t,
-                    albums: a,
-                    artists: ar,
-                    playlists: p,
-                    joinedArtists: j
-                )
-            }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                isSearchFocused = true
+            if searchQuery.isEmpty {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    isSearchFocused = true
+                }
             }
         }
         .onDisappear {
             previewManager.stop()
+            isSearchFocused = false
         }
-        .task(id: "\(searchQuery)_\(isOnlineMode)") {
+        .task(id: "\(searchQuery)_\(isOnlineMode)_\(libraryStore.tracks.count)") {
             let clean = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
             guard clean.count >= 2 else {
-                withAnimation(.easeInOut(duration: 0.18)) {
-                    self.results = .empty
-                    self.expandedArtistIDs = []
-                    self.expandedAlbumIDs = []
-                    self.isSearching = false
+                if self.results.hasResults || self.isSearching {
+                    withAnimation(.easeInOut(duration: 0.18)) {
+                        self.results = .empty
+                        self.expandedArtistIDs = []
+                        self.expandedAlbumIDs = []
+                        self.isSearching = false
+                    }
                 }
                 return
             }
@@ -310,48 +303,39 @@ public struct GlobalSearchView: View {
                 return
             }
 
-            // Immediately reset active expansion so new incoming results render collapsed first
-            self.expandedArtistIDs = []
-            self.expandedAlbumIDs = []
-            self.isSearching = true
-
             do {
-                // 100ms debounce: quick 100ms delay after typing stops before searching
-                try await Task.sleep(nanoseconds: 100_000_000)
+                // Micro-debounce (30ms) to allow rapid keyboard input buffering without delaying the search
+                try await Task.sleep(nanoseconds: 30_000_000)
                 guard !Task.isCancelled else { return }
 
-                // Progressively stream results (topmost relevant direct matches first, then complete tree)
-                for await progressiveResults in await SearchEngine.shared.searchStream(
+                self.isSearching = true
+
+                // Single in-memory search pass (runs in < 1ms)
+                let searchResults = await SearchEngine.shared.search(
                     query: clean,
                     tracksFallback: libraryStore.tracks,
                     albumsFallback: libraryStore.albums,
                     artistsFallback: libraryStore.artists,
                     playlistsFallback: libraryStore.playlists,
                     joinedArtistsFallback: libraryStore.settings.joinedArtists
-                ) {
-                    guard !Task.isCancelled, self.searchQuery.trimmingCharacters(in: .whitespacesAndNewlines) == clean else { return }
-
-                    withAnimation(.easeInOut(duration: 0.20)) {
-                        self.results = progressiveResults
-                        self.isSearching = false
-                    }
-                }
+                )
 
                 guard !Task.isCancelled, self.searchQuery.trimmingCharacters(in: .whitespacesAndNewlines) == clean else { return }
 
-                // Wait shortly after artists are all rendered in smoothly first before expanding
-                try await Task.sleep(nanoseconds: 180_000_000)
-                guard !Task.isCancelled, self.searchQuery.trimmingCharacters(in: .whitespacesAndNewlines) == clean else { return }
+                // Automatically pre-expand the topmost artist and album immediately alongside the results
+                let topArtistID = searchResults.artistTreeNodes.first?.id
+                let topAlbumID = searchResults.artistTreeNodes.first?.albums.first?.id ?? searchResults.directMatchedAlbums.first?.album.id
 
-                let topArtistID = self.results.artistTreeNodes.first?.id
-                let topAlbumID = self.results.artistTreeNodes.first?.albums.first?.id ?? self.results.directMatchedAlbums.first?.album.id
-                withAnimation(.spring(response: 0.28, dampingFraction: 0.85)) {
-                    if let topArtistID {
-                        self.expandedArtistIDs = [topArtistID]
-                    }
-                    if let topAlbumID {
-                        self.expandedAlbumIDs = [topAlbumID]
-                    }
+                var newExpandedArtists: Set<String> = []
+                var newExpandedAlbums: Set<String> = []
+                if let topArtistID { newExpandedArtists.insert(topArtistID) }
+                if let topAlbumID { newExpandedAlbums.insert(topAlbumID) }
+
+                withAnimation(.easeInOut(duration: 0.15)) {
+                    self.results = searchResults
+                    self.expandedArtistIDs = newExpandedArtists
+                    self.expandedAlbumIDs = newExpandedAlbums
+                    self.isSearching = false
                 }
             } catch {
                 // Preempted by next keystroke: cancelled cleanly with 0 CPU overhead
@@ -364,13 +348,24 @@ public struct GlobalSearchView: View {
     @ViewBuilder
     private var libraryContentView: some View {
         if trimmedQuery.count < 2 {
-            initialStateView
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                .transition(.opacity)
+            ScrollView(.vertical, showsIndicators: false) {
+                recentSearchPlayedTracksSection
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 12)
+                    .padding(.bottom, 140)
+            }
+            .scrollDismissesKeyboard(.interactively)
+            .scrollBounceBehavior(.always)
+            .ignoresSafeArea(.keyboard, edges: .bottom)
         } else if isSearching && results.artistTreeNodes.isEmpty && results.playlists.isEmpty {
-            searchingIndicatorView
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                .transition(.opacity)
+            ScrollView(.vertical, showsIndicators: false) {
+                searchingIndicatorView
+                    .frame(maxWidth: .infinity, minHeight: 350, alignment: .top)
+                    .padding(.bottom, 140)
+            }
+            .scrollDismissesKeyboard(.interactively)
+            .scrollBounceBehavior(.always)
+            .ignoresSafeArea(.keyboard, edges: .bottom)
         } else if results.hasResults {
             LibrarySearchResultsContainer(
                 results: results,
@@ -426,10 +421,15 @@ public struct GlobalSearchView: View {
                 }
             )
             .equatable()
-            .transition(.opacity)
         } else {
-            emptyResultsView
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            ScrollView(.vertical, showsIndicators: false) {
+                emptyResultsView
+                    .frame(maxWidth: .infinity, minHeight: 350, alignment: .top)
+                    .padding(.bottom, 140)
+            }
+            .scrollDismissesKeyboard(.interactively)
+            .scrollBounceBehavior(.always)
+            .ignoresSafeArea(.keyboard, edges: .bottom)
         }
     }
 
@@ -438,26 +438,30 @@ public struct GlobalSearchView: View {
     private var onlineContentView: some View {
         ScrollView(.vertical, showsIndicators: false) {
             LazyVStack(alignment: .leading, spacing: 20) {
-                onlineSearchBarIndicator
-
                 if isOnlineSearching && onlineResults.isEmpty {
                     searchingIndicatorView
                         .padding(.top, 24)
                 } else if !onlineResults.isEmpty {
-                    if !onlineResults.tracks.isEmpty {
-                        onlineTracksSection
-                    }
-                    if !onlineResults.albums.isEmpty {
-                        onlineAlbumsSection
+                    if isOnlineSearching {
+                        HStack {
+                            Spacer()
+                            ProgressView()
+                                .controlSize(.small)
+                            Spacer()
+                        }
+                        .padding(.vertical, 4)
                     }
                     if !onlineResults.artists.isEmpty {
                         onlineArtistsSection
                     }
+                    if !onlineResults.albums.isEmpty {
+                        onlineAlbumsSection
+                    }
+                    if !onlineResults.tracks.isEmpty {
+                        onlineTracksSection
+                    }
                 } else if trimmedQuery.count >= 2 && !isOnlineSearching {
                     emptyOnlineResultsView
-                        .padding(.top, 40)
-                } else {
-                    initialOnlineStateView
                         .padding(.top, 40)
                 }
             }
@@ -466,34 +470,13 @@ public struct GlobalSearchView: View {
             .padding(.bottom, 140)
         }
         .scrollDismissesKeyboard(.interactively)
-    }
-
-    private var onlineSearchBarIndicator: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "globe")
-                .font(.system(size: 11, weight: .bold))
-                .foregroundStyle(Color.blue)
-
-            Text("ONLINE CATALOG DISCOVERY")
-                .font(.system(size: 11, weight: .bold, design: .monospaced))
-                .foregroundStyle(Color.blue)
-
-            Spacer()
-
-            if isOnlineSearching {
-                ProgressView()
-                    .controlSize(.mini)
-            }
-        }
-        .padding(.vertical, 6)
-        .padding(.horizontal, 10)
-        .background(Color.blue.opacity(0.1))
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .scrollBounceBehavior(.always)
+        .ignoresSafeArea(.keyboard, edges: .bottom)
     }
 
     private var onlineTracksSection: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("TRACKS (\(onlineResults.tracks.count))")
+            Text("SONGS (\(onlineResults.tracks.count))")
                 .font(.system(size: 11, weight: .bold, design: .monospaced))
                 .foregroundStyle(.secondary)
 
@@ -684,32 +667,76 @@ public struct GlobalSearchView: View {
 
     // MARK: - State Views
 
-    private var initialStateView: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "magnifyingglass")
-                .font(.system(size: 32))
-                .foregroundStyle(.tertiary)
-                .padding(.top, 40)
+    @ViewBuilder
+    private var recentSearchPlayedTracksSection: some View {
+        let recentTracks = libraryStore.recentSearchPlayedTracks
+        if !recentTracks.isEmpty {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack {
+                    Text("RECENTLY PLAYED")
+                        .font(.system(size: 11, weight: .bold, design: .monospaced))
+                        .foregroundStyle(.secondary)
 
-            Text("Search by tracks, artists, or albums to view results in a clean, minimal tree.")
-                .font(.system(size: 12))
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 280)
-        }
-    }
+                    Spacer()
 
-    private var initialOnlineStateView: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "globe")
-                .font(.system(size: 32))
-                .foregroundStyle(.blue.opacity(0.8))
+                    Button(action: {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            libraryStore.clearRecentSearchPlayedTracks()
+                        }
+                    }) {
+                        Text("CLEAR")
+                            .font(.system(size: 10, weight: .bold, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(Color.primary.opacity(0.06))
+                            .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+                }
 
-            Text("Search online music catalogues for tracks, albums, and artists.")
-                .font(.system(size: 12))
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 280)
+                LazyVStack(alignment: .leading, spacing: 4) {
+                    ForEach(Array(recentTracks.enumerated()), id: \.element.id) { index, track in
+                        TrackRowView(
+                            track: track,
+                            isCurrentTrack: track.id == playerService.currentTrack?.id,
+                            isPlaying: playerService.playbackStatus.isPlaying && track.id == playerService.currentTrack?.id,
+                            isNextTrack: track.id == playerService.nextTrack?.id,
+                            isInPlayNext: playerService.playNextQueue.contains(where: { $0.id == track.id }),
+                            isTapToPlayNextEnabled: libraryStore.settings.tapToPlayNext,
+                            onPlay: {
+                                libraryStore.recordSearchPlayedTrack(track)
+                                playerService.play(track: track, inQueue: recentTracks, startIndex: index)
+                            },
+                            onPlayNext: {
+                                playerService.insertPlayNextFront(track: track)
+                            },
+                            onQueueNext: {
+                                playerService.playNext(track: track)
+                            },
+                            onAddToQueue: {
+                                playerService.appendToQueue(track: track)
+                            },
+                            onAddToPlaylist: {
+                                selectedTrackForPlaylist = track
+                            },
+                            onShowInfo: {
+                                selectedTrackForInfo = track
+                            },
+                            onSelectArtist: { artistName in
+                                if let artistObj = libraryStore.findArtist(name: artistName) {
+                                    selectedArtistForNavigation = artistObj
+                                }
+                            },
+                            onSelectAlbum: {
+                                if let albumObj = libraryStore.findAlbum(title: track.album, artist: track.artist) {
+                                    selectedAlbumForNavigation = albumObj
+                                }
+                            }
+                        )
+                    }
+                }
+            }
         }
     }
 
@@ -792,13 +819,6 @@ public struct GlobalSearchView: View {
             }
             .navigationTitle("Add to Playlist")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Done") {
-                        selectedTrackForPlaylist = nil
-                    }
-                }
-            }
         }
     }
 
@@ -900,6 +920,7 @@ public struct SearchTreeTrackRowView: View {
 
             // Foreground Track Content
             Button(action: {
+                libraryStore.recordSearchPlayedTrack(track)
                 playerService.play(
                     track: track,
                     inQueue: allAlbumTracks,
@@ -953,6 +974,7 @@ public struct SearchTreeTrackRowView: View {
         }
         .contextMenu {
             Button(action: {
+                libraryStore.recordSearchPlayedTrack(track)
                 playerService.play(
                     track: track,
                     inQueue: allAlbumTracks,
@@ -1039,7 +1061,7 @@ public struct SearchTreeTrackRowView: View {
 
 // MARK: - Search Album Tree Node Row
 
-public struct SearchAlbumTreeNodeRow: View {
+public struct SearchAlbumTreeNodeRow: View, Equatable {
     public let albumNode: SearchTreeAlbumNode
     public let artistNode: SearchTreeArtistNode
     public let isExpanded: Bool
@@ -1050,6 +1072,12 @@ public struct SearchAlbumTreeNodeRow: View {
     public let onSelectAlbum: (Album) -> Void
     public let onSelectTrackForPlaylist: (Track) -> Void
     public let onSelectTrackForInfo: (Track) -> Void
+
+    public static func == (lhs: SearchAlbumTreeNodeRow, rhs: SearchAlbumTreeNodeRow) -> Bool {
+        lhs.albumNode.id == rhs.albumNode.id &&
+        lhs.albumNode.relevanceScore == rhs.albumNode.relevanceScore &&
+        lhs.isExpanded == rhs.isExpanded
+    }
 
     public var body: some View {
         let resolvedAlbumArt = albumNode.album.artworkKey ?? albumNode.album.tracks.first(where: { $0.artworkKey != nil })?.artworkKey
@@ -1112,7 +1140,7 @@ public struct SearchAlbumTreeNodeRow: View {
             .albumContextMenu(album: albumNode.album, libraryStore: libraryStore, playerService: playerService)
 
             if isExpanded && !albumNode.tracks.isEmpty {
-                LazyVStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: 4) {
                     ForEach(Array(albumNode.tracks.enumerated()), id: \.element.id) { index, trackNode in
                         SearchTreeTrackRowView(
                             trackNode: trackNode,
@@ -1143,7 +1171,7 @@ public struct SearchAlbumTreeNodeRow: View {
 
 // MARK: - Search Artist Tree Node Row
 
-public struct SearchArtistTreeNodeRow: View {
+public struct SearchArtistTreeNodeRow: View, Equatable {
     public let artistNode: SearchTreeArtistNode
     public let isExpanded: Bool
     public let expandedAlbumIDs: Set<String>
@@ -1156,9 +1184,15 @@ public struct SearchArtistTreeNodeRow: View {
     public let onToggleArtistExpansion: (String) -> Void
     public let onToggleAlbumExpansion: (String, String) -> Void
 
+    public static func == (lhs: SearchArtistTreeNodeRow, rhs: SearchArtistTreeNodeRow) -> Bool {
+        lhs.artistNode.id == rhs.artistNode.id &&
+        lhs.artistNode.relevanceScore == rhs.artistNode.relevanceScore &&
+        lhs.isExpanded == rhs.isExpanded &&
+        lhs.expandedAlbumIDs == rhs.expandedAlbumIDs
+    }
+
     public var body: some View {
-        let totalTracks = artistNode.albums.reduce(0) { $0 + $1.tracks.count }
-        let summary = "\(artistNode.albums.count) \(artistNode.albums.count == 1 ? "ALBUM" : "ALBUMS") · \(totalTracks) \(totalTracks == 1 ? "TRACK" : "TRACKS")"
+        let summary = artistNode.artist.discographySummary
 
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 12) {
@@ -1211,6 +1245,7 @@ public struct SearchArtistTreeNodeRow: View {
 
                 Button(action: {
                     if let first = artistNode.artist.tracks.first {
+                        libraryStore.recordSearchPlayedTrack(first)
                         playerService.play(track: first, inQueue: artistNode.artist.tracks)
                     }
                 }) {
@@ -1221,6 +1256,7 @@ public struct SearchArtistTreeNodeRow: View {
                     var shuffled = artistNode.artist.tracks
                     shuffled.shuffle()
                     if let first = shuffled.first {
+                        libraryStore.recordSearchPlayedTrack(first)
                         playerService.play(track: first, inQueue: shuffled)
                     }
                 }) {
@@ -1229,14 +1265,14 @@ public struct SearchArtistTreeNodeRow: View {
             }
 
             if isExpanded && !artistNode.albums.isEmpty {
-                LazyVStack(alignment: .leading, spacing: 14) {
+                VStack(alignment: .leading, spacing: 14) {
                     let studioAlbums = artistNode.studioAlbumNodes
                     let singles = artistNode.singlesNodes
                     let alternates = artistNode.alternatesNodes
                     let featured = artistNode.featuredAlbumNodes
 
                     if !studioAlbums.isEmpty {
-                        LazyVStack(alignment: .leading, spacing: 6) {
+                        VStack(alignment: .leading, spacing: 6) {
                             Text("ALBUMS (\(studioAlbums.count))")
                                 .font(.system(size: 10, weight: .bold, design: .monospaced))
                                 .foregroundStyle(Color.secondary.opacity(0.65))
@@ -1257,12 +1293,13 @@ public struct SearchArtistTreeNodeRow: View {
                                     onSelectTrackForPlaylist: onSelectTrackForPlaylist,
                                     onSelectTrackForInfo: onSelectTrackForInfo
                                 )
+                                .equatable()
                             }
                         }
                     }
 
                     if !singles.isEmpty {
-                        LazyVStack(alignment: .leading, spacing: 6) {
+                        VStack(alignment: .leading, spacing: 6) {
                             Text("SINGLES (\(singles.count))")
                                 .font(.system(size: 10, weight: .bold, design: .monospaced))
                                 .foregroundStyle(Color.secondary.opacity(0.65))
@@ -1283,12 +1320,13 @@ public struct SearchArtistTreeNodeRow: View {
                                     onSelectTrackForPlaylist: onSelectTrackForPlaylist,
                                     onSelectTrackForInfo: onSelectTrackForInfo
                                 )
+                                .equatable()
                             }
                         }
                     }
 
                     if !alternates.isEmpty {
-                        LazyVStack(alignment: .leading, spacing: 6) {
+                        VStack(alignment: .leading, spacing: 6) {
                             Text("ALTERNATES (\(alternates.count))")
                                 .font(.system(size: 10, weight: .bold, design: .monospaced))
                                 .foregroundStyle(Color.secondary.opacity(0.65))
@@ -1309,12 +1347,13 @@ public struct SearchArtistTreeNodeRow: View {
                                     onSelectTrackForPlaylist: onSelectTrackForPlaylist,
                                     onSelectTrackForInfo: onSelectTrackForInfo
                                 )
+                                .equatable()
                             }
                         }
                     }
 
                     if !featured.isEmpty {
-                        LazyVStack(alignment: .leading, spacing: 6) {
+                        VStack(alignment: .leading, spacing: 6) {
                             Text("FEATURED ON (\(featured.count))")
                                 .font(.system(size: 10, weight: .bold, design: .monospaced))
                                 .foregroundStyle(Color.secondary.opacity(0.65))
@@ -1335,6 +1374,7 @@ public struct SearchArtistTreeNodeRow: View {
                                     onSelectTrackForPlaylist: onSelectTrackForPlaylist,
                                     onSelectTrackForInfo: onSelectTrackForInfo
                                 )
+                                .equatable()
                             }
                         }
                     }
@@ -1415,6 +1455,7 @@ public struct LibrarySearchResultsContainer: View, Equatable {
                                 onToggleArtistExpansion: onToggleArtistExpansion,
                                 onToggleAlbumExpansion: onToggleAlbumExpansion
                             )
+                            .equatable()
                         }
                     } else if !results.directMatchedAlbums.isEmpty {
                         filteredAlbumsList
@@ -1434,6 +1475,8 @@ public struct LibrarySearchResultsContainer: View, Equatable {
             .padding(.bottom, 140)
         }
         .scrollDismissesKeyboard(.interactively)
+        .scrollBounceBehavior(.always)
+        .ignoresSafeArea(.keyboard, edges: .bottom)
     }
 
     // MARK: - Tree Controls Bar
@@ -1644,6 +1687,7 @@ public struct LibrarySearchResultsContainer: View, Equatable {
                     isInPlayNext: playNextSet.contains(track.id),
                     isTapToPlayNextEnabled: isTapToPlayNext,
                     onPlay: {
+                        libraryStore.recordSearchPlayedTrack(track)
                         playerService.play(track: track, inQueue: allTracks, startIndex: index)
                     },
                     onPlayNext: {

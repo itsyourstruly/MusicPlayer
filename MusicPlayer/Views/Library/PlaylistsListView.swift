@@ -6,6 +6,7 @@ public struct PlaylistsListView: View {
     @Bindable var playerService: AudioPlayerService
 
     @State private var showingCreateSheet: Bool = false
+    @State private var selectedPlaylistID: UUID? = nil
 
     // Columns
     private let columns = [
@@ -54,7 +55,9 @@ public struct PlaylistsListView: View {
             } else {
                 LazyVGrid(columns: columns, spacing: 18) {
                     ForEach(libraryStore.filteredPlaylists) { playlist in
-                        NavigationLink(destination: PlaylistDetailView(playlistID: playlist.id, libraryStore: libraryStore, playerService: playerService)) {
+                        Button(action: {
+                            selectedPlaylistID = playlist.id
+                        }) {
                             VStack(alignment: .leading, spacing: 6) {
                                 ZStack(alignment: .topTrailing) {
                                     AlbumArtworkView(
@@ -114,6 +117,9 @@ public struct PlaylistsListView: View {
         // Modal presentation sheet
         .sheet(isPresented: $showingCreateSheet) {
             CreatePlaylistSheet(libraryStore: libraryStore)
+        }
+        .navigationDestination(item: $selectedPlaylistID) { playlistID in
+            PlaylistDetailView(playlistID: playlistID, libraryStore: libraryStore, playerService: playerService)
         }
     }
 }

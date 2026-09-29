@@ -32,32 +32,45 @@ public struct AlbumArtworkView: View {
         self.cornerRadius = cornerRadius
     }
 
-    // Main view layout structure
     public var body: some View {
         ZStack {
             if let image = loadedImage {
                 image
                     .resizable()
                     .aspectRatio(1.0, contentMode: .fill)
-                    .transition(.opacity)
             } else {
-                typographicPlaceholder
-                    .transition(.opacity)
+                defaultArtworkPlaceholder
             }
         }
         .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-        .onAppear {
-            Task {
-                await loadArtwork()
-            }
-        }
-        .onDisappear {
-            // Free the decoded image bitmap immediately upon exiting the viewport to keep memory minimal
-            self.loadedImage = nil
-        }
         .task(id: artworkKey) {
             await loadArtwork()
         }
+    }
+
+    @ViewBuilder
+    private var defaultArtworkPlaceholder: some View {
+        #if canImport(UIKit)
+        if UIImage(named: "art") != nil {
+            Image("art")
+                .resizable()
+                .aspectRatio(1.0, contentMode: .fill)
+        } else {
+            typographicPlaceholder
+        }
+        #elseif canImport(AppKit)
+        if NSImage(named: "art") != nil {
+            Image("art")
+                .resizable()
+                .aspectRatio(1.0, contentMode: .fill)
+        } else {
+            typographicPlaceholder
+        }
+        #else
+        Image("art")
+            .resizable()
+            .aspectRatio(1.0, contentMode: .fill)
+        #endif
     }
 
     private var typographicPlaceholder: some View {
@@ -99,9 +112,7 @@ public struct AlbumArtworkView: View {
             #elseif canImport(AppKit)
             let img = Image(nsImage: platformImg)
             #endif
-            withAnimation(.easeOut(duration: 0.18)) {
-                self.loadedImage = img
-            }
+            self.loadedImage = img
         } else {
             self.loadedImage = nil
         }

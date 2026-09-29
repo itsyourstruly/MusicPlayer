@@ -58,6 +58,7 @@ public actor ShazamRecognitionService: NSObject {
         do {
             try audioFile.read(into: buffer, frameCount: maxFrames)
         } catch {
+            AppLogger.network.error("Shazam failed reading audio buffer for \(fileURL.lastPathComponent): \(error.localizedDescription)")
             return nil
         }
 
@@ -141,6 +142,11 @@ extension ShazamRecognitionService: @preconcurrency SHSessionDelegate {
 
     // Session
     nonisolated public func session(_ session: SHSession, didNotFindMatchFor signature: SHSignature, error: (any Error)?) {
+        if let error = error {
+            AppLogger.network.warning("Shazam did not find match: \(error.localizedDescription)")
+        } else {
+            AppLogger.network.info("Shazam signature evaluated, no match found in Apple catalog.")
+        }
         Task {
             await self.handleMatchResult(nil)
         }

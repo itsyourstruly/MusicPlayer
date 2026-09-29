@@ -15,6 +15,13 @@ public struct FullScreenPlayerView: View {
     @State private var selectedArtistForNavigation: Artist? = nil
     @State private var selectedAlbumForNavigation: Album? = nil
     @State private var dragOffsetY: CGFloat = 0
+    @State private var isDragging: Bool = false
+    @State private var isDismissing: Bool = false
+
+    /// Strict guard preventing button presses while dragging or pulling down to dismiss the full-screen player.
+    private var canTriggerButtonPress: Bool {
+        !isDragging && !isDismissing && dragOffsetY == 0
+    }
 
     // 3D Flip & Lyrics Mode State
     @State private var isArtworkFlipped: Bool = false
@@ -30,7 +37,7 @@ public struct FullScreenPlayerView: View {
     @State private var isLyricsExpanded: Bool = false
 
     private var isLyricsViewActive: Bool {
-        isLyricsViewPreferred && currentTrackHasLyrics
+        isLyricsViewPreferred
     }
 
     // 3D Floating & Physics State
@@ -110,8 +117,9 @@ public struct FullScreenPlayerView: View {
             }
             .contentShape(Rectangle())
             .onTapGesture {
+                guard canTriggerButtonPress else { return }
                 if isArtworkFlipped {
-                    HapticFeedback.selectionChanged()
+                    HapticFeedback.cardFlip()
                     withAnimation(.spring(response: 0.52, dampingFraction: 0.76)) {
                         isArtworkFlipped = false
                     }
@@ -130,6 +138,9 @@ public struct FullScreenPlayerView: View {
                 await checkLyricsAvailabilityForCurrentTrack()
             }
             .onAppear {
+                isDragging = false
+                isDismissing = false
+                dragOffsetY = 0
                 if isArtworkAnimationEnabled {
                     start3DFloatingAnimationLoop()
                 }
@@ -150,7 +161,9 @@ public struct FullScreenPlayerView: View {
                     start3DFloatingAnimationLoop()
                 } else {
                     swayAnimationTask?.cancel()
-                    resetArtworkOrientation()
+                    withAnimation(.spring(response: 0.38, dampingFraction: 0.82)) {
+                        resetArtworkOrientation()
+                    }
                 }
             }
             .onChange(of: playerService.currentTrack?.id) { _, _ in
@@ -161,38 +174,11 @@ public struct FullScreenPlayerView: View {
             }
         }
         .ignoresSafeArea()
-        // Pull-down-to-minimize interactive gesture (when not interacting with artwork)
+        // Pull-down-to-minimize interactive gesture visual transformation
         .offset(y: max(0, dragOffsetY))
         .scaleEffect(dragOffsetY > 0 ? max(0.85, 1.0 - (dragOffsetY / 900)) : 1.0, anchor: .bottom)
         .opacity(dragOffsetY > 0 ? max(0.7, 1.0 - (dragOffsetY / 500)) : 1.0)
-        .gesture(
-            DragGesture()
-                .onChanged { value in
-                    guard !isTouchingArtwork else { return }
-                    if value.translation.height > 0 {
-                        dragOffsetY = value.translation.height
-                    }
-                }
-                .onEnded { value in
-                    guard !isTouchingArtwork else { return }
-                    let h = value.translation.height
-                    let predictedH = value.predictedEndTranslation.height
-
-                    if h > 50 || predictedH > 100 {
-                        HapticFeedback.lightImpact()
-                        dragOffsetY = 0
-                        onDismiss()
-                    } else if h < -35 || predictedH < -60 {
-                        HapticFeedback.lightImpact()
-                        dragOffsetY = 0
-                        showingQueue = true
-                    } else {
-                        withAnimation(.spring(response: 0.35, dampingFraction: 0.82)) {
-                            dragOffsetY = 0
-                        }
-                    }
-                }
-        )
+        .environment(\.isPlayerDraggingOrDismissing, isDragging || isDismissing || dragOffsetY != 0)
         .sheet(isPresented: $showingQueue) {
             PlayerQueueView(playerService: playerService, libraryStore: libraryStore)
         }
@@ -206,6 +192,8 @@ public struct FullScreenPlayerView: View {
         .sheet(isPresented: $showingPlaybackSheet) {
             PlaybackControlsSheetView(playerService: playerService)
                 .environment(\.appTheme, libraryStore.settings.appTheme)
+                .presentationDetents([.large])
+                .presentationDragIndicator(.visible)
         }
         .sheet(isPresented: $showingPlaylistPicker) {
             if let track = playerService.currentTrack {
@@ -219,14 +207,6 @@ public struct FullScreenPlayerView: View {
                     libraryStore: libraryStore,
                     playerService: playerService
                 )
-                .toolbar {
-                    ToolbarItem(placement: .topBarTrailing) {
-                        Button("DONE") {
-                            selectedArtistForNavigation = nil
-                        }
-                        .font(.system(size: 13, weight: .bold, design: .monospaced))
-                    }
-                }
             }
         }
         .sheet(item: $selectedAlbumForNavigation) { album in
@@ -236,14 +216,6 @@ public struct FullScreenPlayerView: View {
                     libraryStore: libraryStore,
                     playerService: playerService
                 )
-                .toolbar {
-                    ToolbarItem(placement: .topBarTrailing) {
-                        Button("DONE") {
-                            selectedAlbumForNavigation = nil
-                        }
-                        .font(.system(size: 13, weight: .bold, design: .monospaced))
-                    }
-                }
             }
         }
     }
@@ -292,7 +264,12 @@ public struct FullScreenPlayerView: View {
                 playerService: playerService,
                 foregroundColor: palette.foregroundColor,
                 secondaryForegroundColor: palette.secondaryForegroundColor,
-                style: .fullscreen
+                style: .fullscreen,
+                audioSpecs: libraryStore.settings.showAudioSpecsInPlayer ? track.technicalSummary : nil,
+                useProgressBar: libraryStore.settings.useProgressBar,
+                onCollapse: {
+                    onDismiss()
+                }
             )
             .padding(.horizontal, 28)
             .zIndex(3)
@@ -303,7 +280,8 @@ public struct FullScreenPlayerView: View {
             PlayerControlsView(
                 playerService: playerService,
                 foregroundColor: palette.foregroundColor,
-                secondaryForegroundColor: palette.secondaryForegroundColor
+                secondaryForegroundColor: palette.secondaryForegroundColor,
+                canPerformAction: { canTriggerButtonPress }
             )
             .padding(.vertical, 4)
             .zIndex(3)
@@ -312,7 +290,10 @@ public struct FullScreenPlayerView: View {
 
             // Bottom Action Bar (QUEUE on left, Audio Route on right)
             HStack(spacing: 24) {
-                Button(action: { showingQueue = true }) {
+                Button(action: {
+                    guard canTriggerButtonPress else { return }
+                    showingQueue = true
+                }) {
                     HStack(spacing: 6) {
                         Text("QUEUE")
                             .font(.system(size: 13, weight: .bold, design: .monospaced))
@@ -329,13 +310,43 @@ public struct FullScreenPlayerView: View {
 
                 AirPlayButtonView(
                     routeName: playerService.currentAudioRouteName,
-                    foregroundColor: palette.foregroundColor
+                    foregroundColor: palette.foregroundColor,
+                    onTap: {
+                        guard canTriggerButtonPress else { return }
+                        HapticFeedback.lightImpact()
+                        RoutePickerManager.shared.presentRoutePicker()
+                    }
                 )
             }
             .padding(.horizontal, 28)
             .padding(.bottom, max(bottomInset, 20) + 4)
             .zIndex(3)
         }
+        .contentShape(Rectangle())
+        .gesture(
+            DragGesture(minimumDistance: 15)
+                .onChanged { value in
+                    if value.translation.height > 0 {
+                        isDragging = true
+                        dragOffsetY = value.translation.height
+                    }
+                }
+                .onEnded { value in
+                    if value.translation.height > 80 {
+                        isDismissing = true
+                        onDismiss()
+                    } else if value.translation.height < -50 {
+                        showingQueue = true
+                    } else {
+                        withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+                            dragOffsetY = 0
+                        }
+                    }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                        isDragging = false
+                    }
+                }
+        )
     }
 
     // MARK: - Lyrics Mode Layout
@@ -350,20 +361,29 @@ public struct FullScreenPlayerView: View {
                     playerService: playerService,
                     foregroundColor: palette.foregroundColor,
                     secondaryForegroundColor: palette.secondaryForegroundColor,
-                    style: .fullscreen
+                    style: .fullscreen,
+                    audioSpecs: libraryStore.settings.showAudioSpecsInPlayer ? track.technicalSummary : nil,
+                    useProgressBar: libraryStore.settings.useProgressBar,
+                    onCollapse: {
+                        onDismiss()
+                    }
                 )
                 .padding(.horizontal, 28)
 
                 PlayerControlsView(
                     playerService: playerService,
                     foregroundColor: palette.foregroundColor,
-                    secondaryForegroundColor: palette.secondaryForegroundColor
+                    secondaryForegroundColor: palette.secondaryForegroundColor,
+                    canPerformAction: { canTriggerButtonPress }
                 )
                 .padding(.vertical, 4)
 
                 // Bottom Action Bar (QUEUE on left, Audio Route on right)
                 HStack(spacing: 24) {
-                    Button(action: { showingQueue = true }) {
+                    Button(action: {
+                        guard canTriggerButtonPress else { return }
+                        showingQueue = true
+                    }) {
                         HStack(spacing: 6) {
                             Text("QUEUE")
                                 .font(.system(size: 13, weight: .bold, design: .monospaced))
@@ -380,12 +400,42 @@ public struct FullScreenPlayerView: View {
 
                     AirPlayButtonView(
                         routeName: playerService.currentAudioRouteName,
-                        foregroundColor: palette.foregroundColor
+                        foregroundColor: palette.foregroundColor,
+                        onTap: {
+                            guard canTriggerButtonPress else { return }
+                            HapticFeedback.lightImpact()
+                            RoutePickerManager.shared.presentRoutePicker()
+                        }
                     )
                 }
                 .padding(.horizontal, 28)
                 .padding(.bottom, 28)
             }
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 15)
+                    .onChanged { value in
+                        if value.translation.height > 0 {
+                            isDragging = true
+                            dragOffsetY = value.translation.height
+                        }
+                    }
+                    .onEnded { value in
+                        if value.translation.height > 80 {
+                            isDismissing = true
+                            onDismiss()
+                        } else if value.translation.height < -50 {
+                            showingQueue = true
+                        } else {
+                            withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+                                dragOffsetY = 0
+                            }
+                        }
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                            isDragging = false
+                        }
+                    }
+            )
             .zIndex(1)
 
             // Central Lyrics Engine View (Floats over bottom controls when expanded)
@@ -397,6 +447,7 @@ public struct FullScreenPlayerView: View {
                 foregroundColor: palette.foregroundColor,
                 secondaryForegroundColor: palette.secondaryForegroundColor,
                 onSeek: { targetTime in
+                    HapticFeedback.scrubCommit()
                     playerService.seek(to: targetTime)
                 },
                 onLyricsAvailabilityChanged: { hasLyrics in
@@ -423,16 +474,6 @@ public struct FullScreenPlayerView: View {
 
     private func heroArtworkView(track: Track, dimension: CGFloat, isPlaying: Bool) -> some View {
         let isAlbumColor = libraryStore.settings.playerBackgroundStyle == .albumColor
-        let primaryShadowColor: Color = isAlbumColor ?
-            Color.black.opacity(isPlaying ? 0.35 : 0.0) :
-            palette.primaryColor.opacity(isPlaying ? 0.28 : 0.0)
-        let deepShadowColor: Color = Color.black.opacity(
-            isPlaying ? (isAlbumColor ? 0.30 : 0.24) : 0.0
-        )
-        let contactShadowColor: Color = Color.black.opacity(
-            isPlaying ? (isAlbumColor ? 0.16 : 0.10) : 0.0
-        )
-
         let effectivePitch: Double = isTouchingArtwork ? touchPitch : currentPitch
         let effectiveYaw: Double = isTouchingArtwork ? touchYaw : currentYaw
         let effectiveRoll: Double = isTouchingArtwork ? touchRoll : currentRoll
@@ -441,10 +482,13 @@ public struct FullScreenPlayerView: View {
         let effectiveStretchY: CGFloat = isTouchingArtwork ? touchStretchY : currentStretchY
         let effectiveScale: CGFloat = (isPlaying ? 1.0 : 0.84) * (isTouchingArtwork ? touchScale : 1.0)
 
-        let shadowOffsetX: CGFloat = isPlaying ? CGFloat(effectiveYaw * -1.85 + effectiveRoll * 0.7) : 0
-        let baseShadowOffsetY: Double = 11.5 + effectivePitch * 1.5 + Double(effectiveElevation * 0.75)
-        let shadowOffsetY: CGFloat = isPlaying ? CGFloat(baseShadowOffsetY) : 0
-        let shadowRadius: CGFloat = isPlaying ? max(14.0, 24.0 + effectiveElevation * 1.2) : 0
+        let shadowBaseOpacity: Double = isPlaying ? 0.32 : 0.16
+        let shadowRadius: CGFloat = isPlaying ? max(14.0, 24.0 + effectiveElevation * 1.2) : 10.0
+        let shadowOffsetY: CGFloat = isPlaying ? CGFloat(11.5 + effectivePitch * 1.5 + Double(effectiveElevation * 0.75)) : 5.0
+        let shadowOffsetX: CGFloat = isPlaying ? CGFloat(effectiveYaw * -1.85 + effectiveRoll * 0.7) : 0.0
+
+        let primaryShadowColor: Color = Color.black.opacity(shadowBaseOpacity)
+        let contactShadowColor: Color = Color.black.opacity(shadowBaseOpacity * 0.5)
 
         return ZStack {
             // Front Card: Album Artwork
@@ -459,7 +503,7 @@ public struct FullScreenPlayerView: View {
                 .frame(width: dimension, height: dimension)
                 .aspectRatio(1.0, contentMode: .fit)
                 .onTapGesture {
-                    HapticFeedback.selectionChanged()
+                    HapticFeedback.cardFlip()
                     withAnimation(.spring(response: 0.52, dampingFraction: 0.76)) {
                         isArtworkFlipped = true
                     }
@@ -472,9 +516,8 @@ public struct FullScreenPlayerView: View {
         }
         .frame(width: dimension, height: dimension)
         .shadow(color: primaryShadowColor, radius: shadowRadius, x: shadowOffsetX, y: shadowOffsetY)
-        .shadow(color: deepShadowColor, radius: isPlaying ? 16 : 0, x: shadowOffsetX * 0.7, y: shadowOffsetY * 0.75)
-        .shadow(color: contactShadowColor, radius: isPlaying ? 6 : 0, x: shadowOffsetX * 0.35, y: shadowOffsetY * 0.35)
-        .offset(y: isPlaying ? effectiveElevation : 0)
+        .shadow(color: contactShadowColor, radius: isPlaying ? 12 : 5, x: shadowOffsetX * 0.5, y: shadowOffsetY * 0.6)
+        .offset(y: effectiveElevation)
         .rotationEffect(.degrees(isArtworkAnimationEnabled ? effectiveRoll : 0))
         .rotation3DEffect(
             .degrees(isArtworkFlipped ? 180 : (isArtworkAnimationEnabled ? effectivePitch : 0)),
@@ -489,12 +532,12 @@ public struct FullScreenPlayerView: View {
             perspective: 0.55
         )
         .scaleEffect(
-            x: isPlaying ? (isArtworkAnimationEnabled ? effectiveStretchX : 1.0) : 1.0,
-            y: isPlaying ? (isArtworkAnimationEnabled ? effectiveStretchY : 1.0) : 1.0,
+            x: isArtworkAnimationEnabled ? effectiveStretchX : 1.0,
+            y: isArtworkAnimationEnabled ? effectiveStretchY : 1.0,
             anchor: .center
         )
         .scaleEffect(effectiveScale, anchor: .center)
-        .animation(.spring(response: 0.46, dampingFraction: 0.72), value: isPlaying)
+        .animation(.spring(response: 0.38, dampingFraction: 0.74), value: isPlaying)
         .contentShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
         .gesture(
             LongPressGesture(minimumDuration: 1.0)
@@ -534,7 +577,8 @@ public struct FullScreenPlayerView: View {
 
             // 1. LYRICS Button (Large text, no background, blue when enabled)
             Button(action: {
-                HapticFeedback.lightImpact()
+                guard canTriggerButtonPress else { return }
+                HapticFeedback.modeToggle(isOn: !isLyricsViewPreferred)
                 withAnimation(.spring(response: 0.42, dampingFraction: 0.82)) {
                     isLyricsViewPreferred.toggle()
                     if isLyricsViewPreferred {
@@ -551,7 +595,8 @@ public struct FullScreenPlayerView: View {
 
             // 2. ANIMATE ARTWORK Toggle Button (Large text, no background)
             Button(action: {
-                HapticFeedback.lightImpact()
+                guard canTriggerButtonPress else { return }
+                HapticFeedback.modeToggle(isOn: !isArtworkAnimationEnabled)
                 withAnimation(.easeInOut(duration: 0.2)) {
                     isArtworkAnimationEnabled.toggle()
                     if !isArtworkAnimationEnabled {
@@ -577,6 +622,7 @@ public struct FullScreenPlayerView: View {
                 HStack(spacing: 14) {
                     ForEach(PlayerBackgroundStyle.allCases, id: \.self) { style in
                         Button(action: {
+                            guard canTriggerButtonPress else { return }
                             HapticFeedback.selectionChanged()
                             withAnimation(.easeInOut(duration: 0.2)) {
                                 libraryStore.settings.playerBackgroundStyle = style
@@ -598,35 +644,25 @@ public struct FullScreenPlayerView: View {
 
             Spacer()
 
-            // Flip Back Prompt
-            Button(action: {
-                withAnimation(.spring(response: 0.52, dampingFraction: 0.76)) {
-                    isArtworkFlipped = false
-                }
-            }) {
-                Text("TAP TO FLIP BACK")
-                    .font(.system(size: 11, weight: .bold, design: .monospaced))
-                    .foregroundStyle(Color.white.opacity(0.30))
-            }
-            .buttonStyle(.plain)
+            // Flip back prompt
+            Text("TAP ANYWHERE TO FLIP BACK")
+                .font(.system(size: 11, weight: .bold, design: .monospaced))
+                .foregroundStyle(Color.white.opacity(0.30))
+                .padding(.bottom, 12)
         }
         .frame(width: dimension, height: dimension)
         .background(
             RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .fill(Color.black.opacity(0.88))
-                .background(
-                    RoundedRectangle(cornerRadius: 22, style: .continuous)
-                        .fill(.ultraThinMaterial)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 22, style: .continuous)
-                        .stroke(Color.white.opacity(0.15), lineWidth: 1)
-                )
+                .fill(Color(red: 0.12, green: 0.12, blue: 0.14).opacity(0.95))
         )
         .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .stroke(Color.white.opacity(0.15), lineWidth: 1)
+        )
         .contentShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
         .onTapGesture {
-            HapticFeedback.selectionChanged()
+            HapticFeedback.cardFlip()
             withAnimation(.spring(response: 0.52, dampingFraction: 0.76)) {
                 isArtworkFlipped = false
             }
@@ -651,6 +687,7 @@ public struct FullScreenPlayerView: View {
                 .frame(width: 38, height: 4.5)
                 .contentShape(Rectangle())
                 .onTapGesture {
+                    guard canTriggerButtonPress else { return }
                     HapticFeedback.lightImpact()
                     onDismiss()
                 }
@@ -661,6 +698,7 @@ public struct FullScreenPlayerView: View {
                     HStack(spacing: 12) {
                         // Artwork mini thumbnail (Tap to return to player view)
                         Button(action: {
+                            guard canTriggerButtonPress else { return }
                             HapticFeedback.lightImpact()
                             withAnimation(.spring(response: 0.42, dampingFraction: 0.82)) {
                                 isLyricsViewPreferred = false
@@ -702,6 +740,7 @@ public struct FullScreenPlayerView: View {
                             .foregroundStyle(palette.secondaryForegroundColor)
 
                         Button(action: {
+                            guard canTriggerButtonPress else { return }
                             HapticFeedback.lightImpact()
                             if let albumObj = libraryStore.findAlbum(title: track.album, artist: track.artist) {
                                 selectedAlbumForNavigation = albumObj
@@ -715,6 +754,14 @@ public struct FullScreenPlayerView: View {
                                 .truncationMode(.tail)
                         }
                         .buttonStyle(.plain)
+                        .contextMenu {
+                            Button {
+                                HapticFeedback.notificationSuccess()
+                                playAlbumNext(for: track)
+                            } label: {
+                                Label("PLAY ALBUM NEXT", systemImage: "text.line.first.and.arrowtriangle.forward")
+                            }
+                        }
                     }
                     .padding(.horizontal, 64)
                     .frame(maxWidth: .infinity, alignment: .center)
@@ -728,7 +775,8 @@ public struct FullScreenPlayerView: View {
                     if isLyricsViewActive && isLyricsExpanded {
                         HStack(spacing: 16) {
                             Button(action: {
-                                HapticFeedback.mediumImpact()
+                                guard canTriggerButtonPress else { return }
+                                HapticFeedback.trackSkip(forward: false)
                                 playerService.previous()
                             }) {
                                 Image(systemName: "chevron.left.chevron.left.dotted")
@@ -738,7 +786,8 @@ public struct FullScreenPlayerView: View {
                             .buttonStyle(.plain)
 
                             Button(action: {
-                                HapticFeedback.mediumImpact()
+                                guard canTriggerButtonPress else { return }
+                                HapticFeedback.playPause(isPlaying: !playerService.playbackStatus.isPlaying)
                                 playerService.togglePlayPause()
                             }) {
                                 Image(systemName: playerService.playbackStatus.isPlaying ? "pause.fill" : "play.fill")
@@ -748,7 +797,8 @@ public struct FullScreenPlayerView: View {
                             .buttonStyle(.plain)
 
                             Button(action: {
-                                HapticFeedback.mediumImpact()
+                                guard canTriggerButtonPress else { return }
+                                HapticFeedback.trackSkip(forward: true)
                                 playerService.next()
                             }) {
                                 Image(systemName: "chevron.right.dotted.chevron.right")
@@ -758,15 +808,32 @@ public struct FullScreenPlayerView: View {
                             .buttonStyle(.plain)
                         }
                         .transition(.opacity.combined(with: .scale(scale: 0.92)))
-                    } else {
                         Menu {
-                            Button(action: { showingPlaybackSheet = true }) {
+                            Button(action: {
+                                guard canTriggerButtonPress else { return }
+                                HapticFeedback.lightImpact()
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                                    showingPlaybackSheet = true
+                                }
+                            }) {
                                 Text("PLAYBACK")
                             }
-                            Button(action: { showingPlaylistPicker = true }) {
+                            Button(action: {
+                                guard canTriggerButtonPress else { return }
+                                HapticFeedback.lightImpact()
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                                    showingPlaylistPicker = true
+                                }
+                            }) {
                                 Text("ADD TO PLAYLIST")
                             }
-                            Button(action: { showingFileInfo = true }) {
+                            Button(action: {
+                                guard canTriggerButtonPress else { return }
+                                HapticFeedback.lightImpact()
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                                    showingFileInfo = true
+                                }
+                            }) {
                                 Text("FILE INFO")
                             }
                         } label: {
@@ -782,6 +849,47 @@ public struct FullScreenPlayerView: View {
             }
             .padding(.horizontal, 20)
         }
+        .contentShape(Rectangle())
+        .gesture(
+            DragGesture(minimumDistance: 10)
+                .onChanged { value in
+                    if value.translation.height > 0 {
+                        isDragging = true
+                        dragOffsetY = value.translation.height
+                    }
+                }
+                .onEnded { value in
+                    if value.translation.height > 80 {
+                        isDismissing = true
+                        onDismiss()
+                    } else {
+                        withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+                            dragOffsetY = 0
+                        }
+                    }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                        isDragging = false
+                    }
+                }
+        )
+    }
+
+    private func playAlbumNext(for track: Track) {
+        let albumTracks: [Track]
+        if let albumObj = libraryStore.findAlbum(title: track.album, artist: track.artist), !albumObj.tracks.isEmpty {
+            albumTracks = albumObj.tracks
+        } else {
+            let matched = libraryStore.tracks.filter {
+                $0.album.localizedCaseInsensitiveCompare(track.album) == .orderedSame &&
+                ($0.artist.localizedCaseInsensitiveCompare(track.artist) == .orderedSame ||
+                 $0.albumArtist?.localizedCaseInsensitiveCompare(track.artist) == .orderedSame)
+            }
+            albumTracks = matched.isEmpty ? libraryStore.tracks.filter {
+                $0.album.localizedCaseInsensitiveCompare(track.album) == .orderedSame
+            } : matched
+        }
+        guard !albumTracks.isEmpty else { return }
+        playerService.insertPlayNextFront(tracks: albumTracks)
     }
 
     // MARK: - Playlist Picker Sheet
@@ -838,7 +946,7 @@ public struct FullScreenPlayerView: View {
 
         if !isTouchingArtwork {
             isTouchingArtwork = true
-            HapticFeedback.lightImpact()
+            HapticFeedback.dragPickup()
         }
 
         let maxAngle: Double = 12.0
@@ -1025,3 +1133,4 @@ public struct FullScreenPlayerView: View {
         touchStretchY = 1.0
     }
 }
+

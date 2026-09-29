@@ -175,29 +175,16 @@ public struct PlayerQueueView: View {
                     .scrollContentBackground(.hidden)
                     .background(appTheme.backgroundColor.ignoresSafeArea())
                     .onAppear {
-                        // Scroll to Now Playing on appearance so it starts at the top
-                        Task { @MainActor in
-                            try? await Task.sleep(nanoseconds: 50_000_000)
-                            guard !Task.isCancelled else { return }
-                            withAnimation(.easeOut(duration: 0.2)) {
-                                proxy.scrollTo("now_playing_item", anchor: .top)
-                            }
-                        }
+                        proxy.scrollTo("now_playing_item", anchor: .top)
+                    }
+                    .task {
+                        proxy.scrollTo("now_playing_item", anchor: .top)
                     }
                 }
             }
             .background(appTheme.backgroundColor.ignoresSafeArea())
             .navigationTitle("QUEUE")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button(action: { dismiss() }) {
-                        Text("DONE")
-                            .font(.system(size: 13, weight: .bold, design: .monospaced))
-                            .foregroundStyle(Color.primary)
-                    }
-                }
-            }
             .navigationDestination(item: $selectedArtist) { artist in
                 if let store = libraryStore {
                     ArtistDetailView(artist: artist, libraryStore: store, playerService: playerService)
@@ -307,7 +294,7 @@ public struct PlayerQueueView: View {
                 }
             }
         }
-        HapticFeedback.lightImpact()
+        HapticFeedback.dragDrop()
     }
 
     // MARK: - Drag & Drop Pointer Target Handler
@@ -326,7 +313,7 @@ public struct PlayerQueueView: View {
                 withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
                     playerService.movePlayNextItem(fromOffsets: source, toOffset: dest)
                 }
-                HapticFeedback.lightImpact()
+                HapticFeedback.dragDrop()
                 return true
             } else {
                 // Move from Play Next down to Up Next
@@ -335,7 +322,7 @@ public struct PlayerQueueView: View {
                 withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
                     playerService.moveFromPlayNextToQueue(playNextIndex: playNextIdx, queueDestinationIndex: destQueueIndex)
                 }
-                HapticFeedback.lightImpact()
+                HapticFeedback.dragDrop()
                 return true
             }
         } else if let queueIdx = playerService.queue.firstIndex(where: { $0.id == droppedUUID }) {
@@ -345,7 +332,7 @@ public struct PlayerQueueView: View {
                 withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
                     playerService.moveFromQueueToPlayNext(queueIndex: queueIdx, playNextDestinationIndex: destPlayNextIndex)
                 }
-                HapticFeedback.lightImpact()
+                HapticFeedback.dragDrop()
                 return true
             } else {
                 // Intra-move within Up Next
@@ -356,7 +343,7 @@ public struct PlayerQueueView: View {
                 withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
                     playerService.moveQueueItem(fromOffsets: source, toOffset: destQueueIndex)
                 }
-                HapticFeedback.lightImpact()
+                HapticFeedback.dragDrop()
                 return true
             }
         }
@@ -369,14 +356,14 @@ public struct PlayerQueueView: View {
         withAnimation(.spring(response: 0.28, dampingFraction: 0.8)) {
             playerService.moveFromPlayNextToQueue(playNextIndex: playNextIndex, queueDestinationIndex: baseIndex)
         }
-        HapticFeedback.lightImpact()
+        HapticFeedback.dragDrop()
     }
 
     private func moveItemFromUpNextToPlayNext(queueIndex: Int) {
         withAnimation(.spring(response: 0.28, dampingFraction: 0.8)) {
             playerService.moveFromQueueToPlayNext(queueIndex: queueIndex, playNextDestinationIndex: playerService.playNextQueue.count)
         }
-        HapticFeedback.lightImpact()
+        HapticFeedback.dragDrop()
     }
 
     private func navigateToArtist(name: String, fallbackTrack: Track) {

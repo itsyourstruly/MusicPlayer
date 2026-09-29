@@ -26,6 +26,7 @@ public final class EqualizerManager {
             let rounded = (clamped * 2.0).rounded() / 2.0
             if volumeBoosterDB != rounded {
                 volumeBoosterDB = rounded
+                return
             }
             notifyAudioEngine()
         }
@@ -38,6 +39,7 @@ public final class EqualizerManager {
             let rounded = (clamped * 4.0).rounded() / 4.0
             if playbackSpeed != rounded {
                 playbackSpeed = rounded
+                return
             }
             notifyAudioEngine()
         }
@@ -186,7 +188,7 @@ public final class EqualizerManager {
             bandGains: bands.map { $0.gainDB }
         )
 
-        // Dynamically attach or detach audio processing tap on active track
+        // Ensure audio processing tap is attached on active track if not already attached
         playerService?.updateAudioMixForCurrentItem()
 
         // Playback speed dynamic update

@@ -181,7 +181,7 @@ public struct MacPlaybackBarView: View {
                 Button(action: {
                     playerService.previous()
                 }) {
-                    Text("PREV")
+                    Text("BACK")
                         .font(.system(size: 10, weight: .bold, design: .monospaced))
                         .foregroundStyle(
                             playerService.hasPreviousTrack

@@ -109,6 +109,23 @@ public struct OnlineTrackMetadata: Identifiable, Codable, Sendable, Hashable {
         }
         return false
     }
+
+    /// Maps the raw sourceAPI string into a typed MetadataAPIOption.
+    public var sourceAPIOption: MetadataAPIOption {
+        let lower = sourceAPI.lowercased()
+        if lower.contains("deezer") {
+            return .deezer
+        } else if lower.contains("brainz") {
+            return .musicBrainz
+        } else {
+            return .itunes
+        }
+    }
+
+    /// Normalized, user-facing provider name across APPLE MUSIC, DEEZER, and MUSICBRAINZ.
+    public var normalizedSourceAPI: String {
+        sourceAPIOption.displayName
+    }
 }
 
 /// A lightweight diff comparison between a local audio track's current metadata and verified online metadata.

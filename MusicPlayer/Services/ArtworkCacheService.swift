@@ -22,26 +22,32 @@ public actor ArtworkCacheService {
     private let decodedImageCache = NSCache<NSString, PlatformImage>()
     // File manager
     private let fileManager = FileManager.default
+    // Pre-computed static disk cache path and invalid characters for microsecond lookups
+    public static let sharedCacheDirectoryURL: URL = {
+        let paths = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)
+        let baseCacheURL = paths.first ?? FileManager.default.temporaryDirectory
+        let dir = baseCacheURL.appendingPathComponent("ArtworkCache", isDirectory: true)
+        if !FileManager.default.fileExists(atPath: dir.path) {
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        }
+        return dir
+    }()
+
+    private static let safeKeyCharacterSet = CharacterSet(charactersIn: "\\/:*?\"<>|#%&{}<>*?$!'\":@+`|=")
+
     // File system location for cache directory url
     private let cacheDirectoryURL: URL
 
     // Initialize with configured properties
     private init() {
-        // Strict memory-bounded limits (max 40 thumbnails, 10MB total image cost)
-        decodedImageCache.countLimit = 40
-        decodedImageCache.totalCostLimit = 10 * 1024 * 1024
+        // Memory-bounded limits (300 thumbnails, 60MB total image cost)
+        decodedImageCache.countLimit = 300
+        decodedImageCache.totalCostLimit = 60 * 1024 * 1024
 
         rawDataCache.countLimit = 15
         rawDataCache.totalCostLimit = 2 * 1024 * 1024
 
-        // Paths
-        let paths = fileManager.urls(for: .cachesDirectory, in: .userDomainMask)
-        let baseCacheURL = paths.first ?? FileManager.default.temporaryDirectory
-        self.cacheDirectoryURL = baseCacheURL.appendingPathComponent("ArtworkCache", isDirectory: true)
-
-        if !fileManager.fileExists(atPath: cacheDirectoryURL.path) {
-            try? fileManager.createDirectory(at: cacheDirectoryURL, withIntermediateDirectories: true)
-        }
+        self.cacheDirectoryURL = ArtworkCacheService.sharedCacheDirectoryURL
 
         #if canImport(UIKit)
         NotificationCenter.default.addObserver(
@@ -85,17 +91,25 @@ public actor ArtworkCacheService {
         }
     }
 
-    /// Stores artwork data in memory and writes it to disk asynchronously if not already present.
+    /// Invalidates in-memory raw and decoded image caches for a specific artwork key.
+    public func invalidateCachedImage(for key: String) {
+        guard !key.isEmpty else { return }
+        let nsKey = key as NSString
+        rawDataCache.removeObject(forKey: nsKey)
+        // Evict common thumbnail dimensions from decoded cache
+        for dim in [64, 86, 100, 120, 124, 128, 200, 256, 300, 350, 400, 512, 600, 800, 1024] {
+            decodedImageCache.removeObject(forKey: "\(key)_\(dim)" as NSString)
+        }
+    }
+
+    /// Stores artwork data in memory, invalidates stale decoded thumbnails, and writes it to disk atomically.
     public func saveArtwork(data: Data, key: String) {
         guard !data.isEmpty, !key.isEmpty else { return }
         let nsKey = key as NSString
-        let alreadyInMemory = rawDataCache.object(forKey: nsKey) != nil
         rawDataCache.setObject(data as NSData, forKey: nsKey, cost: min(data.count, 500_000))
-
-        if alreadyInMemory { return }
+        invalidateCachedImage(for: key)
 
         let fileURL = cacheDirectoryURL.appendingPathComponent(sanitizedKey(key) + ".art")
-        if fileManager.fileExists(atPath: fileURL.path) { return }
 
         if !fileManager.fileExists(atPath: cacheDirectoryURL.path) {
             try? fileManager.createDirectory(at: cacheDirectoryURL, withIntermediateDirectories: true)
@@ -280,5 +294,17 @@ public actor ArtworkCacheService {
         // Invalid characters
         let invalidCharacters = CharacterSet(charactersIn: "\\/:*?\"<>|#%&{}<>*?$!'\":@+`|=")
         return key.components(separatedBy: invalidCharacters).joined(separator: "_")
+    }
+
+    /// Synchronously checks if artwork file exists on disk for the given key.
+    public static func hasCachedArtworkFile(key: String) -> Bool {
+        guard !key.isEmpty else { return false }
+        let paths = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)
+        let baseCacheURL = paths.first ?? FileManager.default.temporaryDirectory
+        let cacheDir = baseCacheURL.appendingPathComponent("ArtworkCache", isDirectory: true)
+        let invalidCharacters = CharacterSet(charactersIn: "\\/:*?\"<>|#%&{}<>*?$!'\":@+`|=")
+        let sanitized = key.components(separatedBy: invalidCharacters).joined(separator: "_")
+        let fileURL = cacheDir.appendingPathComponent(sanitized + ".art")
+        return FileManager.default.fileExists(atPath: fileURL.path)
     }
 }

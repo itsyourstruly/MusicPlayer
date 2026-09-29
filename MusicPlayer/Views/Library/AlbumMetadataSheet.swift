@@ -15,11 +15,15 @@ public struct AlbumMetadataSheet: View {
     @State private var selectedOnlineAlbum: OnlineAlbumItem? = nil
     @State private var onlineAlbumTracks: [OnlineTrackMetadata] = []
     @State private var isLoadingTracks: Bool = false
-    @State private var preserveFeatures: Bool = true
     @State private var isApplying: Bool = false
     @State private var hasSearched: Bool = false
     @State private var acceptedTrackIDs: Set<UUID> = []
     @State private var rejectedTrackIDs: Set<UUID> = []
+    @State private var unmatchedActions: [UUID: UnmatchedTrackAction] = [:]
+    @State private var isAnalyzingUnmatched: Bool = false
+    @State private var resolvedAssignments: [DisambiguationMatcher.AlbumCutAssignment] = []
+    @State private var unmatchedLocalTracks: [Track] = []
+    @State private var otherAlbumsByArtist: [Album] = []
 
     public init(
         album: Album,
@@ -62,6 +66,14 @@ public struct AlbumMetadataSheet: View {
                         // Side-by-Side Child Tracks Mapping Matrix
                         sideBySideTracksMatrix
 
+                        // Non-Album & Unmatched Tracks Routing Section
+                        if !unmatchedLocalTracks.isEmpty {
+                            Divider()
+                                .overlay(appTheme.separatorColor.opacity(0.35))
+
+                            unmatchedTracksSection
+                        }
+
                         Divider()
                             .overlay(appTheme.separatorColor.opacity(0.35))
 
@@ -75,21 +87,14 @@ public struct AlbumMetadataSheet: View {
             .background(appTheme.backgroundColor.ignoresSafeArea())
             .navigationTitle("ALBUM METADATA")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("DONE") {
-                        dismiss()
-                    }
-                    .font(.system(size: 13, weight: .bold, design: .monospaced))
-                    .foregroundStyle(Color.primary)
-                }
-            }
             .task {
+                recalculateOtherAlbums()
                 if let preselected = selectedOnlineAlbum, onlineAlbumTracks.isEmpty {
                     isLoadingTracks = true
                     let cuts = await MusicMetadataService.shared.fetchOnlineAlbumCuts(albumItem: preselected)
                     self.onlineAlbumTracks = cuts
                     self.isLoadingTracks = false
+                    await computeTrackAssignmentsAsync()
                 }
                 if !hasSearched {
                     await performSearch()
@@ -111,6 +116,8 @@ public struct AlbumMetadataSheet: View {
                 TextField("SEARCH ARTIST & ALBUM ONLINE", text: $searchQuery)
                     .font(.system(size: 13, weight: .medium))
                     .textFieldStyle(.plain)
+                    .autocorrectionDisabled()
+                    .textInputAutocapitalization(.words)
                     .onSubmit {
                         Task {
                             await performSearch()
@@ -189,7 +196,7 @@ public struct AlbumMetadataSheet: View {
             }
 
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 10) {
+                HStack(spacing: 14) {
                     ForEach(candidateAlbums) { item in
                         let isSelected = selectedOnlineAlbum?.id == item.id
 
@@ -210,15 +217,11 @@ public struct AlbumMetadataSheet: View {
                                 }
                                 .frame(width: 38, height: 38)
                                 .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 5, style: .continuous)
-                                        .stroke(Color.primary.opacity(0.15), lineWidth: 1.0)
-                                )
 
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(item.title)
                                         .font(.system(size: 12, weight: .bold))
-                                        .foregroundStyle(Color.primary)
+                                        .foregroundStyle(isSelected ? Color.white : Color.primary)
                                         .lineLimit(1)
 
                                     Text(item.artistName)
@@ -234,18 +237,13 @@ public struct AlbumMetadataSheet: View {
                                         }
                                         Text("• \(item.sourceAPI.uppercased())")
                                             .font(.system(size: 8, weight: .bold, design: .monospaced))
-                                            .foregroundStyle(appTheme.accentColor)
+                                            .foregroundStyle(isSelected ? Color.green : appTheme.accentColor)
                                     }
                                 }
                             }
-                            .padding(.horizontal, 8)
+                            .padding(.horizontal, 4)
                             .padding(.vertical, 6)
-                            .background(isSelected ? appTheme.accentColor.opacity(0.18) : Color.appSecondaryBackground.opacity(0.5))
-                            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                    .stroke(isSelected ? appTheme.accentColor : Color.clear, lineWidth: 1.5)
-                            )
+                            .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
                     }
@@ -391,48 +389,135 @@ public struct AlbumMetadataSheet: View {
 
     // MARK: - Candidates and Bipartite Matching for Local Album
 
-    private var candidateTracksForAlbum: [Track] {
-        var localTracks = album.tracks
-        let localIDs = Set(album.tracks.map { $0.id })
-
-        let cutTitles = Set(onlineAlbumTracks.map { FuzzyMatcher.normalize($0.title) })
-        let cleanArtist = FuzzyMatcher.normalize(album.artist)
-
-        var tier2Candidates: [Track] = []
-        var tier3Candidates: [Track] = []
-        var seenIDs = localIDs
-
-        for track in libraryStore.tracks {
-            guard !seenIDs.contains(track.id) else { continue }
-            let tTitle = FuzzyMatcher.normalize(track.title)
-            guard cutTitles.contains(tTitle) else { continue }
-
-            let tArtist = FuzzyMatcher.normalize(track.artist)
-            let isArtistMatch = tArtist == cleanArtist || tArtist.contains(cleanArtist) || cleanArtist.contains(tArtist)
-
-            if isArtistMatch {
-                tier2Candidates.append(track)
-                seenIDs.insert(track.id)
-            } else {
-                tier3Candidates.append(track)
-                seenIDs.insert(track.id)
+    private func computeTrackAssignmentsAsync() async {
+        guard !onlineAlbumTracks.isEmpty else {
+            await MainActor.run {
+                self.resolvedAssignments = []
+                self.unmatchedLocalTracks = []
             }
+            return
         }
 
-        localTracks.append(contentsOf: tier2Candidates)
-        localTracks.append(contentsOf: tier3Candidates)
-        return localTracks
+        let currentAlbum = self.album
+        let cuts = self.onlineAlbumTracks
+        let selectedOnline = self.selectedOnlineAlbum
+        let allTracks = self.libraryStore.tracks
+
+        let (assignments, initialUnmatched) = await Task.detached(priority: .userInitiated) { () -> ([DisambiguationMatcher.AlbumCutAssignment], [Track]) in
+            let localIDs = Set(currentAlbum.tracks.map { $0.id })
+            var cutTitles = Set<String>()
+            for cut in cuts {
+                cutTitles.insert(FuzzyMatcher.normalize(cut.title))
+                let sig = MetadataSanitizer.buildSignature(title: cut.title, artist: cut.artist, album: cut.album)
+                cutTitles.insert(FuzzyMatcher.normalize(sig.coreTitle))
+            }
+
+            let cleanAlbumArtist = FuzzyMatcher.normalize(currentAlbum.artist)
+            let cleanOnlineArtist = FuzzyMatcher.normalize(selectedOnline?.artistName ?? "")
+
+            var candidateTracks = currentAlbum.tracks
+            var seenIDs = localIDs
+
+            for track in allTracks {
+                guard !seenIDs.contains(track.id) else { continue }
+                let tTitle = FuzzyMatcher.normalize(track.title)
+                let sig = MetadataSanitizer.sanitize(track: track)
+                let tCoreTitle = FuzzyMatcher.normalize(sig.coreTitle)
+                guard cutTitles.contains(tTitle) || cutTitles.contains(tCoreTitle) else { continue }
+
+                let tArtist = FuzzyMatcher.normalize(track.artist)
+                let isArtistMatch = (!cleanAlbumArtist.isEmpty && (tArtist == cleanAlbumArtist || tArtist.contains(cleanAlbumArtist) || cleanAlbumArtist.contains(tArtist))) ||
+                                    (!cleanOnlineArtist.isEmpty && (tArtist == cleanOnlineArtist || tArtist.contains(cleanOnlineArtist) || cleanOnlineArtist.contains(tArtist)))
+
+                if isArtistMatch {
+                    candidateTracks.append(track)
+                    seenIDs.insert(track.id)
+                }
+            }
+
+            let (matched, _) = DisambiguationMatcher.matchAlbumTracklistToCandidates(
+                onlineTracks: cuts,
+                albumTitle: selectedOnline?.title ?? currentAlbum.title,
+                albumArtist: selectedOnline?.artistName ?? currentAlbum.artist,
+                candidateTracks: candidateTracks
+            )
+
+            var matchedInAlbum: Set<UUID> = []
+            for a in matched {
+                guard let local = a.localTrack else { continue }
+                if currentAlbum.tracks.contains(where: { $0.id == local.id }) {
+                    matchedInAlbum.insert(local.id)
+                }
+            }
+            let unmatched = currentAlbum.tracks.filter { !matchedInAlbum.contains($0.id) }
+            return (matched, unmatched)
+        }.value
+
+        await MainActor.run {
+            self.resolvedAssignments = assignments
+            self.updateUnmatchedLocalTracks()
+        }
     }
 
-    private var resolvedAssignments: [DisambiguationMatcher.AlbumCutAssignment] {
-        guard !onlineAlbumTracks.isEmpty else { return [] }
-        let (assignments, _) = DisambiguationMatcher.matchAlbumTracklistToCandidates(
-            onlineTracks: onlineAlbumTracks,
-            albumTitle: selectedOnlineAlbum?.title ?? album.title,
-            albumArtist: selectedOnlineAlbum?.artistName ?? album.artist,
-            candidateTracks: candidateTracksForAlbum
-        )
-        return assignments
+    /// Instantaneous O(N) local filtering (< 0.01ms) for 120fps fluid track toggling without re-running global matching.
+    private func updateUnmatchedLocalTracks() {
+        var matchedInAlbum: Set<UUID> = []
+        for assignment in resolvedAssignments {
+            guard let local = assignment.localTrack else { continue }
+            let isLocalInAlbum = album.tracks.contains(where: { $0.id == local.id })
+            if isLocalInAlbum {
+                if !rejectedTrackIDs.contains(local.id) {
+                    matchedInAlbum.insert(local.id)
+                }
+            }
+        }
+        self.unmatchedLocalTracks = album.tracks.filter { !matchedInAlbum.contains($0.id) }
+    }
+
+    private func recalculateOtherAlbums() {
+        let currentNormTitle = FuzzyMatcher.normalize(album.title)
+        let artistNorm = FuzzyMatcher.normalize(album.artist)
+        let onlineArtistNorm = FuzzyMatcher.normalize(selectedOnlineAlbum?.artistName ?? "")
+        self.otherAlbumsByArtist = libraryStore.albums.filter { other in
+            let otherNormTitle = FuzzyMatcher.normalize(other.title)
+            guard otherNormTitle != currentNormTitle else { return false }
+            let otherArtistNorm = FuzzyMatcher.normalize(other.artist)
+            let isLocalMatch = !artistNorm.isEmpty && (otherArtistNorm == artistNorm || otherArtistNorm.contains(artistNorm) || artistNorm.contains(otherArtistNorm))
+            let isOnlineMatch = !onlineArtistNorm.isEmpty && (otherArtistNorm == onlineArtistNorm || otherArtistNorm.contains(onlineArtistNorm) || onlineArtistNorm.contains(otherArtistNorm))
+            return isLocalMatch || isOnlineMatch
+        }
+    }
+
+    private var sortedUnmatchedLocalTracks: [Track] {
+        unmatchedLocalTracks.sorted { lhs, rhs in
+            let actionLhs = unmatchedActions[lhs.id] ?? .moveToAlternates(reason: "")
+            let actionRhs = unmatchedActions[rhs.id] ?? .moveToAlternates(reason: "")
+
+            let rankLhs: Int
+            switch actionLhs {
+            case .moveToAlbum: rankLhs = 0
+            case .keepInMain: rankLhs = 1
+            case .moveToAlternates: rankLhs = 2
+            }
+
+            let rankRhs: Int
+            switch actionRhs {
+            case .moveToAlbum: rankRhs = 0
+            case .keepInMain: rankRhs = 1
+            case .moveToAlternates: rankRhs = 2
+            }
+
+            if rankLhs != rankRhs {
+                return rankLhs < rankRhs
+            }
+
+            let trackNumL = lhs.trackNumber ?? 999
+            let trackNumR = rhs.trackNumber ?? 999
+            if trackNumL != trackNumR {
+                return trackNumL < trackNumR
+            }
+            return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
+        }
     }
 
     // MARK: - Side-by-Side Child Tracks Matrix
@@ -457,13 +542,13 @@ public struct AlbumMetadataSheet: View {
             .padding(.horizontal, 4)
 
             if !resolvedAssignments.isEmpty {
-                LazyVStack(spacing: 6) {
+                LazyVStack(spacing: 0) {
                     ForEach(Array(resolvedAssignments.enumerated()), id: \.element.id) { index, assignment in
                         assignmentRowSideBySide(index: index, assignment: assignment)
                     }
                 }
             } else {
-                LazyVStack(spacing: 6) {
+                LazyVStack(spacing: 0) {
                     ForEach(Array(album.tracks.enumerated()), id: \.element.id) { index, localTrack in
                         childTrackRowSideBySide(index: index, localTrack: localTrack)
                     }
@@ -488,7 +573,8 @@ public struct AlbumMetadataSheet: View {
             }
         }()
 
-        let statusColor: Color = isAccepted ? Color.green : Color.orange
+        let arrowColor: Color = isAccepted ? Color.green : Color.orange
+        let arrowSystemName: String = isAccepted ? "arrow.right" : "arrow.left"
 
         return Button(action: {
             guard let local = localTrack else { return }
@@ -504,107 +590,110 @@ public struct AlbumMetadataSheet: View {
                     rejectedTrackIDs.remove(local.id)
                 } else {
                     rejectedTrackIDs.insert(local.id)
+                    if unmatchedActions[local.id] == nil {
+                        let fastAction = AlbumOrganizationService.shared.fastLocalResolveUnmatchedTrack(
+                            track: local,
+                            currentAlbum: album,
+                            onlineCuts: onlineAlbumTracks,
+                            otherAlbums: otherAlbumsByArtist
+                        )
+                        self.unmatchedActions[local.id] = fastAction
+                    }
                 }
             }
+            updateUnmatchedLocalTracks()
         }) {
-            HStack(spacing: 6) {
-                // Left: Local Track
-                HStack(spacing: 6) {
-                    if let local = localTrack {
-                        Text("\(index + 1)")
+            VStack(spacing: 0) {
+                HStack(spacing: 8) {
+                    // Left: Local Track (no background, clean text)
+                    HStack(spacing: 6) {
+                        if let local = localTrack {
+                            Text("\(index + 1)")
+                                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                                .foregroundStyle(Color.secondary)
+                                .frame(width: 18, alignment: .leading)
+
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(local.title)
+                                    .font(.system(size: 11, weight: .semibold))
+                                    .foregroundStyle(Color.primary)
+                                    .lineLimit(1)
+
+                                Text(local.artist)
+                                    .font(.system(size: 10))
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+
+                                if isExternalCandidate {
+                                    let originText = local.artist.localizedCaseInsensitiveCompare(album.artist) == .orderedSame
+                                        ? "FOUND IN LIBRARY • TAP TO IMPORT"
+                                        : "FROM ARTIST \"\(local.artist)\" • TAP TO LINK"
+                                    Text(isAccepted ? "CONFIRMED • WILL IMPORT TO ALBUM" : originText)
+                                        .font(.system(size: 8, weight: .bold, design: .monospaced))
+                                        .foregroundStyle(arrowColor)
+                                        .lineLimit(1)
+                                } else if assignment.isMislabeled, let reason = assignment.mislabelReason {
+                                    Text(reason.uppercased())
+                                        .font(.system(size: 8, weight: .bold, design: .monospaced))
+                                        .foregroundStyle(arrowColor)
+                                        .lineLimit(1)
+                                }
+                            }
+
+                            Spacer(minLength: 2)
+                        } else {
+                            Text("—")
+                                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                                .foregroundStyle(.tertiary)
+                                .frame(width: 18, alignment: .leading)
+
+                            Text("MISSING FROM ALBUM")
+                                .font(.system(size: 10, weight: .medium, design: .monospaced))
+                                .foregroundStyle(.tertiary)
+                                .lineLimit(1)
+
+                            Spacer(minLength: 2)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                    // Connector Arrow: Colored; flips to orange left arrow when track is tapped
+                    Image(systemName: arrowSystemName)
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(localTrack != nil ? arrowColor : Color.gray.opacity(0.4))
+                        .frame(width: 20)
+
+                    // Right: Online Cut (no background, clean text)
+                    HStack(spacing: 6) {
+                        let cutNum = cut.trackNumber ?? (index + 1)
+                        Text("\(cutNum)")
                             .font(.system(size: 10, weight: .bold, design: .monospaced))
-                            .foregroundStyle(statusColor)
+                            .foregroundStyle(Color.secondary)
                             .frame(width: 18, alignment: .leading)
 
                         VStack(alignment: .leading, spacing: 1) {
-                            Text(local.title)
+                            Text(cut.title)
                                 .font(.system(size: 11, weight: .semibold))
-                                .foregroundStyle(statusColor)
+                                .foregroundStyle(Color.primary)
                                 .lineLimit(1)
 
-                            Text(local.artist)
+                            let cutArtist = cut.artist.isEmpty ? (selectedOnlineAlbum?.artistName ?? album.artist) : cut.artist
+                            Text(cutArtist)
                                 .font(.system(size: 10))
                                 .foregroundStyle(.secondary)
                                 .lineLimit(1)
-
-                            if isExternalCandidate {
-                                let originText = local.artist.localizedCaseInsensitiveCompare(album.artist) == .orderedSame
-                                    ? "FOUND IN LIBRARY • TAP TO IMPORT"
-                                    : "FROM ARTIST \"\(local.artist)\" • TAP TO LINK"
-                                Text(isAccepted ? "CONFIRMED • WILL IMPORT TO ALBUM" : originText)
-                                    .font(.system(size: 8, weight: .bold, design: .monospaced))
-                                    .foregroundStyle(statusColor)
-                                    .lineLimit(1)
-                            } else if assignment.isMislabeled, let reason = assignment.mislabelReason {
-                                Text(reason.uppercased())
-                                    .font(.system(size: 8, weight: .bold, design: .monospaced))
-                                    .foregroundStyle(statusColor)
-                                    .lineLimit(1)
-                            }
                         }
 
                         Spacer(minLength: 2)
-                    } else {
-                        Text("—")
-                            .font(.system(size: 10, weight: .bold, design: .monospaced))
-                            .foregroundStyle(.tertiary)
-                            .frame(width: 18, alignment: .leading)
-
-                        Text("MISSING FROM ALBUM")
-                            .font(.system(size: 10, weight: .medium, design: .monospaced))
-                            .foregroundStyle(.tertiary)
-                            .lineLimit(1)
-
-                        Spacer(minLength: 2)
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .padding(.vertical, 5)
-                .padding(.horizontal, 6)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(localTrack != nil ? statusColor.opacity(0.08) : Color.appSecondaryBackground.opacity(0.4))
-                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .stroke(localTrack != nil ? statusColor.opacity(0.25) : Color.clear, lineWidth: 1.0)
-                )
+                .padding(.vertical, 7)
+                .contentShape(Rectangle())
 
-                // Connector
-                Image(systemName: "arrow.right")
-                    .font(.system(size: 9, weight: .bold))
-                    .foregroundStyle(localTrack != nil ? statusColor.opacity(0.8) : Color.gray.opacity(0.5))
-
-                // Right: Online Cut
-                HStack(spacing: 6) {
-                    let cutNum = cut.trackNumber ?? (index + 1)
-                    Text("\(cutNum)")
-                        .font(.system(size: 10, weight: .bold, design: .monospaced))
-                        .foregroundStyle(statusColor)
-                        .frame(width: 18, alignment: .leading)
-
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(cut.title)
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(statusColor)
-                            .lineLimit(1)
-
-                        let cutArtist = cut.artist.isEmpty ? (selectedOnlineAlbum?.artistName ?? album.artist) : cut.artist
-                        Text(cutArtist)
-                            .font(.system(size: 10))
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                    }
-
-                    Spacer(minLength: 2)
-                }
-                .padding(.vertical, 5)
-                .padding(.horizontal, 6)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(localTrack != nil ? statusColor.opacity(0.08) : Color.appSecondaryBackground.opacity(0.4))
-                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .stroke(localTrack != nil ? statusColor.opacity(0.25) : Color.clear, lineWidth: 1.0)
-                )
+                // Small separator line between tracks
+                Divider()
+                    .overlay(appTheme.separatorColor.opacity(0.35))
             }
         }
         .buttonStyle(.plain)
@@ -619,107 +708,246 @@ public struct AlbumMetadataSheet: View {
             in: onlineAlbumTracks
         )
 
-        return HStack(spacing: 6) {
-            // Left: Local Track
-            HStack(spacing: 6) {
-                Text("\(index + 1)")
-                    .font(.system(size: 10, weight: .bold, design: .monospaced))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 18, alignment: .leading)
-
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(localTrack.title)
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(Color.primary)
-                        .lineLimit(1)
-
-                    Text(localTrack.artist)
-                        .font(.system(size: 10))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
-
-                Spacer(minLength: 2)
-            }
-            .padding(.vertical, 5)
-            .padding(.horizontal, 6)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.appSecondaryBackground.opacity(0.6))
-            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-
-            // Connector
-            Image(systemName: "arrow.right")
-                .font(.system(size: 9, weight: .bold))
-                .foregroundStyle(.tertiary)
-
-            // Right: Online Cut
-            HStack(spacing: 6) {
-                if let cut = matchedCut {
-                    let cutNum = cut.trackNumber ?? (index + 1)
-                    Text("\(cutNum)")
+        return VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                // Left: Local Track
+                HStack(spacing: 6) {
+                    Text("\(index + 1)")
                         .font(.system(size: 10, weight: .bold, design: .monospaced))
                         .foregroundStyle(.secondary)
                         .frame(width: 18, alignment: .leading)
 
                     VStack(alignment: .leading, spacing: 1) {
-                        Text(cut.title)
+                        Text(localTrack.title)
                             .font(.system(size: 11, weight: .semibold))
                             .foregroundStyle(Color.primary)
                             .lineLimit(1)
 
-                        let cutArtist = cut.artist.isEmpty ? (selectedOnlineAlbum?.artistName ?? album.artist) : cut.artist
-                        Text(cutArtist)
+                        Text(localTrack.artist)
                             .font(.system(size: 10))
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                     }
 
                     Spacer(minLength: 2)
-                } else {
-                    Text("PRESERVE LOCAL")
-                        .font(.system(size: 9, weight: .bold, design: .monospaced))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
 
-                    Spacer(minLength: 2)
+                // Connector
+                Image(systemName: "arrow.right")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(Color.green)
+                    .frame(width: 20)
+
+                // Right: Online Cut
+                HStack(spacing: 6) {
+                    if let cut = matchedCut {
+                        let cutNum = cut.trackNumber ?? (index + 1)
+                        Text("\(cutNum)")
+                            .font(.system(size: 10, weight: .bold, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 18, alignment: .leading)
+
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(cut.title)
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(Color.primary)
+                                .lineLimit(1)
+
+                            let cutArtist = cut.artist.isEmpty ? (selectedOnlineAlbum?.artistName ?? album.artist) : cut.artist
+                            Text(cutArtist)
+                                .font(.system(size: 10))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+
+                        Spacer(minLength: 2)
+                    } else {
+                        Text("PRESERVE LOCAL")
+                            .font(.system(size: 9, weight: .bold, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+
+                        Spacer(minLength: 2)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .padding(.vertical, 7)
+
+            // Small separator line between tracks
+            Divider()
+                .overlay(appTheme.separatorColor.opacity(0.35))
+        }
+    }
+
+    // MARK: - Non-Album & Unmatched Tracks Routing Section
+    private var unmatchedTracksSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 8) {
+                        Text("UNMATCHED TRACKS (\(sortedUnmatchedLocalTracks.count))")
+                            .font(.system(size: 10, weight: .bold, design: .monospaced))
+                            .foregroundStyle(Color.orange)
+
+                        Button(action: triggerUnmatchedScan) {
+                            HStack(spacing: 4) {
+                                if isAnalyzingUnmatched {
+                                    ProgressView()
+                                        .tint(Color.white)
+                                        .scaleEffect(0.6)
+                                    Text("SCANNING...")
+                                        .font(.system(size: 10, weight: .bold, design: .monospaced))
+                                        .foregroundStyle(Color.white)
+                                } else {
+                                    Text("SCAN")
+                                        .font(.system(size: 10, weight: .bold, design: .monospaced))
+                                        .foregroundStyle(Color.white)
+                                }
+                            }
+                        }
+                        .disabled(isAnalyzingUnmatched || selectedOnlineAlbum == nil)
+                    }
+
+                    Text("Tracks in local album not on official tracklist. Tap badge to re-route.")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+            }
+            .padding(.horizontal, 4)
+
+            LazyVStack(spacing: 6) {
+                ForEach(sortedUnmatchedLocalTracks) { track in
+                    unmatchedTrackRow(track: track)
                 }
             }
-            .padding(.vertical, 5)
-            .padding(.horizontal, 6)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.appSecondaryBackground.opacity(0.6))
-            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+        }
+    }
+
+    private func unmatchedTrackRow(track: Track) -> some View {
+        let currentAction = unmatchedActions[track.id] ?? .moveToAlternates(reason: "Not on official tracklist")
+
+        return HStack(spacing: 8) {
+            // Track title and artist
+            VStack(alignment: .leading, spacing: 2) {
+                Text(track.title)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Color.primary)
+                    .lineLimit(1)
+
+                Text(track.artist)
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+
+                Text(currentAction.reasonText.uppercased())
+                    .font(.system(size: 8, weight: .bold, design: .monospaced))
+                    .foregroundStyle(actionTextColor(currentAction))
+                    .lineLimit(1)
+            }
+
+            Spacer(minLength: 4)
+
+            // Interactive routing menu (clean text only, no background)
+            Menu {
+                Button(action: {
+                    HapticFeedback.selectionChanged()
+                    unmatchedActions[track.id] = .moveToAlternates(reason: "Designated alternate cut")
+                }) {
+                    HStack {
+                        Text("Move to Alternates")
+                        if currentAction.isMoveToAlternates {
+                            Image(systemName: "checkmark")
+                        }
+                    }
+                }
+
+                if !otherAlbumsByArtist.isEmpty {
+                    Section("MOVE TO OTHER ALBUM") {
+                        ForEach(otherAlbumsByArtist) { targetAlbum in
+                            Button(action: {
+                                HapticFeedback.selectionChanged()
+                                unmatchedActions[track.id] = .moveToAlbum(
+                                    albumTitle: targetAlbum.title,
+                                    artistName: targetAlbum.artist,
+                                    year: targetAlbum.year,
+                                    genre: targetAlbum.genre,
+                                    artworkKey: targetAlbum.artworkKey,
+                                    artworkURL: nil,
+                                    trackNumber: nil,
+                                    totalTracks: targetAlbum.tracks.count,
+                                    discNumber: nil,
+                                    reason: "Manual move to \"\(targetAlbum.title)\""
+                                )
+                            }) {
+                                HStack {
+                                    Text(targetAlbum.title)
+                                    if currentAction.targetAlbumTitle == targetAlbum.title {
+                                        Image(systemName: "checkmark")
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Button(action: {
+                    HapticFeedback.selectionChanged()
+                    unmatchedActions[track.id] = .keepInMain(reason: "User kept in tracklist")
+                }) {
+                    HStack {
+                        Text("Keep in Main Tracklist")
+                        if currentAction.isKeepInMain {
+                            Image(systemName: "checkmark")
+                        }
+                    }
+                }
+            } label: {
+                HStack(spacing: 4) {
+                    Text(currentAction.displayTitle)
+                        .font(.system(size: 10, weight: .bold, design: .monospaced))
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(.system(size: 8, weight: .semibold))
+                }
+                .foregroundStyle(actionTextColor(currentAction))
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.vertical, 6)
+        .padding(.horizontal, 10)
+        .background(Color.appSecondaryBackground.opacity(0.5))
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
+    private func actionTextColor(_ action: UnmatchedTrackAction) -> Color {
+        switch action {
+        case .moveToAlternates:
+            return Color.orange
+        case .moveToAlbum:
+            return Color.blue
+        case .keepInMain:
+            return Color.secondary
         }
     }
 
     // MARK: - Options & Apply Section
     private var optionsAndApplySection: some View {
         VStack(spacing: 12) {
-            Toggle(isOn: $preserveFeatures) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("PRESERVE LOCAL TITLE & FEATURES")
-                        .font(.system(size: 12, weight: .bold, design: .monospaced))
-                        .foregroundStyle(Color.white)
-                    Text("Retains original song titles and (feat. XYZ) artist credits.")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                }
-            }
-            .tint(Color.orange)
-            .padding(.vertical, 2)
-
-            Toggle(isOn: $libraryStore.settings.writeMetadataToAudioFiles) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("WRITE TAGS TO AUDIO FILES ON DISK")
-                        .font(.system(size: 12, weight: .bold, design: .monospaced))
-                        .foregroundStyle(Color.white)
-                    Text("Atomically embed updated ID3v2/M4A album tags and cover art.")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                }
-            }
-            .tint(Color.blue)
-            .padding(.vertical, 2)
+            TypographicToggleRow(
+                title: "WRITE TAGS TO AUDIO FILES ON DISK",
+                subtitle: "Atomically embed updated ID3v2/M4A album tags and cover art.",
+                isOn: Binding(
+                    get: { libraryStore.settings.writeMetadataToAudioFiles },
+                    set: { newValue in
+                        libraryStore.settings.writeMetadataToAudioFiles = newValue
+                        libraryStore.saveSettings()
+                    }
+                )
+            )
 
             // Apply Button
             if let selectedAlbum = selectedOnlineAlbum {
@@ -759,6 +987,8 @@ public struct AlbumMetadataSheet: View {
                 self.selectOnlineAlbum(first)
             } else if selectedOnlineAlbum == nil {
                 self.onlineAlbumTracks = []
+                self.resolvedAssignments = []
+                self.unmatchedLocalTracks = []
             }
         }
     }
@@ -769,6 +999,7 @@ public struct AlbumMetadataSheet: View {
             self.selectedOnlineAlbum = item
             self.isLoadingTracks = true
         }
+        recalculateOtherAlbums()
 
         Task {
             let cuts = await MusicMetadataService.shared.fetchOnlineAlbumCuts(albumItem: item)
@@ -776,6 +1007,51 @@ public struct AlbumMetadataSheet: View {
                 self.onlineAlbumTracks = cuts
                 self.isLoadingTracks = false
             }
+            await self.computeTrackAssignmentsAsync()
+        }
+    }
+
+    private func triggerUnmatchedScan() {
+        guard !isAnalyzingUnmatched, let selected = selectedOnlineAlbum else { return }
+        HapticFeedback.lightImpact()
+        Task {
+            var cuts = self.onlineAlbumTracks
+            if cuts.isEmpty {
+                cuts = await MusicMetadataService.shared.fetchOnlineAlbumCuts(albumItem: selected)
+                await MainActor.run {
+                    self.onlineAlbumTracks = cuts
+                }
+                await self.computeTrackAssignmentsAsync()
+            }
+            await analyzeUnmatchedTracks(onlineAlbum: selected, cuts: cuts)
+        }
+    }
+
+    private func analyzeUnmatchedTracks(onlineAlbum: OnlineAlbumItem, cuts: [OnlineTrackMetadata]) async {
+        await MainActor.run {
+            self.isAnalyzingUnmatched = true
+        }
+        let currentUnmatched = self.unmatchedLocalTracks
+        guard !currentUnmatched.isEmpty else {
+            await MainActor.run {
+                self.isAnalyzingUnmatched = false
+            }
+            return
+        }
+
+        let actions = await AlbumOrganizationService.shared.resolveAllUnmatchedTracks(
+            tracks: currentUnmatched,
+            currentAlbum: album,
+            onlineAlbum: onlineAlbum,
+            onlineCuts: cuts,
+            libraryAlbums: libraryStore.albums
+        )
+
+        await MainActor.run {
+            for (trackID, action) in actions {
+                self.unmatchedActions[trackID] = action
+            }
+            self.isAnalyzingUnmatched = false
         }
     }
 
@@ -806,8 +1082,10 @@ public struct AlbumMetadataSheet: View {
                 album: album,
                 onlineAlbum: selectedAlbum,
                 onlineTracks: onlineAlbumTracks,
-                preserveLocalTitleAndArtist: preserveFeatures,
-                specificTracksToApply: tracksToApply
+                preserveLocalTitleAndArtist: false,
+                specificTracksToApply: tracksToApply,
+                specificAssignments: activeAssignments,
+                unmatchedActions: unmatchedActions
             )
 
             await MainActor.run {

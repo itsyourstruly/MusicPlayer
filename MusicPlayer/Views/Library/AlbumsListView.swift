@@ -10,6 +10,8 @@ public struct AlbumsListView: View {
         GridItem(.adaptive(minimum: 155), spacing: 14)
     ]
 
+    @State private var selectedAlbum: Album? = nil
+
     // Initialize with configured properties
     public init(libraryStore: LibraryStore, playerService: AudioPlayerService) {
         self.libraryStore = libraryStore
@@ -39,7 +41,9 @@ public struct AlbumsListView: View {
                     ForEach(libraryStore.filteredAlbums) { album in
                         // Flag indicating if pinned
                         let isPinned = libraryStore.isAlbumPinned(album)
-                        NavigationLink(destination: AlbumDetailView(album: album, libraryStore: libraryStore, playerService: playerService)) {
+                        Button(action: {
+                            selectedAlbum = album
+                        }) {
                             VStack(alignment: .leading, spacing: 6) {
                                 ZStack(alignment: .topTrailing) {
                                     AlbumArtworkView(
@@ -85,6 +89,9 @@ public struct AlbumsListView: View {
                 }
                 .padding(.horizontal, 16)
             }
+        }
+        .navigationDestination(item: $selectedAlbum) { album in
+            AlbumDetailView(album: album, libraryStore: libraryStore, playerService: playerService)
         }
     }
 }

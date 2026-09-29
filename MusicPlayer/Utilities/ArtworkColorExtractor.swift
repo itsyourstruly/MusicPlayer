@@ -53,44 +53,61 @@ public final class ArtworkColorExtractor: @unchecked Sendable {
     ///
     /// Falls back to `fallback` when the key is nil/empty or artwork data cannot be loaded.
     public func extractPrimaryColor(for key: String?, fallback: Color = Color.appSecondaryBackground) async -> ColorPalette {
-        // Ensure preconditions are met before proceeding
-        guard let key = key, !key.isEmpty else {
-            return ColorPalette(primaryColor: fallback, isDark: true)
+        if let key = key, !key.isEmpty {
+            // Check cache before doing any async work
+            if let cached = cache.object(forKey: key as NSString) {
+                return cached.palette
+            }
+
+            if let data = await ArtworkCacheService.shared.loadArtwork(key: key) {
+                // Offload pixel analysis to a background thread — CGContext rendering is CPU-bound
+                let palette = await Task.detached(priority: .userInitiated) { () -> ColorPalette in
+                    #if canImport(UIKit)
+                    // Ensure preconditions are met before proceeding
+                    guard let uiImage = UIImage(data: data), let cgImage = uiImage.cgImage else {
+                        return ColorPalette(primaryColor: fallback, isDark: true)
+                    }
+                    return Self.analyze(cgImage: cgImage, fallback: fallback)
+                    #elseif canImport(AppKit)
+                    // Ensure preconditions are met before proceeding
+                    guard let nsImage = NSImage(data: data),
+                          // Cg image
+                          let cgImage = nsImage.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
+                        return ColorPalette(primaryColor: fallback, isDark: true)
+                    }
+                    return Self.analyze(cgImage: cgImage, fallback: fallback)
+                    #else
+                    return ColorPalette(primaryColor: fallback, isDark: true)
+                    #endif
+                }.value
+
+                cache.setObject(WrappedPalette(palette), forKey: key as NSString)
+                return palette
+            }
         }
 
-        // Check cache before doing any async work
-        if let cached = cache.object(forKey: key as NSString) {
+        // Check cache for default placeholder artwork
+        let defaultArtCacheKey = "__default_art_placeholder__" as NSString
+        if let cached = cache.object(forKey: defaultArtCacheKey) {
             return cached.palette
         }
 
-        // Ensure preconditions are met before proceeding
-        guard let data = await ArtworkCacheService.shared.loadArtwork(key: key) else {
-            return ColorPalette(primaryColor: fallback, isDark: true)
-        }
-
-        // Offload pixel analysis to a background thread — CGContext rendering is CPU-bound
-        let palette = await Task.detached(priority: .userInitiated) { () -> ColorPalette in
+        let defaultPalette = await Task.detached(priority: .userInitiated) { () -> ColorPalette in
             #if canImport(UIKit)
-            // Ensure preconditions are met before proceeding
-            guard let uiImage = UIImage(data: data), let cgImage = uiImage.cgImage else {
-                return ColorPalette(primaryColor: fallback, isDark: true)
+            if let defaultImg = UIImage(named: "art"), let cgImage = defaultImg.cgImage {
+                return Self.analyze(cgImage: cgImage, fallback: fallback)
             }
-            return Self.analyze(cgImage: cgImage, fallback: fallback)
             #elseif canImport(AppKit)
-            // Ensure preconditions are met before proceeding
-            guard let nsImage = NSImage(data: data),
-                  // Cg image
-                  let cgImage = nsImage.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
-                return ColorPalette(primaryColor: fallback, isDark: true)
+            if let defaultImg = NSImage(named: "art"),
+               let cgImage = defaultImg.cgImage(forProposedRect: nil, context: nil, hints: nil) {
+                return Self.analyze(cgImage: cgImage, fallback: fallback)
             }
-            return Self.analyze(cgImage: cgImage, fallback: fallback)
-            #else
-            return ColorPalette(primaryColor: fallback, isDark: true)
             #endif
+            return ColorPalette(primaryColor: fallback, isDark: true)
         }.value
 
-        cache.setObject(WrappedPalette(palette), forKey: key as NSString)
-        return palette
+        cache.setObject(WrappedPalette(defaultPalette), forKey: defaultArtCacheKey)
+        return defaultPalette
     }
 
     // MARK: - Analysis

@@ -36,6 +36,21 @@ public actor SearchEngine {
     private var trackIndexByID: [UUID: Int] = [:]
     private var albumIndexByID: [String: Int] = [:]
     private var artistIndexByID: [String: Int] = [:]
+    // Cached categorized discographies per artist for zero-latency tree assembly during search
+    public struct CachedArtistDiscography: Sendable {
+        public let studio: [Album]
+        public let singles: [Album]
+        public let alternates: [Album]
+        public let featured: [Album]
+
+        public init(studio: [Album], singles: [Album], alternates: [Album], featured: [Album]) {
+            self.studio = studio
+            self.singles = singles
+            self.alternates = alternates
+            self.featured = featured
+        }
+    }
+    private var artistDiscographyCache: [String: CachedArtistDiscography] = [:]
 
     private var isIndexed: Bool = false
 
@@ -67,17 +82,25 @@ public actor SearchEngine {
             tByID[track.id] = idx
 
             let tokens = track.searchTokens.split(separator: " ", omittingEmptySubsequences: true)
+            var seenTokens = Set<Substring>()
+            var seenPrefixes = Set<Substring>()
             for token in tokens {
-                let tokenStr = String(token)
-                tTokenIdx[tokenStr, default: []].append(idx)
-
-                if tokenStr.count >= 2 {
-                    let p2 = String(tokenStr.prefix(2))
-                    tPrefixIdx[p2, default: []].append(idx)
+                if seenTokens.insert(token).inserted {
+                    let tokenStr = String(token)
+                    tTokenIdx[tokenStr, default: []].append(idx)
                 }
-                if tokenStr.count >= 3 {
-                    let p3 = String(tokenStr.prefix(3))
-                    tPrefixIdx[p3, default: []].append(idx)
+
+                if token.count >= 2 {
+                    let p2 = token.prefix(2)
+                    if seenPrefixes.insert(p2).inserted {
+                        tPrefixIdx[String(p2), default: []].append(idx)
+                    }
+                }
+                if token.count >= 3 {
+                    let p3 = token.prefix(3)
+                    if seenPrefixes.insert(p3).inserted {
+                        tPrefixIdx[String(p3), default: []].append(idx)
+                    }
                 }
             }
         }
@@ -92,17 +115,25 @@ public actor SearchEngine {
             albByID[album.id] = idx
 
             let tokens = album.searchTokens.split(separator: " ", omittingEmptySubsequences: true)
+            var seenTokens = Set<Substring>()
+            var seenPrefixes = Set<Substring>()
             for token in tokens {
-                let tokenStr = String(token)
-                albTokenIdx[tokenStr, default: []].append(idx)
-
-                if tokenStr.count >= 2 {
-                    let p2 = String(tokenStr.prefix(2))
-                    albPrefixIdx[p2, default: []].append(idx)
+                if seenTokens.insert(token).inserted {
+                    let tokenStr = String(token)
+                    albTokenIdx[tokenStr, default: []].append(idx)
                 }
-                if tokenStr.count >= 3 {
-                    let p3 = String(tokenStr.prefix(3))
-                    albPrefixIdx[p3, default: []].append(idx)
+
+                if token.count >= 2 {
+                    let p2 = token.prefix(2)
+                    if seenPrefixes.insert(p2).inserted {
+                        albPrefixIdx[String(p2), default: []].append(idx)
+                    }
+                }
+                if token.count >= 3 {
+                    let p3 = token.prefix(3)
+                    if seenPrefixes.insert(p3).inserted {
+                        albPrefixIdx[String(p3), default: []].append(idx)
+                    }
                 }
             }
         }
@@ -123,17 +154,25 @@ public actor SearchEngine {
             if !rawKey.isEmpty { aByKey[rawKey] = artist }
 
             let tokens = artist.searchTokens.split(separator: " ", omittingEmptySubsequences: true)
+            var seenTokens = Set<Substring>()
+            var seenPrefixes = Set<Substring>()
             for token in tokens {
-                let tokenStr = String(token)
-                artTokenIdx[tokenStr, default: []].append(idx)
-
-                if tokenStr.count >= 2 {
-                    let p2 = String(tokenStr.prefix(2))
-                    artPrefixIdx[p2, default: []].append(idx)
+                if seenTokens.insert(token).inserted {
+                    let tokenStr = String(token)
+                    artTokenIdx[tokenStr, default: []].append(idx)
                 }
-                if tokenStr.count >= 3 {
-                    let p3 = String(tokenStr.prefix(3))
-                    artPrefixIdx[p3, default: []].append(idx)
+
+                if token.count >= 2 {
+                    let p2 = token.prefix(2)
+                    if seenPrefixes.insert(p2).inserted {
+                        artPrefixIdx[String(p2), default: []].append(idx)
+                    }
+                }
+                if token.count >= 3 {
+                    let p3 = token.prefix(3)
+                    if seenPrefixes.insert(p3).inserted {
+                        artPrefixIdx[String(p3), default: []].append(idx)
+                    }
                 }
             }
         }
@@ -150,6 +189,9 @@ public actor SearchEngine {
         self.artistTokenIndex = artTokenIdx
         self.artistIndexByID = artByID
         self.artistByKey = aByKey
+
+        // Discography buckets are lazily computed on-demand per matched artist in evaluateFullSearch
+        self.artistDiscographyCache.removeAll(keepingCapacity: true)
 
         self.isIndexed = true
     }
@@ -473,15 +515,23 @@ public actor SearchEngine {
 
         for (album, primaryArtist) in directMatchedAlbums {
             if !topIncludedAlbumIDs.contains(album.id) {
-                let artistName = !primaryArtist.name.isEmpty ? primaryArtist.name : (!album.artist.isEmpty ? album.artist : "Various Artists")
-                let syntheticArtist = Artist(name: artistName, albums: [album])
-                let artistNodeID = "tree_artist_\(syntheticArtist.id)"
-                if seenArtistIDs.insert(syntheticArtist.id).inserted {
+                let resolvedArtist: Artist = {
+                    let canon = ArtistParser.canonicalArtistKey(album.artist)
+                    if let existing = artistByKey[canon] ?? artistByKey[album.artist.lowercased()] {
+                        return existing
+                    }
+                    if !primaryArtist.name.isEmpty && primaryArtist.name != "Unknown Artist" {
+                        return primaryArtist
+                    }
+                    return Artist(name: album.artist.isEmpty ? "Various Artists" : album.artist, albums: [album])
+                }()
+                let artistNodeID = "tree_artist_\(resolvedArtist.id)"
+                if seenArtistIDs.insert(resolvedArtist.id).inserted {
                     var trackNodes: [SearchTreeTrackNode] = []
                     for track in album.tracks {
                         let tScore = matchedTrackScores[track.id] ?? 0
                         trackNodes.append(SearchTreeTrackNode(
-                            id: "tree_track_\(syntheticArtist.id)_\(album.id)_\(track.id.uuidString)",
+                            id: "tree_track_\(resolvedArtist.id)_\(album.id)_\(track.id.uuidString)",
                             track: track,
                             isDirectlyMatched: tScore > 0,
                             relevanceScore: tScore
@@ -489,7 +539,7 @@ public actor SearchEngine {
                     }
                     let albScore = matchedAlbumScores[album.id] ?? 75_000
                     let albumNode = SearchTreeAlbumNode(
-                        id: "tree_album_\(syntheticArtist.id)_\(album.id)",
+                        id: "tree_album_\(resolvedArtist.id)_\(album.id)",
                         album: album,
                         tracks: trackNodes,
                         isDirectlyMatched: true,
@@ -498,7 +548,7 @@ public actor SearchEngine {
                     )
                     topArtistNodes.append(SearchTreeArtistNode(
                         id: artistNodeID,
-                        artist: syntheticArtist,
+                        artist: resolvedArtist,
                         albums: [albumNode],
                         isDirectlyMatched: false,
                         relevanceScore: albScore
@@ -519,6 +569,46 @@ public actor SearchEngine {
             directMatchedAlbums: directMatchedAlbums,
             directMatchedTracks: directMatchedTracks
         )
+    }
+
+    // MARK: - Lazy Discography Categorization
+
+    /// Lazily computes and memoizes categorized discography for an artist on demand.
+    /// Only evaluated for the small handful of artists matching a query, taking < 1ms instead of locking the actor for 15s at startup.
+    private func getOrComputeDiscography(for artist: Artist, joinedArtists: [String]) -> CachedArtistDiscography {
+        if let cached = artistDiscographyCache[artist.id] {
+            return cached
+        }
+
+        var ownLeadStudio: [Album] = []
+        var ownLeadSingles: [Album] = []
+        var ownLeadAlternates: [Album] = []
+        var featuredAlbums: [Album] = []
+
+        for album in artist.albums {
+            if album.isLeadOrCollaborativeAlbum(for: artist.name, joinedArtists: joinedArtists) {
+                if album.isStudioAlbum {
+                    ownLeadStudio.append(album)
+                } else if album.isSingle {
+                    ownLeadSingles.append(album)
+                } else if album.isRemix || album.isLive {
+                    ownLeadAlternates.append(album)
+                } else {
+                    ownLeadStudio.append(album)
+                }
+            } else if album.isFeaturedAlbum(for: artist.name, joinedArtists: joinedArtists) {
+                featuredAlbums.append(album)
+            }
+        }
+
+        let result = CachedArtistDiscography(
+            studio: ownLeadStudio,
+            singles: ownLeadSingles,
+            alternates: ownLeadAlternates,
+            featured: featuredAlbums
+        )
+        artistDiscographyCache[artist.id] = result
+        return result
     }
 
     // MARK: - Phase 2: Full Deep Search Hierarchy
@@ -588,7 +678,7 @@ public actor SearchEngine {
             } else if !queryTokens.isEmpty && queryTokens.allSatisfy({ normTitle.contains($0) }) {
                 let ratio = Double(queryCount) / Double(max(normTitle.count, 1))
                 trackScore = 3_500 + Int(ratio * 1_000)
-            } else if queryCount >= 2 && normTitle.count >= queryCount {
+            } else if queryCount >= 3 && directMatchedTracks.count < maxTrackResults && normTitle.count >= queryCount {
                 let titleFuzzy = FuzzyMatcher.evaluateScore(cleanText: normTitle, cleanQuery: cleanQuery)
                 if titleFuzzy >= 700 {
                     trackScore = 2_000 + titleFuzzy * 2
@@ -650,7 +740,7 @@ public actor SearchEngine {
             } else if !queryTokens.isEmpty && queryTokens.allSatisfy({ normTitle.contains($0) }) {
                 let ratio = Double(queryCount) / Double(max(normTitle.count, 1))
                 albScore = 35_000 + Int(ratio * 10_000)
-            } else if queryCount >= 2 && normTitle.count >= queryCount {
+            } else if queryCount >= 3 && matchedAlbumScores.count < maxAlbumResults && normTitle.count >= queryCount {
                 let titleFuzzy = FuzzyMatcher.evaluateScore(cleanText: normTitle, cleanQuery: cleanQuery)
                 if titleFuzzy >= 700 {
                     albScore = 20_000 + titleFuzzy * 20
@@ -700,7 +790,7 @@ public actor SearchEngine {
             } else if normName.contains(cleanQuery) {
                 let ratio = Double(queryCount) / Double(max(normName.count, 1))
                 aScore = 450_000 + Int(ratio * 100_000)
-            } else if queryCount >= 2 && normName.count >= queryCount {
+            } else if queryCount >= 3 && matchedArtistScores.count < maxArtistResults && normName.count >= queryCount {
                 let fuzzy = FuzzyMatcher.evaluateScore(cleanText: normName, cleanQuery: cleanQuery)
                 if fuzzy >= 700 {
                     aScore = 200_000 + fuzzy * 200
@@ -786,39 +876,28 @@ public actor SearchEngine {
             let artistScore = matchedArtistScores[aKey] ?? 0
             let isArtistDirectlyMatched = artistScore > 0
 
-            var candidateAlbums = artistObj.albums
-            if !isArtistDirectlyMatched {
-                candidateAlbums = candidateAlbums.filter { album in
-                    let isAlbMatched = (matchedAlbumScores[album.id] ?? 0) > 0
-                    let hasMatchedTrack = album.tracks.contains { (matchedTrackScores[$0.id] ?? 0) > 0 }
-                    return isAlbMatched || hasMatchedTrack
+            // Retrieve pre-categorized discography sections with zero re-parsing overhead (lazily computed & memoized)
+            let disco = self.getOrComputeDiscography(for: artistObj, joinedArtists: effectiveJoinedArtists)
+            let studioAlbums = disco.studio
+            let singlesAlbums = disco.singles
+            let alternatesAlbums = disco.alternates
+            let featuredAlbums = disco.featured
+
+            func filterSectionIfNeeded(_ albums: [Album]) -> [Album] {
+                if isArtistDirectlyMatched { return albums }
+                return albums.filter { album in
+                    (matchedAlbumScores[album.id] ?? 0) > 0 ||
+                    album.tracks.contains { (matchedTrackScores[$0.id] ?? 0) > 0 }
                 }
             }
 
-            guard !candidateAlbums.isEmpty || isArtistDirectlyMatched else { continue }
+            let ownLeadStudio = filterSectionIfNeeded(studioAlbums)
+            let ownLeadSingles = filterSectionIfNeeded(singlesAlbums)
+            let ownLeadAlternates = filterSectionIfNeeded(alternatesAlbums)
+            let ownFeatured = filterSectionIfNeeded(featuredAlbums)
 
-            // Single-pass discography categorization
-            var ownLeadStudio: [Album] = []
-            var ownLeadSingles: [Album] = []
-            var ownLeadAlternates: [Album] = []
-            var featuredAlbums: [Album] = []
-            ownLeadStudio.reserveCapacity(candidateAlbums.count)
-
-            for album in candidateAlbums {
-                if album.isLeadOrCollaborativeAlbum(for: artistObj.name, joinedArtists: effectiveJoinedArtists) {
-                    if album.isStudioAlbum {
-                        ownLeadStudio.append(album)
-                    } else if album.isSingle {
-                        ownLeadSingles.append(album)
-                    } else if album.isRemix || album.isLive {
-                        ownLeadAlternates.append(album)
-                    } else {
-                        ownLeadStudio.append(album)
-                    }
-                } else if album.isFeaturedAlbum(for: artistObj.name, joinedArtists: effectiveJoinedArtists) {
-                    featuredAlbums.append(album)
-                }
-            }
+            let totalAlbumsCount = ownLeadStudio.count + ownLeadSingles.count + ownLeadAlternates.count + ownFeatured.count
+            guard totalAlbumsCount > 0 || isArtistDirectlyMatched else { continue }
 
             var seenAlbumNodeIDs = Set<String>()
             var bestTrackScoreForArtist = 0
@@ -839,17 +918,8 @@ public actor SearchEngine {
                         bestAlbumScoreForArtist = max(bestAlbumScoreForArtist, albScore)
                     }
 
-                    let sortedAlbumTracks = album.tracks.sorted {
-                        let d0 = $0.discNumber ?? 1
-                        let d1 = $1.discNumber ?? 1
-                        if d0 != d1 { return d0 < d1 }
-                        let t0 = $0.trackNumber ?? 0
-                        let t1 = $1.trackNumber ?? 0
-                        if t0 > 0 && t1 > 0 && t0 != t1 { return t0 < t1 }
-                        if t0 > 0 && t1 == 0 { return true }
-                        if t0 == 0 && t1 > 0 { return false }
-                        return $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending
-                    }
+                    // Album tracks are already sorted by disc/track number and title in Album model
+                    let sortedAlbumTracks = album.tracks
 
                     var trackNodes: [SearchTreeTrackNode] = []
                     trackNodes.reserveCapacity(sortedAlbumTracks.count)
@@ -933,22 +1003,30 @@ public actor SearchEngine {
         for (album, primaryArtist) in directMatchedAlbums {
             if !fullIncludedAlbumIDs.contains(album.id) {
                 let albScore = matchedAlbumScores[album.id] ?? 0
-                let artistName = !primaryArtist.name.isEmpty ? primaryArtist.name : (!album.artist.isEmpty ? album.artist : "Various Artists")
-                let syntheticArtist = Artist(name: artistName, albums: [album])
-                let artistNodeID = "tree_artist_\(syntheticArtist.id)"
+                let resolvedArtist: Artist = {
+                    let canon = ArtistParser.canonicalArtistKey(album.artist)
+                    if let existing = artistByKey[canon] ?? artistByKey[album.artist.lowercased()] {
+                        return existing
+                    }
+                    if !primaryArtist.name.isEmpty && primaryArtist.name != "Unknown Artist" {
+                        return primaryArtist
+                    }
+                    return Artist(name: album.artist.isEmpty ? "Various Artists" : album.artist, albums: [album])
+                }()
+                let artistNodeID = "tree_artist_\(resolvedArtist.id)"
                 if seenArtistNodeIDs.insert(artistNodeID).inserted {
                     var trackNodes: [SearchTreeTrackNode] = []
                     for track in album.tracks {
                         let tScore = matchedTrackScores[track.id] ?? 0
                         trackNodes.append(SearchTreeTrackNode(
-                            id: "tree_track_\(syntheticArtist.id)_\(album.id)_\(track.id.uuidString)",
+                            id: "tree_track_\(resolvedArtist.id)_\(album.id)_\(track.id.uuidString)",
                             track: track,
                             isDirectlyMatched: tScore > 0,
                             relevanceScore: tScore
                         ))
                     }
                     let albumNode = SearchTreeAlbumNode(
-                        id: "tree_album_\(syntheticArtist.id)_\(album.id)",
+                        id: "tree_album_\(resolvedArtist.id)_\(album.id)",
                         album: album,
                         tracks: trackNodes,
                         isDirectlyMatched: true,
@@ -957,7 +1035,7 @@ public actor SearchEngine {
                     )
                     artistTreeNodes.append(SearchTreeArtistNode(
                         id: artistNodeID,
-                        artist: syntheticArtist,
+                        artist: resolvedArtist,
                         albums: [albumNode],
                         isDirectlyMatched: false,
                         relevanceScore: albScore > 0 ? albScore : 80_000

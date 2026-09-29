@@ -46,7 +46,7 @@ public struct OnlineMetadataMatchSheet: View {
                             noResultsView
                                 .transition(.opacity)
                         } else {
-                            candidateSwipeCarousel
+                            resultsContent
                                 .transition(.opacity)
                         }
                     }
@@ -58,14 +58,6 @@ public struct OnlineMetadataMatchSheet: View {
             .background(appTheme.backgroundColor.ignoresSafeArea())
             .navigationTitle("ONLINE METADATA")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("DONE") {
-                        dismiss()
-                    }
-                    .font(.system(size: 13, weight: .bold, design: .monospaced))
-                }
-            }
             // Async lifecycle task
             .task {
                 let sig = MetadataSanitizer.sanitize(track: track)
@@ -81,76 +73,93 @@ public struct OnlineMetadataMatchSheet: View {
         .presentationDragIndicator(.visible)
     }
 
-    // MARK: - Candidate Swipe Carousel
+    // MARK: - Candidate Results & Comparison View
 
-    private var candidateSwipeCarousel: some View {
-        VStack(spacing: 14) {
-            // Source pager selector bar if multiple matches
-            if searchResults.count > 1 {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 12) {
-                        ForEach(Array(searchResults.enumerated()), id: \.offset) { index, match in
-                            Button(action: {
-                                withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
-                                    selectedCandidateIndex = index
-                                    selectMatch(match)
-                                }
-                            }) {
-                                HStack(spacing: 4) {
-                                    Text("\(index + 1). \(match.sourceAPI.uppercased())")
-                                        .font(.system(size: 11, weight: selectedCandidateIndex == index ? .bold : .medium, design: .monospaced))
-                                    if index == 0 {
-                                        Text("★ BEST")
-                                            .font(.system(size: 9, weight: .black, design: .monospaced))
-                                            .foregroundStyle(Color.green)
-                                    }
-                                }
-                                .foregroundStyle(selectedCandidateIndex == index ? Color.white : Color.gray)
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-                    .padding(.horizontal, 4)
-                }
+    private var resultsContent: some View {
+        VStack(spacing: 16) {
+            // Horizontal scroll strip matching AlbumMetadataSheet
+            candidateMatchesStrip
 
-                HStack {
-                    Text("← SWIPE LEFT / RIGHT TO SWITCH OPTIONS (\(selectedCandidateIndex + 1)/\(searchResults.count)) →")
-                        .font(.system(size: 9, weight: .bold, design: .monospaced))
-                        .foregroundStyle(.secondary.opacity(0.8))
-                    Spacer()
+            // Selected Match Header & Overwrite Options
+            if let currentMatch = selectedMatch ?? searchResults.first {
+                selectedMatchDiffView(match: currentMatch)
+            }
+        }
+    }
+
+    // MARK: - Candidate Matches Horizontal Strip
+    private var candidateMatchesStrip: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("ONLINE MATCHES (\(searchResults.count))")
+                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+                    .foregroundStyle(.secondary)
+
+                Spacer()
+
+                if isSearching {
+                    ProgressView()
+                        .tint(Color.primary)
+                        .scaleEffect(0.7)
                 }
-                .padding(.horizontal, 4)
             }
 
-            // Swipeable Current Match Diff Card
-            if let currentMatch = searchResults.indices.contains(selectedCandidateIndex) ? searchResults[selectedCandidateIndex] : searchResults.first {
-                selectedMatchDiffView(match: currentMatch)
-                    .id(currentMatch.id)
-                    .contentShape(Rectangle())
-                    .gesture(
-                        DragGesture(minimumDistance: 25)
-                            .onEnded { value in
-                                if value.translation.width < -40 {
-                                    // Swipe Left -> Next source
-                                    if selectedCandidateIndex < searchResults.count - 1 {
-                                        HapticFeedback.selectionChanged()
-                                        withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
-                                            selectedCandidateIndex += 1
-                                            selectMatch(searchResults[selectedCandidateIndex])
-                                        }
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 14) {
+                    ForEach(Array(searchResults.enumerated()), id: \.element.id) { index, item in
+                        let isSelected = (selectedMatch?.id == item.id) || (selectedMatch == nil && index == 0)
+
+                        Button(action: {
+                            HapticFeedback.selectionChanged()
+                            selectedCandidateIndex = index
+                            selectMatch(item)
+                        }) {
+                            HStack(spacing: 8) {
+                                AsyncImage(url: item.artworkURL) { phase in
+                                    switch phase {
+                                    case .success(let img):
+                                        img
+                                            .resizable()
+                                            .aspectRatio(contentMode: .fill)
+                                    default:
+                                        RoundedRectangle(cornerRadius: 5, style: .continuous)
+                                            .fill(Color.gray.opacity(0.2))
                                     }
-                                } else if value.translation.width > 40 {
-                                    // Swipe Right -> Previous source
-                                    if selectedCandidateIndex > 0 {
-                                        HapticFeedback.selectionChanged()
-                                        withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
-                                            selectedCandidateIndex -= 1
-                                            selectMatch(searchResults[selectedCandidateIndex])
+                                }
+                                .frame(width: 38, height: 38)
+                                .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(item.title)
+                                        .font(.system(size: 12, weight: .bold))
+                                        .foregroundStyle(isSelected ? Color.white : Color.primary)
+                                        .lineLimit(1)
+
+                                    Text(item.artist)
+                                        .font(.system(size: 10))
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(1)
+
+                                    HStack(spacing: 4) {
+                                        if let year = item.releaseYear, year > 0 {
+                                            Text(String(year))
+                                                .font(.system(size: 9, design: .monospaced))
+                                                .foregroundStyle(.secondary)
                                         }
+                                        Text("• \(item.sourceAPI.uppercased())")
+                                            .font(.system(size: 8, weight: .bold, design: .monospaced))
+                                            .foregroundStyle(isSelected ? Color.green : appTheme.accentColor)
                                     }
                                 }
                             }
-                    )
+                            .padding(.horizontal, 4)
+                            .padding(.vertical, 6)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.horizontal, 2)
             }
         }
     }
@@ -261,43 +270,68 @@ public struct OnlineMetadataMatchSheet: View {
         VStack(spacing: 14) {
             // High-Res Artwork & Identity Header
             HStack(spacing: 14) {
-                let hasOnlineArtwork = downloadedArtwork != nil || match.artworkURL != nil
+                let isUsingLocalArtwork = lockedLocalFields.contains(.artwork)
 
-                Group {
-                    if let art = downloadedArtwork, let img = PlatformImage(data: art) {
-                        #if canImport(UIKit)
-                        Image(uiImage: img)
-                            .resizable()
-                            .aspectRatio(contentMode: .fill)
-                            .frame(width: 72, height: 72)
-                            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                        #elseif canImport(AppKit)
-                        Image(nsImage: img)
-                            .resizable()
-                            .aspectRatio(contentMode: .fill)
-                            .frame(width: 72, height: 72)
-                            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                        #endif
-                    } else {
-                        AsyncImage(url: match.artworkURL) { phase in
-                            switch phase {
-                            case .success(let image):
-                                image
-                                    .resizable()
-                                    .aspectRatio(contentMode: .fill)
-                            default:
-                                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                    .fill(Color.gray.opacity(0.2))
-                            }
+                Button(action: {
+                    HapticFeedback.selectionChanged()
+                    withAnimation(.easeInOut(duration: 0.15)) {
+                        if lockedLocalFields.contains(.artwork) {
+                            lockedLocalFields.remove(.artwork)
+                        } else {
+                            lockedLocalFields.insert(.artwork)
                         }
-                        .frame(width: 72, height: 72)
-                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                     }
+                }) {
+                    Group {
+                        if isUsingLocalArtwork {
+                            AlbumArtworkView(
+                                artworkKey: track.artworkKey,
+                                title: track.title,
+                                subtitle: track.artist,
+                                cornerRadius: 8
+                            )
+                            .frame(width: 72, height: 72)
+                            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        } else if let art = downloadedArtwork, let img = PlatformImage(data: art) {
+                            #if canImport(UIKit)
+                            Image(uiImage: img)
+                                .resizable()
+                                .aspectRatio(contentMode: .fill)
+                                .frame(width: 72, height: 72)
+                                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                            #elseif canImport(AppKit)
+                            Image(nsImage: img)
+                                .resizable()
+                                .aspectRatio(contentMode: .fill)
+                                .frame(width: 72, height: 72)
+                                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                            #endif
+                        } else {
+                            AsyncImage(url: match.artworkURL) { phase in
+                                switch phase {
+                                case .success(let image):
+                                    image
+                                        .resizable()
+                                        .aspectRatio(contentMode: .fill)
+                                default:
+                                    AlbumArtworkView(
+                                        artworkKey: track.artworkKey,
+                                        title: track.title,
+                                        subtitle: track.artist,
+                                        cornerRadius: 8
+                                    )
+                                }
+                            }
+                            .frame(width: 72, height: 72)
+                            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        }
+                    }
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .stroke(isUsingLocalArtwork ? Color.orange : Color.green, lineWidth: 1.5)
+                    )
                 }
-                .overlay(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .stroke(hasOnlineArtwork ? Color.green : Color.orange, lineWidth: 1.5)
-                )
+                .buttonStyle(.plain)
 
                 VStack(alignment: .leading, spacing: 4) {
                     Text("VERIFIED ONLINE RECORD")
@@ -332,79 +366,41 @@ public struct OnlineMetadataMatchSheet: View {
             Divider()
                 .overlay(appTheme.separatorColor.opacity(0.35))
 
-            // Master Overwrite Controls Header
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("TAG OVERWRITE OPTIONS")
-                            .font(.system(size: 11, weight: .bold, design: .monospaced))
-                            .foregroundStyle(Color.white)
-                        Text("Tap any tag below to toggle between Online (Green) & Local (Orange)")
-                            .font(.system(size: 10))
-                            .foregroundStyle(.secondary)
-                    }
+            // Overwrite Controls (Clean text buttons)
+            HStack(spacing: 20) {
+                let isOverwriteAll = lockedLocalFields.isEmpty
+                let isKeepAll = lockedLocalFields.count == MetadataField.allCases.count
 
-                    Spacer()
+                Button(action: {
+                    HapticFeedback.selectionChanged()
+                    withAnimation(.easeInOut(duration: 0.15)) {
+                        lockedLocalFields.removeAll() // Overwrite ALL with online
+                    }
+                }) {
+                    Text("OVERWRITE ALL")
+                        .font(.system(size: 11, weight: .bold, design: .monospaced))
+                        .foregroundStyle(isOverwriteAll ? Color.green : Color.secondary)
                 }
+                .buttonStyle(.plain)
 
-                HStack(spacing: 8) {
-                    Button(action: {
-                        HapticFeedback.selectionChanged()
-                        withAnimation(.easeInOut(duration: 0.15)) {
-                            lockedLocalFields.removeAll() // Overwrite ALL with online
-                        }
-                    }) {
-                        HStack(spacing: 4) {
-                            Image(systemName: "checkmark.circle.fill")
-                                .font(.system(size: 10))
-                            Text("OVERWRITE ALL (ONLINE)")
-                                .font(.system(size: 9, weight: .bold, design: .monospaced))
-                        }
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 5)
-                        .background(lockedLocalFields.isEmpty ? Color.green.opacity(0.25) : Color.appSecondaryBackground)
-                        .foregroundStyle(lockedLocalFields.isEmpty ? Color.green : Color.gray)
-                        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                .stroke(lockedLocalFields.isEmpty ? Color.green : Color.clear, lineWidth: 1.0)
-                        )
+                Button(action: {
+                    HapticFeedback.selectionChanged()
+                    withAnimation(.easeInOut(duration: 0.15)) {
+                        lockedLocalFields = Set(MetadataField.allCases) // Keep ALL local
                     }
-                    .buttonStyle(.plain)
-
-                    Button(action: {
-                        HapticFeedback.selectionChanged()
-                        withAnimation(.easeInOut(duration: 0.15)) {
-                            lockedLocalFields = Set(MetadataField.allCases) // Keep ALL local
-                        }
-                    }) {
-                        HStack(spacing: 4) {
-                            Image(systemName: "lock.fill")
-                                .font(.system(size: 10))
-                            Text("KEEP ALL LOCAL")
-                                .font(.system(size: 9, weight: .bold, design: .monospaced))
-                        }
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 5)
-                        .background(lockedLocalFields.count == MetadataField.allCases.count ? Color.orange.opacity(0.25) : Color.appSecondaryBackground)
-                        .foregroundStyle(lockedLocalFields.count == MetadataField.allCases.count ? Color.orange : Color.gray)
-                        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                .stroke(lockedLocalFields.count == MetadataField.allCases.count ? Color.orange : Color.clear, lineWidth: 1.0)
-                        )
-                    }
-                    .buttonStyle(.plain)
-
-                    Spacer()
+                }) {
+                    Text("KEEP ALL")
+                        .font(.system(size: 11, weight: .bold, design: .monospaced))
+                        .foregroundStyle(isKeepAll ? Color.orange : Color.secondary)
                 }
+                .buttonStyle(.plain)
+
+                Spacer()
             }
-            .padding(10)
-            .background(Color.appSecondaryBackground.opacity(0.4))
-            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .padding(.vertical, 2)
 
             // Interactive Per-Tag Toggle Table
-            VStack(spacing: 6) {
+            VStack(spacing: 0) {
                 interactiveTagRow(
                     field: .title,
                     currentVal: track.title,
@@ -454,22 +450,19 @@ public struct OnlineMetadataMatchSheet: View {
                 )
             }
 
-            Divider()
-                .overlay(appTheme.separatorColor.opacity(0.35))
-
-            // Direct File Writing Option Toggle
-            Toggle(isOn: $libraryStore.settings.writeMetadataToAudioFiles) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("WRITE TAGS TO AUDIO FILE ON DISK")
-                        .font(.system(size: 12, weight: .bold, design: .monospaced))
-                        .foregroundStyle(Color.white)
-                    Text("Atomically embed updated ID3v2/M4A tags directly into the file.")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                }
-            }
-            .tint(Color.blue)
-            .padding(.vertical, 4)
+            // Direct File Writing Option Toggle (Clean ON/OFF text)
+            TypographicToggleRow(
+                title: "WRITE TAGS TO AUDIO FILE ON DISK",
+                subtitle: "Atomically embed updated ID3v2/M4A tags directly into the file.",
+                isOn: Binding(
+                    get: { libraryStore.settings.writeMetadataToAudioFiles },
+                    set: { newValue in
+                        libraryStore.settings.writeMetadataToAudioFiles = newValue
+                        libraryStore.saveSettings()
+                    }
+                )
+            )
+            .padding(.top, 4)
 
             // Apply Button
             Button(action: {
@@ -497,7 +490,8 @@ public struct OnlineMetadataMatchSheet: View {
         onlineVal: String
     ) -> some View {
         let isUsingLocal = lockedLocalFields.contains(field)
-        let isDifferent = currentVal.trimmingCharacters(in: .whitespacesAndNewlines) != onlineVal.trimmingCharacters(in: .whitespacesAndNewlines)
+        let displayVal = isUsingLocal ? currentVal : onlineVal
+        let textColor = isUsingLocal ? Color.orange : Color.green
 
         return Button(action: {
             HapticFeedback.selectionChanged()
@@ -509,79 +503,28 @@ public struct OnlineMetadataMatchSheet: View {
                 }
             }
         }) {
-            HStack(spacing: 10) {
-                Text(field.rawValue)
-                    .font(.system(size: 10, weight: .bold, design: .monospaced))
-                    .foregroundStyle(isUsingLocal ? Color.orange : Color.green)
-                    .frame(width: 65, alignment: .leading)
+            VStack(spacing: 0) {
+                HStack(spacing: 12) {
+                    Text(field.rawValue)
+                        .font(.system(size: 11, weight: .bold, design: .monospaced))
+                        .foregroundStyle(textColor)
+                        .frame(width: 80, alignment: .leading)
 
-                tagValueDisplay(isUsingLocal: isUsingLocal, isDifferent: isDifferent, currentVal: currentVal, onlineVal: onlineVal)
+                    Text(displayVal)
+                        .font(.system(size: 12, weight: .medium, design: .monospaced))
+                        .foregroundStyle(textColor)
+                        .lineLimit(1)
 
-                Spacer()
+                    Spacer()
+                }
+                .padding(.vertical, 7)
+                .contentShape(Rectangle())
 
-                tagStatePill(isUsingLocal: isUsingLocal)
+                Divider()
+                    .overlay(appTheme.separatorColor.opacity(0.35))
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
-            .background(isUsingLocal ? Color.orange.opacity(0.06) : Color.green.opacity(0.06))
-            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .stroke(isUsingLocal ? Color.orange.opacity(0.2) : Color.green.opacity(0.2), lineWidth: 1.0)
-            )
         }
         .buttonStyle(.plain)
-    }
-
-    @ViewBuilder
-    private func tagValueDisplay(isUsingLocal: Bool, isDifferent: Bool, currentVal: String, onlineVal: String) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            if isUsingLocal {
-                Text(currentVal)
-                    .font(.system(size: 12, design: .monospaced))
-                    .foregroundStyle(Color.orange)
-                    .lineLimit(1)
-            } else {
-                if isDifferent {
-                    Text(currentVal)
-                        .font(.system(size: 10, design: .monospaced))
-                        .foregroundStyle(Color.secondary)
-                        .strikethrough(true, color: Color.red.opacity(0.6))
-                        .lineLimit(1)
-                }
-
-                Text(onlineVal)
-                    .font(.system(size: 12, weight: .bold, design: .monospaced))
-                    .foregroundStyle(Color.green)
-                    .lineLimit(1)
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func tagStatePill(isUsingLocal: Bool) -> some View {
-        HStack(spacing: 4) {
-            if isUsingLocal {
-                Image(systemName: "lock.fill")
-                    .font(.system(size: 9))
-                Text("LOCAL")
-                    .font(.system(size: 9, weight: .bold, design: .monospaced))
-            } else {
-                Image(systemName: "arrow.triangle.2.circlepath")
-                    .font(.system(size: 9, weight: .bold))
-                Text("ONLINE")
-                    .font(.system(size: 9, weight: .bold, design: .monospaced))
-            }
-        }
-        .padding(.horizontal, 6)
-        .padding(.vertical, 3)
-        .background(isUsingLocal ? Color.orange.opacity(0.18) : Color.green.opacity(0.18))
-        .foregroundStyle(isUsingLocal ? Color.orange : Color.green)
-        .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 4, style: .continuous)
-                .stroke(isUsingLocal ? Color.orange.opacity(0.4) : Color.green.opacity(0.4), lineWidth: 0.8)
-        )
     }
 
     // MARK: - Handlers
@@ -593,11 +536,21 @@ public struct OnlineMetadataMatchSheet: View {
         selectedCandidateIndex = 0
         downloadedArtwork = nil
 
+        let defaultQuery: String = {
+            let sig = MetadataSanitizer.sanitize(track: track)
+            if !MetadataSanitizer.isUnknownArtist(sig.primaryArtist) && !sig.primaryArtist.isEmpty {
+                return "\(sig.coreTitle) \(sig.primaryArtist)".trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+            return sig.coreTitle
+        }()
+
         let candidates: [OnlineTrackMetadata]
-        if query.isEmpty {
+        if query.isEmpty || query.localizedCaseInsensitiveCompare(defaultQuery) == .orderedSame {
             candidates = await MusicMetadataService.shared.searchOnline(for: track, source: selectedSourceAPI)
         } else {
-            candidates = await MusicMetadataService.shared.searchOnline(query: query, source: selectedSourceAPI)
+            let results = await MusicMetadataService.shared.searchOnline(query: query, source: selectedSourceAPI)
+            let sig = MetadataSanitizer.sanitize(track: track)
+            candidates = DisambiguationMatcher.rankCandidates(for: sig, in: results)
         }
         self.searchResults = candidates
         self.isSearching = false

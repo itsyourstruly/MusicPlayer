@@ -44,7 +44,7 @@ public struct AllTracksListView: View {
                 let isTapToPlayNext = libraryStore.settings.tapToPlayNext
 
                 LazyVStack(spacing: 4) {
-                    ForEach(0..<tracks.count, id: \.self) { index in
+                    ForEach(tracks.indices, id: \.self) { index in
                         let track = tracks[index]
                         TrackRowView(
                             track: track,
@@ -139,14 +139,6 @@ public struct AllTracksListView: View {
             }
             .navigationTitle("ADD TO PLAYLIST")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("DONE") {
-                        selectedTrackForPlaylist = nil
-                    }
-                    .font(.system(size: 13, weight: .bold, design: .monospaced))
-                }
-            }
         }
         .presentationDetents([.medium])
     }

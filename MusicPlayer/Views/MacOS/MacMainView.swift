@@ -77,12 +77,14 @@ public struct MacMainView: View {
         .background(appTheme.backgroundColor)
         .tint(libraryStore.settings.appTheme.accentColor)
         .environment(\.appTheme, libraryStore.settings.appTheme)
+        .environment(libraryStore)
         // Modal presentation sheet
         .sheet(isPresented: $showingSettings) {
             SettingsView(libraryStore: libraryStore, playerService: playerService)
                 .frame(minWidth: 580, idealWidth: 640, minHeight: 480, idealHeight: 560)
                 .tint(libraryStore.settings.appTheme.accentColor)
                 .environment(\.appTheme, libraryStore.settings.appTheme)
+                .environment(libraryStore)
         }
         // Modal presentation sheet
         .sheet(isPresented: $showingCreatePlaylist) {
@@ -90,6 +92,7 @@ public struct MacMainView: View {
                 .frame(minWidth: 380, minHeight: 220)
                 .tint(libraryStore.settings.appTheme.accentColor)
                 .environment(\.appTheme, libraryStore.settings.appTheme)
+                .environment(libraryStore)
         }
         // Modal presentation sheet
         .sheet(item: $selectedTrackForInfo) { track in
@@ -97,6 +100,7 @@ public struct MacMainView: View {
                 .frame(minWidth: 460, minHeight: 440)
                 .tint(libraryStore.settings.appTheme.accentColor)
                 .environment(\.appTheme, libraryStore.settings.appTheme)
+                .environment(libraryStore)
         }
         // Modal presentation sheet
         .sheet(item: $selectedTrackForPlaylist) { track in
@@ -104,6 +108,7 @@ public struct MacMainView: View {
                 .frame(minWidth: 380, minHeight: 320)
                 .tint(libraryStore.settings.appTheme.accentColor)
                 .environment(\.appTheme, libraryStore.settings.appTheme)
+                .environment(libraryStore)
         }
         // Modal presentation sheet
         .sheet(item: $selectedTrackForMatch) { track in
@@ -111,6 +116,7 @@ public struct MacMainView: View {
                 .frame(minWidth: 580, minHeight: 520)
                 .tint(libraryStore.settings.appTheme.accentColor)
                 .environment(\.appTheme, libraryStore.settings.appTheme)
+                .environment(libraryStore)
         }
         // Modal presentation sheet
         .sheet(item: $selectedArtistForNav) { artist in
@@ -130,6 +136,7 @@ public struct MacMainView: View {
             .frame(minWidth: 620, minHeight: 520)
             .tint(libraryStore.settings.appTheme.accentColor)
             .environment(\.appTheme, libraryStore.settings.appTheme)
+            .environment(libraryStore)
         }
         // Modal presentation sheet
         .sheet(item: $selectedAlbumForNav) { album in
@@ -149,6 +156,7 @@ public struct MacMainView: View {
             .frame(minWidth: 620, minHeight: 520)
             .tint(libraryStore.settings.appTheme.accentColor)
             .environment(\.appTheme, libraryStore.settings.appTheme)
+            .environment(libraryStore)
         }
         .onDrop(of: [.fileURL], isTargeted: $isDropTargeted) { providers in
             handleDrop(providers: providers)

@@ -247,18 +247,11 @@ public actor MusicMetadataService {
                 return results
             }
         case .itunes:
-            if self.isITunesCoolingDown {
-                AppLogger.metadata.info("[iTunes Rate Limited] Falling back to Deezer for track \"\(cleanTitle)\" (cooldown: \(String(format: "%.1f", self.iTunesCooldownRemainingSeconds))s remaining)")
-                if let results = await searchDeezerTargetedSong(title: cleanTitle, artist: cleanArtist), !results.isEmpty {
+            if !self.isITunesCoolingDown {
+                if let results = await executeITunesSearchQuery(query: query, limit: 25), !results.isEmpty {
                     queryCache[cacheKey] = results
                     return results
                 }
-            } else if let results = await executeITunesSearchQuery(query: query, limit: 25), !results.isEmpty {
-                queryCache[cacheKey] = results
-                return results
-            } else if let results = await searchDeezerTargetedSong(title: cleanTitle, artist: cleanArtist), !results.isEmpty {
-                queryCache[cacheKey] = results
-                return results
             }
         case .musicBrainz:
             if let results = await searchMusicBrainzTargetedSong(title: cleanTitle, artist: cleanArtist), !results.isEmpty {
@@ -458,8 +451,101 @@ public actor MusicMetadataService {
             }
         }
 
-        queryAlbumCache[cacheKey] = results
-        return results
+        let ranked = rankAlbumResults(for: cleanQuery, in: results)
+        queryAlbumCache[cacheKey] = ranked
+        return ranked
+    }
+
+    /// Ranks online album search candidates by relevance to query, penalizing junk/tribute/karaoke and prioritizing full artwork matches.
+    private func rankAlbumResults(for query: String, in items: [OnlineAlbumItem]) -> [OnlineAlbumItem] {
+        guard !items.isEmpty else { return [] }
+        let normQuery = FuzzyMatcher.normalize(query)
+        let queryTokens = Set(normQuery.split(separator: " ", omittingEmptySubsequences: true).map(String.init))
+
+        var scored: [(item: OnlineAlbumItem, score: Int)] = []
+
+        for item in items {
+            let normTitle = FuzzyMatcher.normalize(item.title)
+            let normArtist = FuzzyMatcher.normalize(item.artistName)
+
+            var score = FuzzyMatcher.scoreAlbum(
+                normalizedTitle: normTitle,
+                normalizedArtist: normArtist,
+                cleanQuery: normQuery
+            )
+
+            // 1. Title matching
+            if normTitle == normQuery {
+                score += 100
+            } else if normQuery.contains(normTitle) || normTitle.contains(normQuery) {
+                score += 60
+            } else {
+                let titleTokens = Set(normTitle.split(separator: " ", omittingEmptySubsequences: true).map(String.init))
+                let matchingTitleTokens = titleTokens.intersection(queryTokens)
+                score += matchingTitleTokens.count * 15
+            }
+
+            // 2. Artist matching
+            if normArtist == normQuery {
+                score += 70
+            } else if normQuery.contains(normArtist) || normArtist.contains(normQuery) {
+                score += 40
+            } else {
+                let artistTokens = Set(normArtist.split(separator: " ", omittingEmptySubsequences: true).map(String.init))
+                let matchingArtistTokens = artistTokens.intersection(queryTokens)
+                score += matchingArtistTokens.count * 10
+            }
+
+            // Combined artist + title matching: "Artist Album" or "Album Artist"
+            let combo1 = "\(normArtist) \(normTitle)"
+            let combo2 = "\(normTitle) \(normArtist)"
+            if combo1 == normQuery || combo2 == normQuery {
+                score += 120
+            } else if normQuery.contains(combo1) || normQuery.contains(combo2) {
+                score += 80
+            }
+
+            // 3. Artwork bonus: Album with valid artwork is preferred
+            if item.artworkURL != nil {
+                score += 30
+            }
+
+            // 4. Track count bonus: full albums have track count > 1
+            if let count = item.trackCount, count > 1 {
+                score += 15
+            }
+
+            // 5. Heavily penalize karaoke, tribute, cover, instrumental, or generic compilations unless explicitly asked
+            let lowerTitle = item.title.lowercased()
+            let lowerArtist = item.artistName.lowercased()
+            let lowerQuery = query.lowercased()
+
+            let junkTerms = ["karaoke", "tribute to", "in the style of", "originally performed by", "the hit crew", "cover version", "instrumental version"]
+            for term in junkTerms {
+                if (lowerTitle.contains(term) || lowerArtist.contains(term)) && !lowerQuery.contains(term) {
+                    score -= 180
+                }
+            }
+
+            // Penalize compilation / greatest hits if query doesn't specify it
+            if isCompilationAlbum(albumTitle: item.title) && !isCompilationAlbum(albumTitle: query) {
+                score -= 40
+            }
+
+            scored.append((item, score))
+        }
+
+        // Deduplicate and sort descending by score
+        scored.sort { $0.score > $1.score }
+        var seenKeys = Set<String>()
+        var ranked: [OnlineAlbumItem] = []
+        for pair in scored {
+            let dedupeKey = "\(pair.item.artistName.lowercased())__\(pair.item.title.lowercased())"
+            if seenKeys.insert(dedupeKey).inserted {
+                ranked.append(pair.item)
+            }
+        }
+        return ranked
     }
 
     /// Fetches all track cuts and duration for a selected online album item.
@@ -616,6 +702,48 @@ public actor MusicMetadataService {
     }
 
     public func fetchDeezerAlbumCutsDirect(albumId: String) async -> [OnlineTrackMetadata]? {
+        // First try fetching the full album detail to get album title, release year, and cover art
+        if let albumDetailURL = URL(string: "https://api.deezer.com/album/\(albumId)") {
+            var detailReq = URLRequest(url: albumDetailURL)
+            detailReq.setValue("application/json", forHTTPHeaderField: "Accept")
+            detailReq.timeoutInterval = 8.0
+            if let (detailData, detailResp) = try? await urlSession.data(for: detailReq),
+               let detailHttp = detailResp as? HTTPURLResponse, detailHttp.statusCode == 200,
+               let albumDetail = try? JSONDecoder().decode(DeezerAlbumDetailResponse.self, from: detailData) {
+                let albumTitle = albumDetail.title ?? ""
+                let albumArtist = albumDetail.artist?.name ?? ""
+                let albumYear = albumDetail.release_date.flatMap { MetadataSanitizer.extract4DigitYear(from: $0) }
+                let albumCover = (albumDetail.cover_xl ?? albumDetail.cover_big ?? albumDetail.cover_medium).flatMap { URL(string: $0) }
+                let totalTracks = albumDetail.nb_tracks
+
+                // If tracks are embedded in the album response, parse them directly
+                if let trackList = albumDetail.tracks?.data, !trackList.isEmpty {
+                    return trackList.enumerated().map { (idx, item) in
+                        let durationSec = item.duration.map { Double($0) }
+                        return OnlineTrackMetadata(
+                            id: "dz_\(item.id)",
+                            title: item.title,
+                            artist: item.artist?.name ?? albumArtist,
+                            album: albumTitle,
+                            albumArtist: albumArtist,
+                            releaseDate: nil,
+                            releaseYear: albumYear,
+                            genre: nil,
+                            trackNumber: item.track_position ?? (idx + 1),
+                            totalTracks: totalTracks ?? trackList.count,
+                            discNumber: item.disk_number ?? 1,
+                            duration: durationSec,
+                            artworkURL: albumCover,
+                            previewURL: item.preview.flatMap { URL(string: $0) },
+                            sourceAPI: "Deezer",
+                            isCompilation: false
+                        )
+                    }
+                }
+            }
+        }
+
+        // Fallback: query tracks endpoint
         guard let url = URL(string: "https://api.deezer.com/album/\(albumId)/tracks?limit=200") else { return nil }
         var req = URLRequest(url: url)
         req.setValue("application/json", forHTTPHeaderField: "Accept")
@@ -664,20 +792,13 @@ public actor MusicMetadataService {
 
         switch source {
         case .itunes:
-            if isITunesCoolingDown {
-                if let results = await searchTargetedSong(title: signature.coreTitle, artist: signature.primaryArtist, source: .deezer),
-                   let best = DisambiguationMatcher.bestMatch(for: signature, in: results) {
+            if !isITunesCoolingDown {
+                if let results = await searchTargetedSong(title: signature.coreTitle, artist: signature.primaryArtist, source: .itunes),
+                   let best = DisambiguationMatcher.bestMatch(for: signature, in: results),
+                   best.sourceAPI.lowercased().contains("apple") || best.sourceAPI.lowercased().contains("itunes") {
                     exactMatchCache[cacheKey] = best
                     return best
                 }
-            } else if let results = await searchTargetedSong(title: signature.coreTitle, artist: signature.primaryArtist, source: .itunes),
-               let best = DisambiguationMatcher.bestMatch(for: signature, in: results) {
-                exactMatchCache[cacheKey] = best
-                return best
-            } else if let results = await searchTargetedSong(title: signature.coreTitle, artist: signature.primaryArtist, source: .deezer),
-               let best = DisambiguationMatcher.bestMatch(for: signature, in: results) {
-                exactMatchCache[cacheKey] = best
-                return best
             }
         case .deezer:
             if let results = await searchTargetedSong(title: signature.coreTitle, artist: signature.primaryArtist, source: .deezer),
@@ -981,6 +1102,7 @@ public actor MusicMetadataService {
 
             let albumTitle = item.album?.title ?? "Single"
             let durationSec = Double(item.duration ?? 0)
+            let releaseYear = (item.release_date ?? item.album?.release_date).flatMap { MetadataSanitizer.extract4DigitYear(from: $0) }
 
             return OnlineTrackMetadata(
                 id: "dz_\(item.id)",
@@ -989,11 +1111,11 @@ public actor MusicMetadataService {
                 album: albumTitle,
                 albumArtist: trackArtist,
                 releaseDate: nil,
-                releaseYear: nil,
+                releaseYear: releaseYear,
                 genre: nil,
-                trackNumber: nil,
+                trackNumber: item.track_position,
                 totalTracks: nil,
-                discNumber: nil,
+                discNumber: item.disk_number,
                 duration: durationSec > 0 ? durationSec : nil,
                 artworkURL: coverURL,
                 previewURL: item.preview.flatMap { URL(string: $0) },
@@ -1310,19 +1432,28 @@ public actor MusicMetadataService {
             return data
         }
 
-        // 2. Fallbacks for Apple Music CDN (1400 -> 600)
         let urlStr = url.absoluteString
+
+        // 2. Fallbacks for Apple Music CDN (1400 -> 600 -> 100)
         if urlStr.contains("1400x1400bb") {
-            let fallbackStr = urlStr.replacingOccurrences(of: "1400x1400bb", with: "600x600bb")
-            if let fallbackURL = URL(string: fallbackStr), let data = await fetchImageData(from: fallbackURL) {
+            let fallback600 = urlStr.replacingOccurrences(of: "1400x1400bb", with: "600x600bb")
+            if let fallbackURL = URL(string: fallback600), let data = await fetchImageData(from: fallbackURL) {
+                return data
+            }
+            let fallback100 = urlStr.replacingOccurrences(of: "1400x1400bb", with: "100x100bb")
+            if let fallbackURL = URL(string: fallback100), let data = await fetchImageData(from: fallbackURL) {
                 return data
             }
         }
 
-        // 3. Fallbacks for Deezer CDN (1000x1000 -> 500x500)
-        if urlStr.contains("1000x1000-000000-80-0-0.jpg") {
-            let fallbackStr = urlStr.replacingOccurrences(of: "1000x1000-000000-80-0-0.jpg", with: "500x500-000000-80-0-0.jpg")
-            if let fallbackURL = URL(string: fallbackStr), let data = await fetchImageData(from: fallbackURL) {
+        // 3. Fallbacks for Deezer CDN (1000x1000 -> 500x500 -> 250x250)
+        if urlStr.contains("1000x1000") {
+            let fallback500 = urlStr.replacingOccurrences(of: "1000x1000", with: "500x500")
+            if let fallbackURL = URL(string: fallback500), let data = await fetchImageData(from: fallbackURL) {
+                return data
+            }
+            let fallback250 = urlStr.replacingOccurrences(of: "1000x1000", with: "250x250")
+            if let fallbackURL = URL(string: fallback250), let data = await fetchImageData(from: fallbackURL) {
                 return data
             }
         }
@@ -1381,9 +1512,10 @@ private struct DeezerTrackItemResult: Codable {
     let album: DeezerAlbumSnippet?
     let track_position: Int?
     let disk_number: Int?
+    let release_date: String?
 
     enum CodingKeys: String, CodingKey {
-        case id, title, duration, preview, artist, album, track_position, disk_number
+        case id, title, duration, preview, artist, album, track_position, disk_number, release_date
     }
 }
 
@@ -1398,6 +1530,19 @@ private struct DeezerAlbumSnippet: Codable {
     let cover_xl: String?
     let cover_big: String?
     let cover_medium: String?
+    let release_date: String?
+}
+
+private struct DeezerAlbumDetailResponse: Codable {
+    let id: Int64
+    let title: String?
+    let release_date: String?
+    let cover_xl: String?
+    let cover_big: String?
+    let cover_medium: String?
+    let artist: DeezerArtistSnippet?
+    let nb_tracks: Int?
+    let tracks: DeezerAlbumTracksListResponse?
 }
 
 private struct DeezerAlbumSearchResponse: Codable {

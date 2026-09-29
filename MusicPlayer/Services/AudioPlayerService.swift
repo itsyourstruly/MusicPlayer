@@ -13,12 +13,28 @@ import CoreAudio
 @Observable
 @MainActor
 public final class AudioPlayerService {
+    /// Shared instance accessible for system helpers and local streaming server
+    public static weak var shared: AudioPlayerService?
+
     // MARK: - Observable State
     
     // Currently playing or paused track
     public private(set) var currentTrack: Track?
     // Current playback state (playing, paused, stopped)
-    public private(set) var playbackStatus: PlaybackStatus = .stopped
+    public private(set) var playbackStatus: PlaybackStatus = .stopped {
+        didSet {
+            #if os(iOS)
+            switch playbackStatus {
+            case .playing, .buffering:
+                MPNowPlayingInfoCenter.default().playbackState = .playing
+            case .paused:
+                MPNowPlayingInfoCenter.default().playbackState = .paused
+            case .stopped:
+                MPNowPlayingInfoCenter.default().playbackState = .stopped
+            }
+            #endif
+        }
+    }
     // Elapsed playback time in seconds
     public private(set) var currentTime: TimeInterval = 0
     // Total audio duration in seconds
@@ -49,6 +65,19 @@ public final class AudioPlayerService {
     // Connected audio output route name (e.g., "THIS DEVICE", "AIRPODS PRO", "HEADPHONES")
     public private(set) var currentAudioRouteName: String = "THIS DEVICE"
     
+    /// Indicates whether playback is currently routed to an external audio destination (Bluetooth, CarPlay, AirPlay, etc.)
+    public var isExternalAudioRouteActive: Bool {
+        #if os(iOS)
+        let session = AVAudioSession.sharedInstance()
+        let outputs = session.currentRoute.outputs
+        return outputs.contains { output in
+            output.portType != .builtInSpeaker && output.portType != .builtInReceiver
+        }
+        #else
+        return currentAudioRouteName != "THIS DEVICE"
+        #endif
+    }
+    
     // MARK: - Desktop Volume & Mute State
     
     // Master output volume (0.0 to 1.0)
@@ -58,7 +87,7 @@ public final class AudioPlayerService {
             if volume != clamped {
                 volume = clamped
             }
-            if !isCrossfading {
+            if !isCrossfading && !isFadingOutPause && !isFadingInPlay && !isSmoothSkipping && !isSmoothSeeking {
                 player?.volume = volume
             }
             if isMuted && volume > 0 {
@@ -101,6 +130,8 @@ public final class AudioPlayerService {
     public var tapToPlayNext: Bool = false
     // Enables micro-fade when skipping tracks to prevent audio pops
     public var smoothSkippingEnabled: Bool = false
+    // Automatically plays next track when current track completes
+    public var autoPlayNext: Bool = true
     // Enables remembering playback position for tracks exceeding minimum threshold
     public var rememberPlaybackPosition: Bool = true
     // Minimum track length (in minutes) required to save and remember playback position
@@ -127,11 +158,21 @@ public final class AudioPlayerService {
     @ObservationIgnored private var crossfadeTask: Task<Void, Never>?
     
     @ObservationIgnored private var smoothSkipTask: Task<Void, Never>?
+    @ObservationIgnored private var skipOutgoingPlayer: AVPlayer?
+    @ObservationIgnored private var isSmoothSkipping: Bool = false
+    
+    @ObservationIgnored private var playPauseFadeTask: Task<Void, Never>?
+    @ObservationIgnored private var isFadingOutPause: Bool = false
+    @ObservationIgnored private var isFadingInPlay: Bool = false
+    
+    @ObservationIgnored private var seekTask: Task<Void, Never>?
+    @ObservationIgnored private var isSmoothSeeking: Bool = false
     
     // Pre-warming state for instant zero-latency track transitions
     @ObservationIgnored private var prewarmedTrackID: UUID?
     @ObservationIgnored private var prewarmedPlayerItem: AVPlayerItem?
     @ObservationIgnored private var prewarmTask: Task<Void, Never>?
+    @ObservationIgnored private var lastSkipTimestamp: TimeInterval = 0
     
     // MARK: - Playback Position Helpers
     
@@ -249,18 +290,30 @@ public final class AudioPlayerService {
     @ObservationIgnored private var activeTrackSecurityScopeURL: URL?
     @ObservationIgnored private var hasCountedCurrentPlay: Bool = false
     @ObservationIgnored private var playbackAccumulatedTime: TimeInterval = 0
+    @ObservationIgnored private var isTransitioningTrack: Bool = false
+    @ObservationIgnored private var transitionTimeoutTask: Task<Void, Never>?
+    @ObservationIgnored private var isRoutingChanging: Bool = false
+#if os(iOS)
+    @ObservationIgnored private var backgroundTaskID: UIBackgroundTaskIdentifier = .invalid
+    @ObservationIgnored private var appLifecycleObservers: [any NSObjectProtocol] = []
+#endif
     
     // Initialize with configured properties
     public init() {
-        setupAudioSession()
+        AudioPlayerService.shared = self
         setupAudioNotifications()
+        setupAudioSession()
         setupRemoteCommandCenter()
+#if os(iOS)
+        setupLifecycleObservers()
+#endif
         EqualizerManager.shared.playerService = self
     }
     
     deinit {
         crossfadeTask?.cancel()
         smoothSkipTask?.cancel()
+        playPauseFadeTask?.cancel()
         prewarmTask?.cancel()
         sleepTimerTask?.cancel()
         if let fadeToken = fadeTimeObserverToken {
@@ -295,6 +348,18 @@ public final class AudioPlayerService {
         if let resetObs = mediaServicesResetObserver {
             NotificationCenter.default.removeObserver(resetObs)
         }
+#if os(iOS)
+        let taskID = backgroundTaskID
+        if taskID != .invalid {
+            Task { @MainActor in
+                UIApplication.shared.endBackgroundTask(taskID)
+            }
+        }
+        for obs in appLifecycleObservers {
+            NotificationCenter.default.removeObserver(obs)
+        }
+        appLifecycleObservers.removeAll()
+#endif
         activeTrackSecurityScopeURL?.stopAccessingSecurityScopedResource()
         activeTrackSecurityScopeURL = nil
     }
@@ -406,7 +471,7 @@ public final class AudioPlayerService {
     
     /// Toggles play and pause state.
     public func togglePlayPause() {
-        if playbackStatus == .playing {
+        if playbackStatus == .playing || isFadingInPlay {
             pause()
         } else {
             play()
@@ -419,7 +484,6 @@ public final class AudioPlayerService {
         if let player = player {
             player.defaultRate = clamped
             if playbackStatus == .playing || player.timeControlStatus == .playing {
-                player.playImmediately(atRate: clamped)
                 player.rate = clamped
             }
         }
@@ -427,7 +491,8 @@ public final class AudioPlayerService {
         AppLogger.audio.info("Applied live playback speed: \(clamped)x (status: \(self.playbackStatus.rawValue))")
     }
 
-    /// Resumes playback.
+    /// Resumes playback. When TRANSITION TRACKS WHEN SKIPPING is enabled, smoothly fades in audio
+    /// quickly at first, then smoothens out nicely to full volume.
     public func play() {
         // Ensure preconditions are met before proceeding
         guard let player = player, player.currentItem != nil else {
@@ -442,24 +507,126 @@ public final class AudioPlayerService {
             seek(to: 0)
         }
         
-        ensureAudioSessionActive()
-        player.volume = volume
-        player.isMuted = isMuted
+        isTransitioningTrack = false
+        transitionTimeoutTask?.cancel()
+        Task {
+            await AudioSessionManager.shared.activateSessionIfNeeded()
+        }
+        
         let speed = Float(EqualizerManager.shared.playbackSpeed)
-        player.playImmediately(atRate: speed)
-        playbackStatus = .playing
-        updateNowPlayingPlaybackState()
+        player.defaultRate = speed
+        player.isMuted = isMuted
+        player.automaticallyWaitsToMinimizeStalling = false
+
+        let wasFadingOut = isFadingOutPause
+        playPauseFadeTask?.cancel()
+        playPauseFadeTask = nil
+        isFadingOutPause = false
+
+        let masterVol = volume
+        if smoothSkippingEnabled && masterVol > 0 && !isMuted {
+            isFadingInPlay = true
+            // If reversing an in-flight pause fade, resume from current attenuated volume; otherwise start from complete silence (0.0)
+            let startVol = wasFadingOut ? min(player.volume, masterVol) : 0.0
+            player.volume = startVol
+            player.play()
+            playbackStatus = .playing
+            updateNowPlayingPlaybackState()
+
+            playPauseFadeTask = Task { @MainActor in
+                let steps = 45
+                let stepDuration: UInt64 = 20_000_000 // 20ms per step -> 900ms total smooth fade-in duration
+
+                for step in 1...steps {
+                    if Task.isCancelled { break }
+                    try? await Task.sleep(nanoseconds: stepDuration)
+                    if Task.isCancelled { break }
+
+                    let progress = Float(step) / Float(steps)
+                    // Slower, smoother ramp (smoothstep): starts gently from silence, ramps up smoothly, then seamlessly flattens to master volume
+                    let factor = progress * progress * (3.0 - 2.0 * progress)
+                    let currentVol = startVol + (masterVol - startVol) * factor
+                    player.volume = min(masterVol, max(0.0, currentVol))
+                }
+
+                guard !Task.isCancelled else { return }
+                player.volume = masterVol
+                self.isFadingInPlay = false
+            }
+        } else {
+            isFadingInPlay = false
+            player.volume = masterVol
+            player.play()
+            playbackStatus = .playing
+            updateNowPlayingPlaybackState()
+        }
+
         AppLogger.audio.info("Playback resumed at \(speed)x.")
     }
     
-    /// Pauses playback.
-    public func pause() {
+    /// Pauses playback. When TRANSITION TRACKS WHEN SKIPPING is enabled, smoothly fades out audio
+    /// with an S-curve: starts slower, ramps up its descent, then flattens out nicely into silence.
+    public func pause(smooth: Bool = true) {
+        isTransitioningTrack = false
+        transitionTimeoutTask?.cancel()
         cancelCrossfade()
-        saveCurrentPlaybackPositionIfNeeded()
-        player?.pause()
+        smoothSkipTask?.cancel()
+        smoothSkipTask = nil
+        if let outgoing = skipOutgoingPlayer {
+            outgoing.pause()
+            outgoing.volume = 0
+            skipOutgoingPlayer = nil
+        }
+
+        playPauseFadeTask?.cancel()
+        playPauseFadeTask = nil
+        isFadingInPlay = false
+
+        guard let player = player else {
+            playbackStatus = .paused
+            updateNowPlayingPlaybackState()
+            return
+        }
+
         playbackStatus = .paused
         updateNowPlayingPlaybackState()
-        AppLogger.audio.info("Playback paused.")
+
+        Task.detached(priority: .utility) { [weak self] in
+            await MainActor.run {
+                self?.saveCurrentPlaybackPositionIfNeeded()
+            }
+        }
+
+        let startVol = player.volume
+        if smooth && smoothSkippingEnabled && startVol > 0 && !isMuted {
+            isFadingOutPause = true
+            playPauseFadeTask = Task { @MainActor in
+                let steps = 18
+                let stepDuration: UInt64 = 20_000_000 // 20ms per step -> 360ms total fade duration (slightly faster)
+
+                for step in 1...steps {
+                    if Task.isCancelled { break }
+                    try? await Task.sleep(nanoseconds: stepDuration)
+                    if Task.isCancelled { break }
+
+                    let progress = Float(step) / Float(steps)
+                    // Drops faster at first, then flattens out smoothly at zero
+                    let factor = (1.0 - progress) * (1.0 - progress)
+                    player.volume = min(self.volume, max(0.0, startVol * factor))
+                }
+
+                guard !Task.isCancelled else { return }
+                player.pause()
+                player.volume = 0.0 // Keep player at 0.0 while paused so subsequent resume never starts with a sudden burst
+                self.isFadingOutPause = false
+                AppLogger.audio.info("Playback smoothly paused with fast-start ease-out fade.")
+            }
+        } else {
+            isFadingOutPause = false
+            player.pause()
+            player.volume = volume
+            AppLogger.audio.info("Playback paused immediately.")
+        }
     }
     
     /// Advances to the next track in the queue, prioritizing Play Next before regular upcoming items.
@@ -525,7 +692,8 @@ public final class AudioPlayerService {
         // If track has been playing for more than 3 seconds, restart and play it
         if currentTime > 3.0 {
             seek(to: 0)
-            player?.playImmediately(atRate: speed)
+            player?.defaultRate = speed
+            player?.play()
             playbackStatus = .playing
             return
         }
@@ -540,30 +708,121 @@ public final class AudioPlayerService {
             loadAndPlay(track: queue[prevIdx])
         } else {
             seek(to: 0)
-            player?.playImmediately(atRate: speed)
+            player?.defaultRate = speed
+            player?.play()
             playbackStatus = .playing
         }
     }
     
-    /// Seeks to a specific timestamp in seconds.
-    public func seek(to timeInSeconds: TimeInterval) {
+    /// Seeks to a specific timestamp in seconds with smooth, click-free audio micro-fading and instant resumption.
+    public func seek(to timeInSeconds: TimeInterval, completion: (@Sendable () -> Void)? = nil) {
         cancelCrossfade()
         // Ensure preconditions are met before proceeding
-        guard let player = player else { return }
+        guard let player = player else {
+            self.isSeeking = false
+            completion?()
+            return
+        }
+        self.isSeeking = true
         // Clamped time
-        let clampedTime = max(0, min(timeInSeconds, duration))
+        let clampedTime = duration > 0 ? max(0, min(timeInSeconds, duration)) : max(0, timeInSeconds)
         self.currentTime = clampedTime
+        self.seekPosition = clampedTime
+        AppLogger.audio.debug("Seeking to \(String(format: "%.2f", clampedTime))s (duration: \(String(format: "%.2f", self.duration))s)")
         
-        // Target cm time
-        let targetCMTime = CMTime(seconds: clampedTime, preferredTimescale: 600)
-        // Tolerance
-        let tolerance = CMTime(seconds: 0.05, preferredTimescale: 600)
-        player.seek(to: targetCMTime, toleranceBefore: tolerance, toleranceAfter: tolerance) { [weak self] _ in
-            // Ensure preconditions are met before proceeding
-            guard let self = self else { return }
-            Task { @MainActor in
-                self.updateNowPlayingElapsedTime()
+        // Dynamically match the track asset's native timescale (e.g. 48000 for 48k car audio, 44100, etc.)
+        let timescale = player.currentItem?.asset.duration.timescale ?? 600
+        let targetCMTime = CMTime(seconds: clampedTime, preferredTimescale: timescale)
+        
+        // If not actively playing (e.g. paused or stopped), seek directly without volume micro-fading
+        guard playbackStatus == .playing && player.rate > 0 else {
+            seekTask?.cancel()
+            seekTask = nil
+            isSmoothSeeking = false
+            
+            player.seek(to: targetCMTime, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
+                guard let self = self else {
+                    completion?()
+                    return
+                }
+                Task { @MainActor in
+                    self.isSeeking = false
+                    self.updateNowPlayingElapsedTime()
+                    AppLogger.audio.debug("Paused seek finished at \(String(format: "%.2f", self.currentTime))s")
+                    completion?()
+                }
             }
+            return
+        }
+        
+        // Active playback: cancel any in-flight seek so the latest seek target position executes immediately
+        seekTask?.cancel()
+        
+        let masterVol = self.volume
+        if masterVol <= 0 || isMuted {
+            isSmoothSeeking = false
+            let tolerance = CMTime(seconds: 0.03, preferredTimescale: timescale)
+            player.seek(to: targetCMTime, toleranceBefore: tolerance, toleranceAfter: tolerance) { [weak self] _ in
+                guard let self = self else {
+                    completion?()
+                    return
+                }
+                Task { @MainActor in
+                    self.isSeeking = false
+                    self.updateNowPlayingElapsedTime()
+                    completion?()
+                }
+            }
+            return
+        }
+        
+        isSmoothSeeking = true
+        
+        seekTask = Task { @MainActor [weak self] in
+            guard let self = self, let activePlayer = self.player else {
+                completion?()
+                return
+            }
+            
+            // Phase 1: Micro-dip to 0 to decouple outgoing buffer and avoid click
+            activePlayer.volume = 0.0
+            
+            // Phase 2: Dispatch seek immediately with high-performance tolerance
+            let tolerance = CMTime(seconds: 0.03, preferredTimescale: timescale)
+            activePlayer.seek(to: targetCMTime, toleranceBefore: tolerance, toleranceAfter: tolerance) { [weak self] _ in
+                Task { @MainActor in
+                    guard let self = self else { return }
+                    self.isSmoothSeeking = false
+                    self.isSeeking = false
+                    self.player?.volume = masterVol
+                    self.updateNowPlayingElapsedTime()
+                    AppLogger.audio.debug("Smooth instant seek finished at \(String(format: "%.2f", self.currentTime))s")
+                    completion?()
+                }
+            }
+            
+            let speed = Float(EqualizerManager.shared.playbackSpeed)
+            if activePlayer.rate == 0 {
+                activePlayer.rate = speed
+            }
+            
+            // Phase 3: Ultra-fast smoothstep micro-fade in (~14ms) from silence to full master volume
+            // Does not wait in silence for the seek completion callback; as soon as AVPlayer delivers
+            // the new audio frames, volume is already restored and AudioDSPProcessor's 128-sample ramp
+            // curves the new signal in cleanly with zero pop and zero gap.
+            let fadeInSteps = 4
+            let fadeInStepDuration: UInt64 = 3_500_000 // 3.5ms per step -> 14ms total
+            for step in 1...fadeInSteps {
+                if Task.isCancelled { break }
+                try? await Task.sleep(nanoseconds: fadeInStepDuration)
+                if Task.isCancelled { break }
+                let progress = Float(step) / Float(fadeInSteps)
+                let factor = progress * progress * (3.0 - 2.0 * progress)
+                activePlayer.volume = min(masterVol, max(0.0, masterVol * factor))
+            }
+            
+            guard !Task.isCancelled else { return }
+            activePlayer.volume = masterVol
         }
     }
     
@@ -766,6 +1025,15 @@ public final class AudioPlayerService {
         cancelCrossfade()
         smoothSkipTask?.cancel()
         smoothSkipTask = nil
+        playPauseFadeTask?.cancel()
+        playPauseFadeTask = nil
+        isFadingOutPause = false
+        isFadingInPlay = false
+        if let outgoing = skipOutgoingPlayer {
+            outgoing.pause()
+            outgoing.volume = 0
+            skipOutgoingPlayer = nil
+        }
         prewarmTask?.cancel()
         prewarmTask = nil
         prewarmedTrackID = nil
@@ -801,6 +1069,24 @@ public final class AudioPlayerService {
     public func removeFromQueue(at index: Int) {
         removeQueueItem(at: index)
     }
+
+    /// Refreshes in-memory metadata of the current playing track and queue if it was edited externally.
+    public func syncTrackMetadata(updatedTrack: Track) {
+        if currentTrack?.id == updatedTrack.id {
+            self.currentTrack = updatedTrack
+            self.setupNowPlayingInfo(for: updatedTrack)
+        }
+        for i in 0..<queue.count {
+            if queue[i].id == updatedTrack.id {
+                queue[i] = updatedTrack
+            }
+        }
+        for i in 0..<originalQueue.count {
+            if originalQueue[i].id == updatedTrack.id {
+                originalQueue[i] = updatedTrack
+            }
+        }
+    }
     
     /// Plays a specific track in the existing queue by its queue index.
     public func playTrackInQueue(at index: Int) {
@@ -822,10 +1108,20 @@ public final class AudioPlayerService {
     
     // Load and play
     private func loadAndPlay(track: Track) {
+#if os(iOS)
+        beginBackgroundTaskAssertion()
+#endif
         if let current = currentTrack, current.id != track.id {
             saveCurrentPlaybackPositionIfNeeded()
         }
         cancelCrossfade()
+        self.isTransitioningTrack = true
+        transitionTimeoutTask?.cancel()
+        transitionTimeoutTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 5_000_000_000)
+            self?.isTransitioningTrack = false
+        }
+        self.isSeeking = false
         self.currentTrack = track
         self.duration = track.duration
         
@@ -837,7 +1133,9 @@ public final class AudioPlayerService {
         self.playbackAccumulatedTime = 0
         
         // 1. Ensure audio session is active
-        ensureAudioSessionActive()
+        Task {
+            await AudioSessionManager.shared.activateSessionIfNeeded()
+        }
         
         // 2. Ensure root folder bookmark is actively accessed and resolve accessible file URL
         _ = SecurityScopedBookmark.shared.resolveAndAccessBookmark()
@@ -864,7 +1162,7 @@ public final class AudioPlayerService {
             }
         }
         
-        // Use pre-warmed item if available for instant zero-latency start, otherwise instantiate with low-latency timeDomain algorithm
+        // Use pre-warmed item if available, otherwise instantiate with studio-grade spectral algorithm for pristine music fidelity
         let playerItem: AVPlayerItem
         if prewarmedTrackID == track.id, let prewarmed = prewarmedPlayerItem {
             playerItem = prewarmed
@@ -873,8 +1171,11 @@ public final class AudioPlayerService {
         } else {
             let asset = AVURLAsset(url: resolvedURL, options: [AVURLAssetPreferPreciseDurationAndTimingKey: false])
             playerItem = AVPlayerItem(asset: asset)
-            playerItem.audioTimePitchAlgorithm = .timeDomain
-            attachAudioMixIfNeeded(to: playerItem)
+            playerItem.audioTimePitchAlgorithm = .spectral
+            attachAudioMix(to: playerItem)
+        }
+        if playerItem.audioMix == nil {
+            attachAudioMix(to: playerItem)
         }
         
         if resumePosition > 0 {
@@ -885,22 +1186,22 @@ public final class AudioPlayerService {
         if player == nil {
             let newPlayer = AVPlayer(playerItem: playerItem)
             newPlayer.automaticallyWaitsToMinimizeStalling = false
-            newPlayer.allowsExternalPlayback = false
+            newPlayer.allowsExternalPlayback = true
             #if os(iOS)
-            newPlayer.usesExternalPlaybackWhileExternalScreenIsActive = false
+            newPlayer.usesExternalPlaybackWhileExternalScreenIsActive = true
             #endif
             self.player = newPlayer
             setupPeriodicTimeObserver()
             setupPlayerObservers(for: newPlayer)
         } else {
             player?.automaticallyWaitsToMinimizeStalling = false
-            player?.allowsExternalPlayback = false
+            player?.allowsExternalPlayback = true
             #if os(iOS)
-            player?.usesExternalPlaybackWhileExternalScreenIsActive = false
+            player?.usesExternalPlaybackWhileExternalScreenIsActive = true
             #endif
             player?.replaceCurrentItem(with: playerItem)
         }
-        player?.volume = volume
+        player?.volume = isSmoothSkipping ? 0.0 : volume
         player?.isMuted = isMuted
         
         // Load track-specific or default equalizer profile
@@ -910,7 +1211,34 @@ public final class AudioPlayerService {
         setupPlayerItemObservers(for: playerItem, track: track)
         
         let currentSpeed = Float(EqualizerManager.shared.playbackSpeed)
-        player?.playImmediately(atRate: currentSpeed)
+        player?.defaultRate = currentSpeed
+
+        if smoothSkippingEnabled && !isSmoothSkipping && volume > 0 && !isMuted {
+            isFadingInPlay = true
+            player?.volume = 0.0
+            player?.play()
+            let masterVol = self.volume
+            playPauseFadeTask?.cancel()
+            playPauseFadeTask = Task { @MainActor in
+                let steps = 45
+                let stepDuration: UInt64 = 20_000_000 // 20ms per step -> 900ms total smooth fade-in duration
+                for step in 1...steps {
+                    if Task.isCancelled { break }
+                    try? await Task.sleep(nanoseconds: stepDuration)
+                    if Task.isCancelled { break }
+                    let progress = Float(step) / Float(steps)
+                    // Slower, smoother ramp (smoothstep): starts gently from silence, ramps up smoothly, then seamlessly flattens to master volume
+                    let factor = progress * progress * (3.0 - 2.0 * progress)
+                    self.player?.volume = min(masterVol, max(0.0, masterVol * factor))
+                }
+                guard !Task.isCancelled else { return }
+                self.player?.volume = masterVol
+                self.isFadingInPlay = false
+            }
+        } else {
+            player?.volume = isSmoothSkipping ? 0.0 : volume
+            player?.play()
+        }
         setupNowPlayingInfo(for: track)
         if resumePosition > 0 {
             updateNowPlayingElapsedTime()
@@ -922,26 +1250,62 @@ public final class AudioPlayerService {
         AppLogger.audio.info("Now playing: \(track.title) by \(track.artist) at \(resolvedURL.path) (rate: \(currentSpeed)x, resumed at: \(resumePosition)s)")
     }
     
-    // Attach audio mix DSP tap (10-Band Equalizer & Volume Booster) only when actively in use
-    private func attachAudioMixIfNeeded(to playerItem: AVPlayerItem) {
-        let isEQActive = EqualizerManager.shared.isEqualizerEnabled || abs(EqualizerManager.shared.volumeBoosterDB) > 0.05
-        guard isEQActive else {
-            playerItem.audioMix = nil
+    // Attach audio mix DSP tap (10-Band Equalizer & Volume Booster)
+    private func attachAudioMix(to playerItem: AVPlayerItem) {
+        let isEQ = EqualizerManager.shared.isEqualizerEnabled
+        let boost = EqualizerManager.shared.volumeBoosterDB
+        let needsDSP = isEQ || abs(boost) > 0.05
+
+        // If DSP is not active, ensure audioMix is nil for pure native direct hardware playback
+        if !needsDSP {
+            if playerItem.audioMix != nil {
+                playerItem.audioMix = nil
+            }
             return
         }
-        guard let tap = AudioDSPProcessor.shared.createAudioProcessingTap() else { return }
-        let inputParams = AVMutableAudioMixInputParameters()
-        inputParams.audioTapProcessor = tap
+
+        if playerItem.audioMix != nil { return }
+
+        // Match audio processing tap to valid audio tracks
+        let audioTracks = playerItem.asset.tracks(withMediaType: .audio)
+        guard !audioTracks.isEmpty else {
+            // Tracks not ready yet; will be attached when item transitions to readyToPlay
+            return
+        }
+
+        var inputParams: [AVAudioMixInputParameters] = []
+        for track in audioTracks {
+            let params = AVMutableAudioMixInputParameters(track: track)
+            if let tap = AudioDSPProcessor.shared.createAudioProcessingTap() {
+                params.audioTapProcessor = tap
+                inputParams.append(params)
+            }
+        }
+
+        guard !inputParams.isEmpty else { return }
         let audioMix = AVMutableAudioMix()
-        audioMix.inputParameters = [inputParams]
+        audioMix.inputParameters = inputParams
         playerItem.audioMix = audioMix
-        AppLogger.audio.info("Attached AudioDSPProcessor tap.")
+        AppLogger.audio.info("Attached AudioDSPProcessor tap to player item (\(inputParams.count) audio track(s)).")
     }
-    
-    /// Dynamically updates or attaches the audio mix on the currently playing item
+
+    /// Dynamically ensures the audio mix DSP tap is attached on the currently playing item if needed.
     public func updateAudioMixForCurrentItem() {
         guard let item = player?.currentItem else { return }
-        attachAudioMixIfNeeded(to: item)
+        let isEQ = EqualizerManager.shared.isEqualizerEnabled
+        let boost = EqualizerManager.shared.volumeBoosterDB
+        let needsDSP = isEQ || abs(boost) > 0.05
+
+        if needsDSP {
+            if item.audioMix == nil {
+                attachAudioMix(to: item)
+            }
+        } else {
+            if item.audioMix != nil {
+                item.audioMix = nil
+                AppLogger.audio.info("Detached AudioDSPProcessor tap (DSP inactive).")
+            }
+        }
     }
 
     // Pre-warms the next track in queue asynchronously so skipping to it is instantaneous
@@ -962,11 +1326,18 @@ public final class AudioPlayerService {
             let resolvedURL = SecurityScopedBookmark.shared.resolveAccessibleURL(for: next.url)
             let asset = AVURLAsset(url: resolvedURL, options: [AVURLAssetPreferPreciseDurationAndTimingKey: false])
             let item = AVPlayerItem(asset: asset)
-            item.audioTimePitchAlgorithm = .timeDomain
+            item.audioTimePitchAlgorithm = .spectral
+            
+            // Also prewarm waveform amplitude peaks in background for zero-latency dial rendering
+            _ = await AudioWaveformSpectrogramGenerator.shared.fetchSubSecondWaveformPeaks(
+                for: next.url,
+                duration: next.duration,
+                samplesPerSecond: 2
+            )
             
             await MainActor.run { [weak self] in
                 guard let self = self, !Task.isCancelled else { return }
-                self.attachAudioMixIfNeeded(to: item)
+                self.attachAudioMix(to: item)
                 self.prewarmedTrackID = next.id
                 self.prewarmedPlayerItem = item
             }
@@ -1006,20 +1377,47 @@ public final class AudioPlayerService {
                 guard let self = self else { return }
                 switch p.timeControlStatus {
                 case .playing:
+                    self.isTransitioningTrack = false
+                    self.transitionTimeoutTask?.cancel()
+                    self.isRoutingChanging = false // Clear routing flag when confirmed playing
                     self.playbackStatus = .playing
                     self.updateNowPlayingPlaybackState()
                 case .paused:
+                    // If currently loading / replacing a track item, seeking, switching routes, or smoothly fading out, do not let the transient state trigger an unexpected pause
+                    if self.isTransitioningTrack || self.isSeeking || self.isRoutingChanging || self.isFadingOutPause {
+                        // Safety: if playback status is .playing but the player is actually paused,
+                        // schedule a recovery attempt after a delay to prevent permanent stall
+                        if self.playbackStatus == .playing {
+                            Task { @MainActor [weak self] in
+                                try? await Task.sleep(nanoseconds: 2_000_000_000) // 2s safety timeout
+                                guard let self = self else { return }
+                                // Only recover if player is still actually paused (not buffering/waitingToPlay)
+                                if self.playbackStatus == .playing,
+                                   let player = self.player,
+                                   player.timeControlStatus == .paused {
+                                    self.isRoutingChanging = false
+                                    self.isTransitioningTrack = false
+                                    self.transitionTimeoutTask?.cancel()
+                                    let speed = Float(EqualizerManager.shared.playbackSpeed)
+                                    player.defaultRate = speed
+                                    player.play()
+                                    AppLogger.audio.info("Safety recovery: forced playback after 2s paused stall")
+                                }
+                            }
+                        }
+                        return
+                    }
                     if self.playbackStatus != .stopped {
                         self.playbackStatus = .paused
                         self.updateNowPlayingPlaybackState()
                     }
                 case .waitingToPlayAtSpecifiedRate:
+                    if let reason = p.reasonForWaitingToPlay {
+                        AppLogger.audio.info("Player waiting to play: \(reason.rawValue)")
+                    }
                     // Only display buffering if player was previously stopped
                     if self.playbackStatus == .stopped {
                         self.playbackStatus = .buffering
-                    }
-                    if let reason = p.reasonForWaitingToPlay {
-                        AppLogger.audio.info("Player waiting to play: \(reason.rawValue)")
                     }
                 @unknown default:
                     break
@@ -1036,22 +1434,33 @@ public final class AudioPlayerService {
                 guard let self = self else { return }
                 switch item.status {
                 case .readyToPlay:
+                    self.attachAudioMix(to: item)
                     let dSec = CMTimeGetSeconds(item.duration)
                     if !dSec.isNaN && !dSec.isInfinite && dSec > 0 {
                         self.duration = dSec
+                        self.updateNowPlayingDuration(dSec)
                     }
-                    if self.playbackStatus == .buffering {
+                    if self.playbackStatus != .stopped {
                         self.playbackStatus = .playing
                     }
                     let speed = Float(EqualizerManager.shared.playbackSpeed)
-                    self.player?.playImmediately(atRate: speed)
+                    self.player?.defaultRate = speed
+                    self.player?.play()
+#if os(iOS)
+                    self.endBackgroundTaskAssertion()
+#endif
                     AppLogger.audio.info("AVPlayerItem ready to play: \(track.title) (duration: \(self.duration)s) at \(speed)x")
                 case .failed:
+                    self.isTransitioningTrack = false
+                    self.transitionTimeoutTask?.cancel()
                     let itemErr = item.error?.localizedDescription ?? "None"
                     let playerErr = self.player?.error?.localizedDescription ?? "None"
                     let errorLogs = item.errorLog()?.events.compactMap { $0.errorComment }.joined(separator: "; ") ?? "None"
                     AppLogger.audio.error("AVPlayerItem failed for \(track.title). Item Error: \(itemErr). Player Error: \(playerErr). ErrorLog: \(errorLogs)")
                     self.playbackStatus = .stopped
+#if os(iOS)
+                    self.endBackgroundTaskAssertion()
+#endif
                 case .unknown:
                     break
                 @unknown default:
@@ -1079,8 +1488,37 @@ public final class AudioPlayerService {
         ) { [weak self] notification in
             Task { @MainActor in
                 let error = notification.userInfo?[AVPlayerItemFailedToPlayToEndTimeErrorKey] as? Error
-                AppLogger.audio.error("AVPlayerItem failed to play to end time: \(error?.localizedDescription ?? "unknown error")")
-                self?.playbackStatus = .stopped
+                AppLogger.audio.warning("AVPlayerItem playback error: \(error?.localizedDescription ?? "unknown error")")
+                guard let self = self else { return }
+
+                // If playback failed while audio processing tap was attached, the connected output route
+                // (e.g. car head unit) may have rejected dynamic CoreMedia tap format negotiation (-12885 / -12082).
+                // Detach audioMix immediately and resume native playback so audio never stops.
+                if playerItem.audioMix != nil {
+                    AppLogger.audio.warning("Output route rejected audio processing tap. Detaching audioMix and recovering playback immediately.")
+                    playerItem.audioMix = nil
+                    let speed = Float(EqualizerManager.shared.playbackSpeed)
+                    self.player?.defaultRate = speed
+                    self.player?.play()
+                    return
+                }
+
+                if self.duration > 0 && self.currentTime >= self.duration - 2.0 {
+                    self.handleTrackEnded()
+                } else if self.playbackStatus == .playing, let player = self.player {
+                    AppLogger.audio.info("Attempting auto-recovery from transient audio stall")
+                    let speed = Float(EqualizerManager.shared.playbackSpeed)
+                    player.defaultRate = speed
+                    player.play()
+                } else if !self.queue.isEmpty {
+                    AppLogger.audio.info("Advancing to next track after unrecoverable stall")
+                    self.next()
+                } else {
+                    self.playbackStatus = .stopped
+#if os(iOS)
+                    self.endBackgroundTaskAssertion()
+#endif
+                }
             }
         }
     }
@@ -1121,6 +1559,9 @@ public final class AudioPlayerService {
     
     // Handle track ended
     private func handleTrackEnded() {
+#if os(iOS)
+        beginBackgroundTaskAssertion()
+#endif
         if !hasCountedCurrentPlay, let track = currentTrack {
             hasCountedCurrentPlay = true
             onTrackPlay?(track.id)
@@ -1136,9 +1577,18 @@ public final class AudioPlayerService {
         case .one:
             seek(to: 0)
             let speed = Float(EqualizerManager.shared.playbackSpeed)
-            player?.playImmediately(atRate: speed)
-        case .all, .off:
+            player?.defaultRate = speed
+            player?.play()
+        case .all:
             next()
+        case .off:
+            if autoPlayNext {
+                next()
+            } else {
+                pause()
+                seek(to: 0)
+                playbackStatus = .stopped
+            }
         }
     }
     
@@ -1151,7 +1601,8 @@ public final class AudioPlayerService {
               crossfadeDuration >= 0.5,
               !isCrossfading,
               duration > (crossfadeDuration * 1.2),
-              playbackStatus == .playing else { return }
+              playbackStatus == .playing,
+              autoPlayNext || repeatMode != .off else { return }
         
         // Remaining
         let remaining = duration - currentTime
@@ -1189,16 +1640,16 @@ public final class AudioPlayerService {
         let nextAsset = AVURLAsset(url: resolvedNextURL, options: [AVURLAssetPreferPreciseDurationAndTimingKey: false])
         // Next item
         let nextItem = AVPlayerItem(asset: nextAsset)
-        nextItem.audioTimePitchAlgorithm = .timeDomain
-        attachAudioMixIfNeeded(to: nextItem)
+        nextItem.audioTimePitchAlgorithm = .spectral
+        attachAudioMix(to: nextItem)
         
         // Incoming player
         let incomingPlayer = AVPlayer(playerItem: nextItem)
-        incomingPlayer.allowsExternalPlayback = false
-        #if os(iOS)
-        incomingPlayer.usesExternalPlaybackWhileExternalScreenIsActive = false
-        #endif
         incomingPlayer.automaticallyWaitsToMinimizeStalling = false
+        incomingPlayer.allowsExternalPlayback = true
+        #if os(iOS)
+        incomingPlayer.usesExternalPlaybackWhileExternalScreenIsActive = true
+        #endif
         incomingPlayer.volume = 0.0
         incomingPlayer.isMuted = false
         self.fadePlayer = incomingPlayer
@@ -1232,7 +1683,8 @@ public final class AudioPlayerService {
         }
         
         let speed = Float(EqualizerManager.shared.playbackSpeed)
-        incomingPlayer.playImmediately(atRate: speed)
+        incomingPlayer.defaultRate = speed
+        incomingPlayer.play()
         AppLogger.audio.info("Starting crossfade (\(self.crossfadeDuration)s) to: \(nextTrack.title) at \(speed)x")
         
         // Total fade duration
@@ -1292,95 +1744,118 @@ public final class AudioPlayerService {
         }
     }
     
-    /// Simultaneously fades in the next track while fading out the current one on skip.
-    /// Used by next() and previous() when smoothSkippingEnabled is true.
+    /// Transitions in the next track first, then fades out the current playing track.
+    /// Dual players play concurrently so the transition is fluid, uninterrupted, and pop-free.
     private func smoothSkip(then action: @escaping () -> Void) {
         smoothSkipTask?.cancel()
+        smoothSkipTask = nil
         
-        // Capture the outgoing player and master volume before swapping tracks
-        let outgoingPlayer = self.player
-        // Master volume
+        let now = ProcessInfo.processInfo.systemUptime
+        let isRapidSpam = (now - lastSkipTimestamp) < 0.38
+        lastSkipTimestamp = now
+        
+        // Immediately pause and clean up any prior outgoing player from a rapid previous skip
+        if let prevOutgoing = skipOutgoingPlayer {
+            prevOutgoing.pause()
+            prevOutgoing.volume = 0
+            skipOutgoingPlayer = nil
+        }
+        
+        // If rapidly spamming skips, execute action immediately with master volume
+        // to keep playback uninterrupted
+        if isRapidSpam {
+            self.isSmoothSkipping = false
+            action()
+            self.player?.volume = self.volume
+            return
+        }
+        
+        guard let outgoingPlayer = self.player, playbackStatus == .playing else {
+            action()
+            return
+        }
+        
+        // Retain outgoing player so it continues playing through the transition
+        self.skipOutgoingPlayer = outgoingPlayer
         let masterVolume = self.volume
         
-        // ⚠️ Detach the outgoing player's periodic time observer BEFORE nilling self.player.
-        // If we nil first, teardownPlayerObservers() inside loadAndPlay can't reach the old player,
-        // leaving a live observer that races with the new player's observer to write self.currentTime.
+        // Detach observers from outgoing player before switching
         if let token = timeObserverToken {
-            outgoingPlayer?.removeTimeObserver(token)
+            outgoingPlayer.removeTimeObserver(token)
             timeObserverToken = nil
         }
-        // Also invalidate KVO and notification observers tied to the outgoing player item
-        itemStatusObserver?.invalidate()
-        itemStatusObserver = nil
-        playerTimeControlObserver?.invalidate()
-        playerTimeControlObserver = nil
-        if let endObs = playerItemEndObserver {
-            NotificationCenter.default.removeObserver(endObs)
-            playerItemEndObserver = nil
-        }
-        if let failedObs = playerItemFailedObserver {
-            NotificationCenter.default.removeObserver(failedObs)
-            playerItemFailedObserver = nil
-        }
+        teardownItemObservers()
         
-        // Temporarily nil self.player so loadAndPlay creates a brand-new AVPlayer for the
-        // incoming track, allowing both players to run simultaneously during the crossfade
+        // Temporarily nil self.player and mark isSmoothSkipping so loadAndPlay creates
+        // a fresh AVPlayer with volume = 0, avoiding any initial audio pop/blast
         self.player = nil
+        self.isSmoothSkipping = true
         
-        // Load the next track — a fresh AVPlayer is created since self.player is nil
+        // Load the next track (triggers loadAndPlay)
         action()
         
-        // Capture the new player as a local constant so the fade loop holds a stable reference
-        // even if self.player is reassigned again (e.g. user taps next a second time)
-        let incomingPlayer = self.player
+        self.isSmoothSkipping = false
         
-        // Immediately silence the incoming player so the fade-in starts from zero
-        incomingPlayer?.volume = 0
+        guard let incomingPlayer = self.player else {
+            outgoingPlayer.pause()
+            outgoingPlayer.volume = 0
+            skipOutgoingPlayer = nil
+            return
+        }
         
+        // 2-Phase Smooth Transition:
+        // Phase 1: Incoming track fades in from 0 to masterVolume while current track plays at full volume
+        // Phase 2: Once incoming track is fully faded in, current playing track fades out to 0 and pauses
         smoothSkipTask = Task { @MainActor in
-            let fadeInSteps = 10
-            let fadeOutSteps = 10
-            let stepDuration: UInt64 = 20_000_000 // 20ms per step → 200ms fade-in, 200ms fade-out
+            let steps = 16
+            let stepDuration: UInt64 = 25_000_000 // 25ms per step -> 400ms per phase (800ms total smooth transition)
             
-            // Phase 1: Fade in the next track while current track plays
-            for step in 1...fadeInSteps {
+            // Phase 1: Next track transitions in from 0 to masterVolume while current track plays (starts slower, ramps up, flattens out)
+            for step in 1...steps {
                 if Task.isCancelled { break }
                 try? await Task.sleep(nanoseconds: stepDuration)
                 if Task.isCancelled { break }
-                
-                let progress = Float(step) / Float(fadeInSteps)
-                let angle = progress * (Float.pi / 2.0)
-                incomingPlayer?.volume = sin(angle) * masterVolume
-                outgoingPlayer?.volume = masterVolume
+                let progress = Float(step) / Float(steps)
+                let factor = progress * progress * (3.0 - 2.0 * progress)
+                incomingPlayer.volume = factor * masterVolume
+                outgoingPlayer.volume = masterVolume
             }
             
             guard !Task.isCancelled else { return }
-            incomingPlayer?.volume = masterVolume
+            incomingPlayer.volume = masterVolume
             
-            // Phase 2: Fade out the current track while next track plays at full volume
-            for step in 1...fadeOutSteps {
+            // Phase 2: Current playing track fades out to 0 while next track plays at full volume (starts slower, ramps down, flattens out into silence)
+            for step in 1...steps {
                 if Task.isCancelled { break }
                 try? await Task.sleep(nanoseconds: stepDuration)
                 if Task.isCancelled { break }
-                
-                let progress = Float(step) / Float(fadeOutSteps)
-                let angle = progress * (Float.pi / 2.0)
-                outgoingPlayer?.volume = cos(angle) * masterVolume
-                incomingPlayer?.volume = masterVolume
+                let progress = Float(step) / Float(steps)
+                let factor = 1.0 - (progress * progress * (3.0 - 2.0 * progress))
+                outgoingPlayer.volume = factor * masterVolume
+                incomingPlayer.volume = masterVolume
             }
             
-            // Ensure preconditions are met before proceeding
             guard !Task.isCancelled else { return }
             
-            // Finalize — incoming is at full volume, outgoing is silenced and paused
-            incomingPlayer?.volume = masterVolume
-            outgoingPlayer?.pause()
-            outgoingPlayer?.volume = 0
+            // Finalize: incoming is at full volume, outgoing is silenced and paused
+            incomingPlayer.volume = masterVolume
+            outgoingPlayer.pause()
+            outgoingPlayer.volume = 0.0
+            self.skipOutgoingPlayer = nil
         }
     }
     
     // Cancel crossfade
     private func cancelCrossfade() {
+        seekTask?.cancel()
+        seekTask = nil
+        isSmoothSeeking = false
+        
+        if !isSmoothSkipping, let outgoing = skipOutgoingPlayer {
+            outgoing.pause()
+            outgoing.volume = 0
+            skipOutgoingPlayer = nil
+        }
         if isCrossfading {
             crossfadeTask?.cancel()
             crossfadeTask = nil
@@ -1437,14 +1912,14 @@ public final class AudioPlayerService {
             case .HDMI, .lineOut:
                 return "EXTERNAL SPEAKER"
             default:
-                return nil
+                return "EXTERNAL DEVICE"
             }
         }
         
         if !names.isEmpty {
             currentAudioRouteName = names.joined(separator: " + ")
         } else {
-            currentAudioRouteName = "THIS DEVICE"
+            currentAudioRouteName = "BLUETOOTH"
         }
 #elseif os(macOS)
         var defaultDeviceID = AudioDeviceID(0)
@@ -1463,8 +1938,8 @@ public final class AudioPlayerService {
             &defaultDeviceID
         )
         if status == noErr, defaultDeviceID != 0 {
-            var name: CFString = "" as CFString
-            var nameSize = UInt32(MemoryLayout<CFString>.size)
+            var unmanagedName: Unmanaged<CFString>? = nil
+            var nameSize = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
             var nameAddress = AudioObjectPropertyAddress(
                 mSelector: kAudioObjectPropertyName,
                 mScope: kAudioObjectPropertyScopeGlobal,
@@ -1476,10 +1951,10 @@ public final class AudioPlayerService {
                 0,
                 nil,
                 &nameSize,
-                &name
+                &unmanagedName
             )
-            if nameStatus == noErr {
-                let nameStr = (name as String).trimmingCharacters(in: .whitespacesAndNewlines)
+            if nameStatus == noErr, let cfName = unmanagedName?.takeRetainedValue() {
+                let nameStr = (cfName as String).trimmingCharacters(in: .whitespacesAndNewlines)
                 if !nameStr.isEmpty {
                     let lower = nameStr.lowercased()
                     if lower.contains("built-in") || lower.contains("internal speaker") || lower.contains("macbook") || lower.contains("imac") || lower.contains("mac mini") || lower.contains("mac studio") || lower.contains("mac pro") {
@@ -1495,41 +1970,52 @@ public final class AudioPlayerService {
 #endif
     }
     
-    // Setup audio session asynchronously off the main thread
+    // Setup audio session asynchronously with playback category, longFormAudio policy, and non-blocking activation
     private func setupAudioSession() {
 #if os(iOS)
-        Task.detached(priority: .userInitiated) {
-            do {
-                let session = AVAudioSession.sharedInstance()
-                try session.setCategory(.playback, mode: .default, policy: .longFormAudio)
-                try session.setActive(true)
-                await MainActor.run { [weak self] in
-                    self?.updateCurrentAudioRoute()
-                }
-                AppLogger.audio.info("AVAudioSession active: longFormAudio category configured asynchronously.")
-            } catch {
-                AppLogger.audio.error("Failed to configure AVAudioSession: \(error.localizedDescription)")
-            }
+        Task { @MainActor [weak self] in
+            await AudioSessionManager.shared.activateSessionIfNeeded()
+            self?.updateCurrentAudioRoute()
         }
 #endif
     }
     
-    // Ensure audio session active asynchronously off the main thread
-    private func ensureAudioSessionActive() {
+    // Ensure audio session active asynchronously for playback without blocking the main thread
+    public func ensureAudioSessionActive(completion: (@MainActor @Sendable (Bool) -> Void)? = nil) {
 #if os(iOS)
-        Task.detached(priority: .userInitiated) {
-            let session = AVAudioSession.sharedInstance()
-            do {
-                if session.category != .playback || session.routeSharingPolicy != .longFormAudio {
-                    try session.setCategory(.playback, mode: .default, policy: .longFormAudio)
-                }
-                try session.setActive(true)
-                await MainActor.run { [weak self] in
-                    self?.updateCurrentAudioRoute()
-                }
-            } catch {
-                AppLogger.audio.warning("Could not activate AVAudioSession: \(error.localizedDescription)")
-            }
+        Task { @MainActor in
+            let succeeded = await AudioSessionManager.shared.activateSessionIfNeeded()
+            completion?(succeeded)
+        }
+#else
+        completion?(true)
+#endif
+    }
+
+    /// Full refresh of audio session and route (used on app foreground, didBecomeActive, and view mount)
+    public func refreshAudioSessionAndRoute() {
+#if os(iOS)
+        updateCurrentAudioRoute()
+        scheduleDelayedRouteUpdates()
+#elseif os(macOS)
+        updateCurrentAudioRoute()
+#endif
+    }
+
+    private var delayedRouteUpdateTask: Task<Void, Never>?
+
+    /// Schedules follow-up route queries to allow asynchronous Bluetooth friendly name resolution.
+    private func scheduleDelayedRouteUpdates() {
+#if os(iOS)
+        delayedRouteUpdateTask?.cancel()
+        delayedRouteUpdateTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 350_000_000) // 350ms
+            guard !Task.isCancelled, let self = self else { return }
+            self.updateCurrentAudioRoute()
+
+            try? await Task.sleep(nanoseconds: 650_000_000) // 1.0s total
+            guard !Task.isCancelled else { return }
+            self.updateCurrentAudioRoute()
         }
 #endif
     }
@@ -1542,14 +2028,11 @@ public final class AudioPlayerService {
         // 1. Interruption Notification (Phone Calls, Siri, Alarms)
         audioInterruptionObserver = NotificationCenter.default.addObserver(
             forName: AVAudioSession.interruptionNotification,
-            object: AVAudioSession.sharedInstance(),
+            object: nil,
             queue: .main
         ) { [weak self] notification in
-            // Ensure preconditions are met before proceeding
             guard let userInfo = notification.userInfo,
-                  // Type value
                   let typeValue = userInfo[AVAudioSessionInterruptionTypeKey] as? UInt,
-                  // Type
                   let type = AVAudioSession.InterruptionType(rawValue: typeValue) else {
                 return
             }
@@ -1557,13 +2040,18 @@ public final class AudioPlayerService {
                 self?.updateCurrentAudioRoute()
                 switch type {
                 case .began:
+                    AudioSessionManager.shared.notifyInterruptionBegan()
                     self?.pause()
                 case .ended:
-                    // Ensure preconditions are met before proceeding
-                    guard let optionsValue = userInfo[AVAudioSessionInterruptionOptionKey] as? UInt else { return }
-                    // Options
+                    guard let optionsValue = userInfo[AVAudioSessionInterruptionOptionKey] as? UInt else {
+                        return
+                    }
                     let options = AVAudioSession.InterruptionOptions(rawValue: optionsValue)
-                    if options.contains(.shouldResume) {
+                    let shouldResume = options.contains(.shouldResume)
+                    let reactivated = await AudioSessionManager.shared.notifyInterruptionEnded(shouldResume: shouldResume)
+                    if reactivated && shouldResume {
+                        // Delay resume slightly to let car stereo re-establish A2DP audio sink
+                        try? await Task.sleep(nanoseconds: 300_000_000) // 300ms
                         self?.play()
                     }
                 @unknown default:
@@ -1575,47 +2063,54 @@ public final class AudioPlayerService {
         // 2. Route Change Notification (Headphones / AirPods / Bluetooth Disconnection / Connection)
         audioRouteChangeObserver = NotificationCenter.default.addObserver(
             forName: AVAudioSession.routeChangeNotification,
-            object: AVAudioSession.sharedInstance(),
+            object: nil,
             queue: .main
         ) { [weak self] notification in
-            Task { @MainActor in
-                self?.updateCurrentAudioRoute()
-            }
-            // Ensure preconditions are met before proceeding
+            guard let self = self else { return }
+            self.updateCurrentAudioRoute()
+            self.scheduleDelayedRouteUpdates()
+
             guard let userInfo = notification.userInfo,
-                  // Reason value
                   let reasonValue = userInfo[AVAudioSessionRouteChangeReasonKey] as? UInt,
-                  // Reason
                   let reason = AVAudioSession.RouteChangeReason(rawValue: reasonValue) else {
                 return
             }
-            Task { @MainActor in
-                switch reason {
-                case .oldDeviceUnavailable:
-                    // Safely pause audio when headphones/AirPods disconnect
-                    self?.pause()
-                case .newDeviceAvailable, .routeConfigurationChange, .override, .categoryChange:
-                    // Keep audio session active and maintain playback smoothly across external route transitions
-                    self?.ensureAudioSessionActive()
-                    self?.updateCurrentAudioRoute()
-                    if self?.playbackStatus == .playing, let player = self?.player {
-                        let speed = Float(EqualizerManager.shared.playbackSpeed)
-                        player.playImmediately(atRate: speed)
+
+            switch reason {
+            case .oldDeviceUnavailable:
+                // Check if switching back from AirPlay to built-in speaker in the AirPlay picker
+                if let previousRoute = userInfo[AVAudioSessionRouteChangePreviousRouteKey] as? AVAudioSessionRouteDescription {
+                    let wasAirPlay = previousRoute.outputs.contains { $0.portType == .airPlay }
+                    let currentOutputs = AVAudioSession.sharedInstance().currentRoute.outputs
+                    let isNowBuiltIn = currentOutputs.contains { $0.portType == .builtInSpeaker || $0.portType == .builtInReceiver }
+                    if wasAirPlay && isNowBuiltIn {
+                        // Switching back from AirPlay to this device: smoothly maintain playback without pausing
+                        return
                     }
-                default:
-                    break
                 }
+                // Safely pause audio immediately when physical headphones/AirPods/Bluetooth disconnect
+                self.pause(smooth: false)
+
+            case .newDeviceAvailable, .routeConfigurationChange, .override, .categoryChange, .wakeFromSleep:
+                // Hardware route changed or settled. AVPlayer natively handles audio routing to the new destination.
+                // Do not force-reactivate the audio session or hammer player.play(), allowing Bluetooth A2DP
+                // and vehicle head unit DAC clock handshakes to complete cleanly.
+                break
+
+            default:
+                break
             }
         }
         
         // 3. Media Services Reset Notification (OS audio server restart)
         mediaServicesResetObserver = NotificationCenter.default.addObserver(
             forName: AVAudioSession.mediaServicesWereResetNotification,
-            object: AVAudioSession.sharedInstance(),
+            object: nil,
             queue: .main
         ) { [weak self] _ in
             Task { @MainActor in
-                self?.setupAudioSession()
+                AudioSessionManager.shared.notifyMediaServicesWereReset()
+                await AudioSessionManager.shared.activateSessionIfNeeded(force: true)
                 self?.updateCurrentAudioRoute()
                 if let current = self?.currentTrack {
                     self?.loadAndPlay(track: current)
@@ -1625,12 +2120,99 @@ public final class AudioPlayerService {
 #endif
     }
     
+#if os(iOS)
+    // Setup app lifecycle observers for background and foreground playback reliability
+    private func setupLifecycleObservers() {
+        let bgObs = NotificationCenter.default.addObserver(
+            forName: UIApplication.didEnterBackgroundNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                guard let self = self else { return }
+                if self.playbackStatus == .playing {
+                    // Begin background assertion to prevent suspension during car stereo playback
+                    self.beginBackgroundTaskAssertion()
+                    self.updateNowPlayingPlaybackState()
+                }
+            }
+        }
+        appLifecycleObservers.append(bgObs)
+
+        let activeObs = NotificationCenter.default.addObserver(
+            forName: UIApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.refreshAudioSessionAndRoute()
+            }
+        }
+        appLifecycleObservers.append(activeObs)
+
+        let fgObs = NotificationCenter.default.addObserver(
+            forName: UIApplication.willEnterForegroundNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.refreshAudioSessionAndRoute()
+            }
+        }
+        appLifecycleObservers.append(fgObs)
+
+        let resignObs = NotificationCenter.default.addObserver(
+            forName: UIApplication.willResignActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                guard let self = self else { return }
+                // Keep Now Playing info current so car stereo displays correct metadata
+                if self.playbackStatus == .playing {
+                    self.updateNowPlayingPlaybackState()
+                }
+            }
+        }
+        appLifecycleObservers.append(resignObs)
+    }
+    
+    // Begin background execution assertion to prevent suspension during track transitions
+    private func beginBackgroundTaskAssertion() {
+        endBackgroundTaskAssertion()
+        backgroundTaskID = UIApplication.shared.beginBackgroundTask(withName: "AudioPlaybackTransition") { [weak self] in
+            self?.endBackgroundTaskAssertion()
+        }
+    }
+    
+    // End background execution assertion safely
+    private func endBackgroundTaskAssertion() {
+        if backgroundTaskID != .invalid {
+            UIApplication.shared.endBackgroundTask(backgroundTaskID)
+            backgroundTaskID = .invalid
+        }
+    }
+#endif
+    
     // MARK: - MediaPlayer Now Playing & Remote Commands
     
     // Setup remote command center
     private func setupRemoteCommandCenter() {
         // Command center
         let commandCenter = MPRemoteCommandCenter.shared()
+        
+        // Remove prior targets to prevent duplicate listener accumulation
+        commandCenter.playCommand.removeTarget(nil)
+        commandCenter.pauseCommand.removeTarget(nil)
+        commandCenter.togglePlayPauseCommand.removeTarget(nil)
+        commandCenter.nextTrackCommand.removeTarget(nil)
+        commandCenter.previousTrackCommand.removeTarget(nil)
+        commandCenter.changePlaybackPositionCommand.removeTarget(nil)
+        commandCenter.seekForwardCommand.removeTarget(nil)
+        commandCenter.seekBackwardCommand.removeTarget(nil)
+        commandCenter.stopCommand.removeTarget(nil)
+        commandCenter.changeShuffleModeCommand.removeTarget(nil)
+        commandCenter.changeRepeatModeCommand.removeTarget(nil)
         
         // Play Command
         commandCenter.playCommand.isEnabled = true
@@ -1692,23 +2274,81 @@ public final class AudioPlayerService {
             return .success
         }
         
+        // Seek Forward / Backward Commands (Vehicle steering wheel hold-to-seek buttons)
+        commandCenter.seekForwardCommand.isEnabled = true
+        commandCenter.seekForwardCommand.addTarget { [weak self] event in
+            guard let self = self, let seekEvent = event as? MPSeekCommandEvent else { return .commandFailed }
+            Task { @MainActor in
+                if seekEvent.type == .beginSeeking {
+                    self.seek(to: min(self.duration, self.currentTime + 10))
+                }
+            }
+            return .success
+        }
+        
+        commandCenter.seekBackwardCommand.isEnabled = true
+        commandCenter.seekBackwardCommand.addTarget { [weak self] event in
+            guard let self = self, let seekEvent = event as? MPSeekCommandEvent else { return .commandFailed }
+            Task { @MainActor in
+                if seekEvent.type == .beginSeeking {
+                    self.seek(to: max(0, self.currentTime - 10))
+                }
+            }
+            return .success
+        }
+        
         // Explicitly disable 15s skip buttons so Lock Screen shows standard previous/next track buttons
         commandCenter.skipForwardCommand.isEnabled = false
         commandCenter.skipBackwardCommand.isEnabled = false
         
+        // Stop Command (Car stereos send stop on engine shutoff or source switch)
+        commandCenter.stopCommand.isEnabled = true
+        commandCenter.stopCommand.addTarget { [weak self] _ in
+            Task { @MainActor in
+                self?.pause()
+            }
+            return .success
+        }
+        
         // Shuffle & Repeat Commands
         commandCenter.changeShuffleModeCommand.isEnabled = true
-        commandCenter.changeShuffleModeCommand.addTarget { [weak self] _ in
+        commandCenter.changeShuffleModeCommand.addTarget { [weak self] event in
+            guard let self = self else { return .commandFailed }
             Task { @MainActor in
-                self?.toggleShuffle()
+                if let shuffleEvent = event as? MPChangeShuffleModeCommandEvent {
+                    switch shuffleEvent.shuffleType {
+                    case .off:
+                        if self.shuffleMode == .on { self.toggleShuffle() }
+                    case .collections, .items:
+                        if self.shuffleMode == .off { self.toggleShuffle() }
+                    @unknown default:
+                        self.toggleShuffle()
+                    }
+                } else {
+                    self.toggleShuffle()
+                }
             }
             return .success
         }
         
         commandCenter.changeRepeatModeCommand.isEnabled = true
-        commandCenter.changeRepeatModeCommand.addTarget { [weak self] _ in
+        commandCenter.changeRepeatModeCommand.addTarget { [weak self] event in
+            guard let self = self else { return .commandFailed }
             Task { @MainActor in
-                self?.cycleRepeatMode()
+                if let repeatEvent = event as? MPChangeRepeatModeCommandEvent {
+                    switch repeatEvent.repeatType {
+                    case .off:
+                        self.repeatMode = .off
+                    case .one:
+                        self.repeatMode = .one
+                    case .all:
+                        self.repeatMode = .all
+                    @unknown default:
+                        self.cycleRepeatMode()
+                    }
+                } else {
+                    self.cycleRepeatMode()
+                }
             }
             return .success
         }
@@ -1717,41 +2357,136 @@ public final class AudioPlayerService {
     // Setup now playing info
     private func setupNowPlayingInfo(for track: Track) {
         let activeSpeed = EqualizerManager.shared.playbackSpeed
+        let effectiveDuration = max(0.1, track.duration > 0 ? track.duration : (self.duration > 0 ? self.duration : 1.0))
+        let cleanTitle = track.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty 
+            ? track.url.deletingPathExtension().lastPathComponent 
+            : track.title
+        let cleanArtist = track.artist.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty 
+            ? "Unknown Artist" 
+            : track.artist
+        let cleanAlbum = track.album.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty 
+            ? "Unknown Album" 
+            : track.album
+
         // Info
         var info: [String: Any] = [
-            MPMediaItemPropertyTitle: track.title,
-            MPMediaItemPropertyArtist: track.artist,
-            MPMediaItemPropertyAlbumTitle: track.album,
-            MPMediaItemPropertyPlaybackDuration: track.duration,
-            MPNowPlayingInfoPropertyElapsedPlaybackTime: 0.0,
+            MPMediaItemPropertyMediaType: MPMediaType.music.rawValue,
+            MPMediaItemPropertyTitle: cleanTitle,
+            MPMediaItemPropertyArtist: cleanArtist,
+            MPMediaItemPropertyAlbumTitle: cleanAlbum,
+            MPMediaItemPropertyPlaybackDuration: effectiveDuration,
+            MPNowPlayingInfoPropertyElapsedPlaybackTime: max(0, currentTime),
             MPNowPlayingInfoPropertyDefaultPlaybackRate: 1.0,
-            MPNowPlayingInfoPropertyPlaybackRate: activeSpeed
+            MPNowPlayingInfoPropertyPlaybackRate: playbackStatus == .playing ? activeSpeed : 0.0,
+            MPNowPlayingInfoPropertyPlaybackQueueCount: max(1, queue.count),
+            MPNowPlayingInfoPropertyPlaybackQueueIndex: currentIndex ?? 0,
+            MPNowPlayingInfoPropertyIsLiveStream: false
         ]
         
-        if let artKey = track.artworkKey {
-            Task {
-                if let artData = await ArtworkCacheService.shared.loadArtwork(key: artKey),
-                   // Image
-                   let image = platformImage(from: artData) {
-                    // Mp artwork
-                    let mpArtwork = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
-                    info[MPMediaItemPropertyArtwork] = mpArtwork
-                    MPNowPlayingInfoCenter.default().nowPlayingInfo = info
-                }
-            }
+        if let trackNum = track.trackNumber, trackNum > 0 {
+            info[MPMediaItemPropertyAlbumTrackNumber] = trackNum
+        }
+        if let totalTracks = track.totalTracks, totalTracks > 0 {
+            info[MPMediaItemPropertyAlbumTrackCount] = totalTracks
+        }
+        if let discNum = track.discNumber, discNum > 0 {
+            info[MPMediaItemPropertyDiscNumber] = discNum
+        }
+        if let genre = track.genre, !genre.isEmpty {
+            info[MPMediaItemPropertyGenre] = genre
         }
         
+        #if os(iOS)
+        MPNowPlayingInfoCenter.default().playbackState = (playbackStatus == .playing || playbackStatus == .buffering) ? .playing : (playbackStatus == .paused ? .paused : .stopped)
+        #endif
+        
         MPNowPlayingInfoCenter.default().nowPlayingInfo = info
+        
+        Task { [weak self] in
+            guard let self = self else { return }
+            var image: PlatformImage? = nil
+            if let artKey = track.artworkKey, !artKey.isEmpty {
+                if let artData = await ArtworkCacheService.shared.loadArtwork(key: artKey) {
+                    image = self.platformImage(from: artData)
+                }
+            }
+            if image == nil {
+                #if os(iOS)
+                image = UIImage(named: "art")
+                #elseif os(macOS)
+                image = NSImage(named: "art")
+                #endif
+            }
+            guard let image = image else { return }
+
+            #if os(iOS)
+            guard image.size.width > 0 && image.size.height > 0 else { return }
+            // Bound artwork dimensions to prevent blowing out Bluetooth AVRCP throughput
+            let maxDimension: CGFloat = 600
+            let originalSize = image.size
+            let scale = min(maxDimension / originalSize.width, maxDimension / originalSize.height, 1.0)
+            let boundedSize = CGSize(
+                width: max(1, (originalSize.width * scale).rounded()),
+                height: max(1, (originalSize.height * scale).rounded())
+            )
+            let mpArtwork = MPMediaItemArtwork(boundsSize: boundedSize) { requestedSize in
+                guard requestedSize.width > 0 && requestedSize.height > 0,
+                      !requestedSize.width.isNaN && !requestedSize.height.isNaN,
+                      !requestedSize.width.isInfinite && !requestedSize.height.isInfinite else {
+                    return image
+                }
+                let renderWidth = max(1, min(requestedSize.width, maxDimension))
+                let renderHeight = max(1, min(requestedSize.height, maxDimension))
+                let targetSize = CGSize(width: renderWidth, height: renderHeight)
+                let format = UIGraphicsImageRendererFormat.default()
+                format.scale = 1.0
+                let renderer = UIGraphicsImageRenderer(size: targetSize, format: format)
+                return renderer.image { _ in
+                    image.draw(in: CGRect(origin: .zero, size: targetSize))
+                }
+            }
+            #elseif os(macOS)
+            guard image.size.width > 0 && image.size.height > 0 else { return }
+            let mpArtwork = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
+            #endif
+            await MainActor.run {
+                guard var currentInfo = MPNowPlayingInfoCenter.default().nowPlayingInfo else { return }
+                currentInfo[MPMediaItemPropertyArtwork] = mpArtwork
+                MPNowPlayingInfoCenter.default().nowPlayingInfo = currentInfo
+            }
+        }
     }
     
+    /// Updates the playback duration dynamically in MPNowPlayingInfoCenter as soon as the AVPlayerItem resolves it
+    private func updateNowPlayingDuration(_ duration: TimeInterval) {
+        guard duration > 0, var info = MPNowPlayingInfoCenter.default().nowPlayingInfo else { return }
+        info[MPMediaItemPropertyPlaybackDuration] = duration
+        info[MPNowPlayingInfoPropertyIsLiveStream] = false
+        MPNowPlayingInfoCenter.default().nowPlayingInfo = info
+    }
+
     // Update now playing playback state
     private func updateNowPlayingPlaybackState() {
+        #if os(iOS)
+        switch playbackStatus {
+        case .playing, .buffering:
+            MPNowPlayingInfoCenter.default().playbackState = .playing
+        case .paused:
+            MPNowPlayingInfoCenter.default().playbackState = .paused
+        case .stopped:
+            MPNowPlayingInfoCenter.default().playbackState = .stopped
+        }
+        #endif
+        
         // Ensure preconditions are met before proceeding
         guard var info = MPNowPlayingInfoCenter.default().nowPlayingInfo else { return }
         let activeSpeed = EqualizerManager.shared.playbackSpeed
         info[MPNowPlayingInfoPropertyPlaybackRate] = playbackStatus == .playing ? activeSpeed : 0.0
         info[MPNowPlayingInfoPropertyDefaultPlaybackRate] = 1.0
-        info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = currentTime
+        info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = max(0, currentTime)
+        info[MPNowPlayingInfoPropertyPlaybackQueueCount] = max(1, queue.count)
+        info[MPNowPlayingInfoPropertyPlaybackQueueIndex] = currentIndex ?? 0
+        info[MPNowPlayingInfoPropertyIsLiveStream] = false
         MPNowPlayingInfoCenter.default().nowPlayingInfo = info
     }
     
@@ -1760,14 +2495,18 @@ public final class AudioPlayerService {
         // Ensure preconditions are met before proceeding
         guard var info = MPNowPlayingInfoCenter.default().nowPlayingInfo else { return }
         let activeSpeed = EqualizerManager.shared.playbackSpeed
-        info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = currentTime
+        info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = max(0, currentTime)
         info[MPNowPlayingInfoPropertyDefaultPlaybackRate] = 1.0
         info[MPNowPlayingInfoPropertyPlaybackRate] = playbackStatus == .playing ? activeSpeed : 0.0
+        info[MPNowPlayingInfoPropertyIsLiveStream] = false
         MPNowPlayingInfoCenter.default().nowPlayingInfo = info
     }
     
     // Clear now playing info
     private func clearNowPlayingInfo() {
+        #if os(iOS)
+        MPNowPlayingInfoCenter.default().playbackState = .stopped
+        #endif
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
     }
     
@@ -1782,4 +2521,56 @@ public final class AudioPlayerService {
         NSImage(data: data)
     }
 #endif
+
+    // MARK: - Diagnostics
+
+    /// Gathers detailed internal engine state for troubleshooting and error inspection.
+    public func playerDiagnostics() -> [String: String] {
+        var dict: [String: String] = [:]
+        dict["playbackStatus"] = "\(playbackStatus)"
+        dict["currentTime"] = String(format: "%.2f", currentTime)
+        dict["duration"] = String(format: "%.2f", duration)
+        dict["queueCount"] = "\(queue.count)"
+        dict["upNextCount"] = "\(playNextQueue.count)"
+        dict["currentIndex"] = currentIndex.map(String.init) ?? "nil"
+        dict["shuffleMode"] = "\(shuffleMode)"
+        dict["repeatMode"] = "\(repeatMode)"
+        dict["currentAudioRouteName"] = currentAudioRouteName
+        dict["isExternalAudioRouteActive"] = "\(isExternalAudioRouteActive)"
+
+        if let player = self.player {
+            dict["player_rate"] = "\(player.rate)"
+            dict["player_timeControlStatus"] = "\(player.timeControlStatus.rawValue)"
+            if let reason = player.reasonForWaitingToPlay {
+                dict["player_reasonForWaitingToPlay"] = reason.rawValue
+            }
+            if let err = player.error {
+                dict["player_error"] = err.localizedDescription
+            }
+            if let item = player.currentItem {
+                dict["item_status"] = "\(item.status.rawValue)"
+                if let itemErr = item.error {
+                    dict["item_error"] = itemErr.localizedDescription
+                }
+                dict["item_playbackLikelyToKeepUp"] = "\(item.isPlaybackLikelyToKeepUp)"
+                dict["item_playbackBufferEmpty"] = "\(item.isPlaybackBufferEmpty)"
+                dict["item_playbackBufferFull"] = "\(item.isPlaybackBufferFull)"
+
+                if let errorLog = item.errorLog(), !errorLog.events.isEmpty {
+                    dict["item_errorLogCount"] = "\(errorLog.events.count)"
+                    if let evt = errorLog.events.last {
+                        dict["item_lastErrorCode"] = "\(evt.errorStatusCode)"
+                        dict["item_lastErrorDomain"] = evt.errorDomain ?? "Unknown"
+                        dict["item_lastErrorComment"] = evt.errorComment ?? "None"
+                    }
+                }
+            } else {
+                dict["item_status"] = "no_current_item"
+            }
+        } else {
+            dict["player"] = "nil"
+        }
+        return dict
+    }
 }
+

@@ -41,6 +41,15 @@ public struct Album: Identifiable, Codable, Sendable, Hashable {
     // Search tokens
     public let searchTokens: String
 
+    // Pre-computed classification and partition properties
+    public let resolvedYear: Int?
+    public let isSingle: Bool
+    public let isRemix: Bool
+    public let isLive: Bool
+    public let isStudioAlbum: Bool
+    public let mainTracks: [Track]
+    public let alternateTracks: [Track]
+
     // MARK: - Init
 
     // Initialize with configured properties
@@ -63,7 +72,7 @@ public struct Album: Identifiable, Codable, Sendable, Hashable {
         self.artist = artist
         self.year = year
         self.genre = genre
-        self.artworkKey = artworkKey
+        self.artworkKey = Album.computeConsensusArtworkKey(tracks: tracks, fallbackKey: artworkKey)
 
         // N title
         let nTitle = FuzzyMatcher.normalize(cleanTitle)
@@ -74,7 +83,7 @@ public struct Album: Identifiable, Codable, Sendable, Hashable {
         self.searchTokens = "\(nTitle) \(nArtist)"
 
         // Sort tracks by disc number then track number, then title
-        self.tracks = tracks.sorted { lhs, rhs in
+        let sortedTracks = tracks.sorted { lhs, rhs in
             // Lhs disc
             let lhsDisc = lhs.discNumber ?? 1
             // Rhs disc
@@ -94,6 +103,18 @@ public struct Album: Identifiable, Codable, Sendable, Hashable {
 
             return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
         }
+        self.tracks = sortedTracks
+
+        self.resolvedYear = Album.computeResolvedYear(tracks: sortedTracks, fallbackYear: year)
+        let classification = Album.computeClassification(title: cleanTitle, tracks: sortedTracks)
+        self.isSingle = classification.isSingle
+        self.isRemix = classification.isRemix
+        self.isLive = classification.isLive
+        self.isStudioAlbum = classification.isStudioAlbum
+
+        let partitions = Album.computeTrackPartitions(tracks: sortedTracks)
+        self.mainTracks = partitions.main
+        self.alternateTracks = partitions.alts
     }
 
     // MARK: - Codable
@@ -112,8 +133,9 @@ public struct Album: Identifiable, Codable, Sendable, Hashable {
         self.artist = try container.decodeIfPresent(String.self, forKey: .artist) ?? "Unknown Artist"
         self.year = try container.decodeIfPresent(Int.self, forKey: .year)
         self.genre = try container.decodeIfPresent(String.self, forKey: .genre)
-        self.artworkKey = try container.decodeIfPresent(String.self, forKey: .artworkKey)
-        self.tracks = try container.decodeIfPresent([Track].self, forKey: .tracks) ?? []
+        let storedArtworkKey = try container.decodeIfPresent(String.self, forKey: .artworkKey)
+        let decodedTracks = try container.decodeIfPresent([Track].self, forKey: .tracks) ?? []
+        self.artworkKey = Album.computeConsensusArtworkKey(tracks: decodedTracks, fallbackKey: storedArtworkKey)
 
         // N title
         let nTitle = FuzzyMatcher.normalize(self.title)
@@ -122,6 +144,34 @@ public struct Album: Identifiable, Codable, Sendable, Hashable {
         self.normalizedTitle = nTitle
         self.normalizedArtist = nArtist
         self.searchTokens = "\(nTitle) \(nArtist)"
+
+        let sortedTracks = decodedTracks.sorted { lhs, rhs in
+            let lhsDisc = lhs.discNumber ?? 1
+            let rhsDisc = rhs.discNumber ?? 1
+            if lhsDisc != rhsDisc { return lhsDisc < rhsDisc }
+
+            let lhsNum = lhs.trackNumber ?? 0
+            let rhsNum = rhs.trackNumber ?? 0
+            if lhsNum > 0 && rhsNum > 0 && lhsNum != rhsNum {
+                return lhsNum < rhsNum
+            }
+            if lhsNum > 0 && rhsNum == 0 { return true }
+            if lhsNum == 0 && rhsNum > 0 { return false }
+
+            return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
+        }
+        self.tracks = sortedTracks
+
+        self.resolvedYear = Album.computeResolvedYear(tracks: sortedTracks, fallbackYear: self.year)
+        let classification = Album.computeClassification(title: self.title, tracks: sortedTracks)
+        self.isSingle = classification.isSingle
+        self.isRemix = classification.isRemix
+        self.isLive = classification.isLive
+        self.isStudioAlbum = classification.isStudioAlbum
+
+        let partitions = Album.computeTrackPartitions(tracks: sortedTracks)
+        self.mainTracks = partitions.main
+        self.alternateTracks = partitions.alts
     }
 
     // Encode
@@ -150,80 +200,149 @@ public struct Album: Identifiable, Codable, Sendable, Hashable {
         return count == 1 ? "1 TRACK" : "\(count) TRACKS"
     }
 
-    /// Resolved release year: prefers the most-common year across tracks, falls back to the album-level tag.
-    public var resolvedYear: Int? {
-        // Track years
-        let trackYears = tracks.compactMap { $0.year }.filter { $0 > 0 }
-        // Frequencies
-        let frequencies = Dictionary(grouping: trackYears, by: { $0 }).mapValues { $0.count }
+    // MARK: - Internal Precomputation Helpers
 
-        // Find the most frequent year across tracks in the album
+    /// Computes the consensus artwork key: selects the most-common (majority) artwork key across tracks.
+    public static func computeConsensusArtworkKey(tracks: [Track], fallbackKey: String? = nil) -> String? {
+        let validKeys = tracks.compactMap { $0.artworkKey }.filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        guard !validKeys.isEmpty else {
+            return fallbackKey
+        }
+        var counts: [String: Int] = [:]
+        for key in validKeys {
+            counts[key, default: 0] += 1
+        }
+        let maxCount = counts.values.max() ?? 0
+        if let fallback = fallbackKey, counts[fallback] == maxCount {
+            return fallback
+        }
+        for key in validKeys {
+            if counts[key] == maxCount {
+                return key
+            }
+        }
+        return fallbackKey ?? validKeys.first
+    }
+
+    /// Computes the resolved release year: prefers the most-common year across tracks, falls back to the album-level tag.
+    private static func computeResolvedYear(tracks: [Track], fallbackYear: Int?) -> Int? {
+        let trackYears = tracks.compactMap { $0.year }.filter { $0 > 0 }
+        let frequencies = Dictionary(grouping: trackYears, by: { $0 }).mapValues { $0.count }
         if let mostFrequent = frequencies.max(by: { $0.value < $1.value }) {
             return mostFrequent.key
         }
-
-        // Release year
-        if let year = year, year > 0 {
+        if let year = fallbackYear, year > 0 {
             return year
         }
-
         return nil
     }
 
-    /// Indicates whether this album is a standalone single or EP release.
-    public var isSingle: Bool {
+    /// Precomputes classification flags for singles, remixes, live recordings, and studio releases.
+    private static func computeClassification(title: String, tracks: [Track]) -> (isSingle: Bool, isRemix: Bool, isLive: Bool, isStudioAlbum: Bool) {
         let lower = title.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-        if lower == "single" || lower.hasSuffix(" - single") || lower.hasSuffix(" (single)") || lower.hasSuffix(" [single]") || lower.hasSuffix(" - ep") || lower.hasSuffix(" (ep)") || lower.hasSuffix(" [ep]") {
-            return true
+        let single = (lower == "single" || lower.hasSuffix(" - single") || lower.hasSuffix(" (single)") || lower.hasSuffix(" [single]") || lower.hasSuffix(" - ep") || lower.hasSuffix(" (ep)") || lower.hasSuffix(" [ep]") || tracks.count <= 2)
+
+        var remix = (lower.hasSuffix("(remixes & alternates)") || lower.hasSuffix("(remixes)") || lower.hasSuffix("[remixes]") || lower.hasSuffix("- remixes") || lower.hasSuffix("(remix)") || lower.hasSuffix("(alternates)") || lower.hasSuffix("(alternatives)") || lower == "remixes" || lower == "remixes & alternates" || lower == "remixes & alternatives")
+        if !remix && !tracks.isEmpty && tracks.allSatisfy({ MetadataSanitizer.isRemixOrAlternateVersion(title: $0.title, album: $0.album) }) {
+            remix = true
         }
-        return tracks.count <= 2
+
+        var live = (lower.hasSuffix("(live)") || lower.hasSuffix("[live]") || lower.hasSuffix("- live") || lower.contains("live at") || lower.contains("live in") || lower.contains("live from") || lower == "live recordings" || lower == "live")
+        if !live && !tracks.isEmpty && tracks.allSatisfy({ MetadataSanitizer.isLiveRecording(title: $0.title, album: $0.album) }) {
+            live = true
+        }
+
+        let studio = !single && !remix && !live
+        return (single, remix, live, studio)
     }
 
-    /// Indicates whether this album is a remix or alternate version collection.
-    public var isRemix: Bool {
-        let lower = title.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-        if lower.hasSuffix("(remixes & alternates)") || lower.hasSuffix("(remixes)") || lower.hasSuffix("[remixes]") || lower.hasSuffix("- remixes") || lower.hasSuffix("(remix)") || lower.hasSuffix("(alternates)") || lower.hasSuffix("(alternatives)") || lower == "remixes" || lower == "remixes & alternates" || lower == "remixes & alternatives" {
-            return true
+    /// Partitions tracks into main canonical tracks and alternate/bonus cuts once upon creation.
+    private static func computeTrackPartitions(tracks: [Track]) -> (main: [Track], alts: [Track]) {
+        let rawAlts = tracks.filter { track in
+            if let isAlt = track.isAlternate {
+                return isAlt
+            }
+            return MetadataSanitizer.isRemixOrAlternateVersion(title: track.title, album: track.album) ||
+                   MetadataSanitizer.isLiveRecording(title: track.title, album: track.album)
         }
-        if !tracks.isEmpty && tracks.allSatisfy({ MetadataSanitizer.isRemixOrAlternateVersion(title: $0.title, album: $0.album) }) {
-            return true
+
+        if rawAlts.isEmpty {
+            return (tracks, [])
         }
-        return false
+        if rawAlts.count == tracks.count && !tracks.contains(where: { $0.isAlternate == true }) {
+            return (tracks, [])
+        }
+
+        let altSet = Set(rawAlts.map { $0.id })
+        let main = tracks.filter { !altSet.contains($0.id) }
+        let sortedAlts = sortAlternateTracks(alts: rawAlts, canonicalTracks: main)
+        return (main, sortedAlts)
     }
 
-    /// Indicates whether this album is a live concert recording or session.
-    public var isLive: Bool {
-        let lower = title.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-        if lower.hasSuffix("(live)") || lower.hasSuffix("[live]") || lower.hasSuffix("- live") || lower.contains("live at") || lower.contains("live in") || lower.contains("live from") || lower == "live recordings" || lower == "live" {
-            return true
-        }
-        if !tracks.isEmpty && tracks.allSatisfy({ MetadataSanitizer.isLiveRecording(title: $0.title, album: $0.album) }) {
-            return true
-        }
-        return false
+    private struct AltSortKey {
+        let parentIndex: Int
+        let discNumber: Int
+        let trackNumber: Int
+        let title: String
     }
 
-    /// Indicates whether this album is a primary studio/full release (not single, not remix, not live).
-    public var isStudioAlbum: Bool {
-        return !isSingle && !isRemix && !isLive
-    }
+    /// Ultra-fast alternate track sorting using precomputed sort keys (Schwartzian transform).
+    private static func sortAlternateTracks(alts: [Track], canonicalTracks: [Track]) -> [Track] {
+        guard alts.count > 1 else { return alts }
 
-    /// Main canonical tracklist of the album (standard releases).
-    public var mainTracks: [Track] {
-        let alts = alternateTracks
-        if alts.isEmpty || alts.count == tracks.count {
-            return tracks
-        }
-        let altSet = Set(alts.map { $0.id })
-        return tracks.filter { !altSet.contains($0.id) }
-    }
+        var mainIndices: [String: Int] = [:]
+        var mainNorms: [(norm: String, idx: Int)] = []
 
-    /// Alternate versions belonging to this album (instrumentals, remixes, acoustics, live recordings, sped up, slowed, acapellas, etc.).
-    public var alternateTracks: [Track] {
-        tracks.filter {
-            MetadataSanitizer.isRemixOrAlternateVersion(title: $0.title, album: $0.album) ||
-            MetadataSanitizer.isLiveRecording(title: $0.title, album: $0.album)
+        for (idx, track) in canonicalTracks.enumerated() {
+            let sig = MetadataSanitizer.buildSignature(title: track.title, artist: track.artist, album: track.album)
+            let core = FuzzyMatcher.normalize(sig.coreTitle)
+            if !core.isEmpty && mainIndices[core] == nil {
+                mainIndices[core] = idx
+            }
+            let norm = FuzzyMatcher.normalize(track.title)
+            if !norm.isEmpty {
+                mainNorms.append((norm, idx))
+            }
         }
+
+        let keyed: [(track: Track, key: AltSortKey)] = alts.map { track in
+            let sig = MetadataSanitizer.buildSignature(title: track.title, artist: track.artist, album: track.album)
+            let core = FuzzyMatcher.normalize(sig.coreTitle)
+
+            var parentIdx = mainIndices[core]
+            if parentIdx == nil && !core.isEmpty {
+                parentIdx = mainNorms.first(where: { $0.norm.contains(core) || core.contains($0.norm) })?.idx
+            }
+
+            let disc = track.discNumber ?? 1
+            let num = track.trackNumber ?? 0
+
+            return (track, AltSortKey(
+                parentIndex: parentIdx ?? Int.max,
+                discNumber: disc,
+                trackNumber: num,
+                title: track.title
+            ))
+        }
+
+        return keyed.sorted { lhs, rhs in
+            if lhs.key.parentIndex != rhs.key.parentIndex {
+                return lhs.key.parentIndex < rhs.key.parentIndex
+            }
+            let lDisc = lhs.key.discNumber
+            let rDisc = rhs.key.discNumber
+            if lDisc != rDisc { return lDisc < rDisc }
+
+            let lNum = lhs.key.trackNumber
+            let rNum = rhs.key.trackNumber
+            if lNum > 0 && rNum > 0 && lNum != rNum {
+                return lNum < rNum
+            }
+            if lNum > 0 && rNum == 0 { return true }
+            if lNum == 0 && rNum > 0 { return false }
+
+            return lhs.key.title.localizedCaseInsensitiveCompare(rhs.key.title) == .orderedAscending
+        }.map { $0.track }
     }
 
     /// Resolved visual artwork key for this album (album tag artworkKey, falling back to first track with artwork).
@@ -242,105 +361,65 @@ public struct Album: Identifiable, Codable, Sendable, Hashable {
     public func isLeadOrCollaborativeAlbum(for artistName: String, joinedArtists: [String] = []) -> Bool {
         // Clean name
         let cleanName = artistName.trimmingCharacters(in: .whitespacesAndNewlines)
-        // Ensure preconditions are met before proceeding
         guard !cleanName.isEmpty else { return false }
+        let canonicalCleanName = ArtistParser.canonicalArtistKey(cleanName)
 
         // 1. Direct album artist match (e.g. Album.artist == "Pete & Bas" or "Drake" or "J. Cole" vs "J Cole")
-        let canonicalCleanName = ArtistParser.canonicalArtistKey(cleanName)
         if artist.localizedCaseInsensitiveCompare(cleanName) == .orderedSame ||
            ArtistParser.canonicalArtistKey(artist) == canonicalCleanName {
             return true
         }
 
-        // Check if the album itself is governed by a joined artist rule
-        let albumArtistCanonical = artist.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        for joined in joinedArtists {
-            // Joined canonical
-            let joinedCanonical = joined.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-            if albumArtistCanonical == joinedCanonical {
-                // This album is explicitly a joined artist album
-                return cleanName.lowercased() == joinedCanonical || canonicalCleanName == ArtistParser.canonicalArtistKey(joined)
-            }
-            // Joined parts
-            let joinedParts = ArtistParser.parseArtists(from: joined).map { $0.lowercased() }
-            if joinedParts.count > 1 {
-                // Album parts
-                let albumParts = ArtistParser.parseArtists(from: artist).map { $0.lowercased() }
-                if Set(joinedParts).isSubset(of: Set(albumParts)) {
-                    return cleanName.lowercased() == joinedCanonical || canonicalCleanName == ArtistParser.canonicalArtistKey(joined)
-                }
-            }
-        }
-
-        // 2. Album artist tag includes artist as a co-creator (e.g. "Drake & 21 Savage")
-        let albumArtists = ArtistParser.parseArtists(from: artist)
-        if albumArtists.contains(where: {
+        // Check if cleanName is one of the co-lead artists parsed from the album's artist string
+        let albumParts = ArtistParser.parseArtists(from: artist)
+        if albumParts.contains(where: {
             $0.localizedCaseInsensitiveCompare(cleanName) == .orderedSame ||
             ArtistParser.canonicalArtistKey($0) == canonicalCleanName
         }) {
             return true
         }
 
-        // 3. Track-level multi-artist collaboration analysis:
-        var tracksWhereArtistIsPrimary = 0
+        // Check if any track's albumArtist matches cleanName or contains it as a parsed artist
         for track in tracks {
-            // Track artist canonical
-            let trackArtistCanonical = track.artist.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-            // Flag indicating if track joined under other
-            var isTrackJoinedUnderOther = false
-            for joined in joinedArtists {
-                // Joined canonical
-                let joinedCanonical = joined.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-                if trackArtistCanonical == joinedCanonical {
-                    if cleanName.lowercased() != joinedCanonical {
-                        isTrackJoinedUnderOther = true
-                    }
-                    break
-                }
-                // Joined parts
-                let joinedParts = ArtistParser.parseArtists(from: joined).map { $0.lowercased() }
-                if joinedParts.count > 1 {
-                    // Track parts
-                    let trackParts = ArtistParser.parseArtists(from: track.artist).map { $0.lowercased() }
-                    if Set(joinedParts).isSubset(of: Set(trackParts)) {
-                        if cleanName.lowercased() != joinedCanonical {
-                            isTrackJoinedUnderOther = true
-                        }
-                        break
-                    }
+            if let trackAlb = track.albumArtist, !trackAlb.isEmpty {
+                if trackAlb.localizedCaseInsensitiveCompare(cleanName) == .orderedSame ||
+                   ArtistParser.canonicalArtistKey(trackAlb) == canonicalCleanName ||
+                   ArtistParser.parseArtists(from: trackAlb).contains(where: {
+                       $0.localizedCaseInsensitiveCompare(cleanName) == .orderedSame ||
+                       ArtistParser.canonicalArtistKey($0) == canonicalCleanName
+                   }) {
+                    return true
                 }
             }
-            if isTrackJoinedUnderOther {
-                continue
+        }
+
+        // Check if the album itself is governed by a joined artist rule
+        let albumArtistCanonical = ArtistParser.canonicalArtistKey(artist)
+        for joined in joinedArtists {
+            let joinedCanonical = ArtistParser.canonicalArtistKey(joined)
+            if albumArtistCanonical == joinedCanonical {
+                return canonicalCleanName == joinedCanonical
             }
-
-            // Primary artists
-            let primaryArtists = ArtistParser.parseArtists(from: track.artist)
-            if primaryArtists.contains(where: {
-                $0.localizedCaseInsensitiveCompare(cleanName) == .orderedSame ||
-                ArtistParser.canonicalArtistKey($0) == canonicalCleanName
-            }) {
-                tracksWhereArtistIsPrimary += 1
+            let joinedParts = ArtistParser.parseArtists(from: joined).map { ArtistParser.canonicalArtistKey($0) }
+            if joinedParts.count > 1 {
+                let albumParts = ArtistParser.parseArtists(from: artist).map { ArtistParser.canonicalArtistKey($0) }
+                if Set(joinedParts).isSubset(of: Set(albumParts)) {
+                    return canonicalCleanName == joinedCanonical
+                }
             }
         }
 
-        // For 1-2 track releases (singles), being a primary artist on at least 1 track makes it their single
-        if tracks.count <= 2 {
-            return tracksWhereArtistIsPrimary > 0
-        }
+        // 2. Resolve collaborative album artists using unified logic
+        let resolvedAlbumArtists = ArtistParser.resolveAlbumArtists(
+            for: tracks,
+            explicitAlbumArtist: artist,
+            joinedArtists: joinedArtists
+        )
 
-        // For full albums (3+ tracks): if artist is primary on >= 3 tracks AND represents >= 35% of tracks, it's a collaboration album
-        let ratio = Double(tracksWhereArtistIsPrimary) / Double(tracks.count)
-        if tracksWhereArtistIsPrimary >= 3 && ratio >= 0.35 {
-            return true
+        return resolvedAlbumArtists.contains {
+            $0.localizedCaseInsensitiveCompare(cleanName) == .orderedSame ||
+            ArtistParser.canonicalArtistKey($0) == canonicalCleanName
         }
-
-        // If artist is primary on the vast majority (> 50%) of tracks
-        if ratio >= 0.50 {
-            return true
-        }
-
-        return false
     }
 
     /// Determines if a given artist is featured as a guest on this album (via title `(feat. )` or minor track credits).
@@ -357,14 +436,11 @@ public struct Album: Identifiable, Codable, Sendable, Hashable {
 
         // Check if the album is a joined artist collaboration that cleanName is part of; if so, it should NOT appear here
         for joined in joinedArtists {
-            // Joined canonical
-            let joinedCanonical = joined.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-            // Joined parts
-            let joinedParts = ArtistParser.parseArtists(from: joined).map { $0.lowercased() }
-            if joinedParts.contains(cleanName.lowercased()) || joinedParts.contains(canonicalCleanName) {
-                // Album parts
-                let albumParts = ArtistParser.parseArtists(from: artist).map { $0.lowercased() }
-                if Set(joinedParts).isSubset(of: Set(albumParts)) || artist.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == joinedCanonical {
+            let joinedCanonical = ArtistParser.canonicalArtistKey(joined)
+            let joinedParts = ArtistParser.parseArtists(from: joined).map { ArtistParser.canonicalArtistKey($0) }
+            if joinedParts.contains(canonicalCleanName) {
+                let albumParts = ArtistParser.parseArtists(from: artist).map { ArtistParser.canonicalArtistKey($0) }
+                if Set(joinedParts).isSubset(of: Set(albumParts)) || ArtistParser.canonicalArtistKey(artist) == joinedCanonical {
                     return false
                 }
             }
@@ -375,14 +451,11 @@ public struct Album: Identifiable, Codable, Sendable, Hashable {
             // If the track is a joined artist track that cleanName is part of, skip it
             var isTrackJoined = false
             for joined in joinedArtists {
-                // Joined canonical
-                let joinedCanonical = joined.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-                // Joined parts
-                let joinedParts = ArtistParser.parseArtists(from: joined).map { $0.lowercased() }
-                if joinedParts.contains(cleanName.lowercased()) || joinedParts.contains(canonicalCleanName) {
-                    // Track parts
-                    let trackParts = ArtistParser.parseArtists(from: track.artist).map { $0.lowercased() }
-                    if Set(joinedParts).isSubset(of: Set(trackParts)) || track.artist.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == joinedCanonical {
+                let joinedCanonical = ArtistParser.canonicalArtistKey(joined)
+                let joinedParts = ArtistParser.parseArtists(from: joined).map { ArtistParser.canonicalArtistKey($0) }
+                if joinedParts.contains(canonicalCleanName) {
+                    let trackParts = ArtistParser.parseArtists(from: track.artist).map { ArtistParser.canonicalArtistKey($0) }
+                    if Set(joinedParts).isSubset(of: Set(trackParts)) || ArtistParser.canonicalArtistKey(track.artist) == joinedCanonical {
                         isTrackJoined = true
                         break
                     }
@@ -395,7 +468,6 @@ public struct Album: Identifiable, Codable, Sendable, Hashable {
             if ArtistParser.isArtistFeatured(name: cleanName, inTitle: track.title) {
                 return true
             }
-            // Track artists
             let trackArtists = ArtistParser.parseArtists(from: track.artist)
             if trackArtists.contains(where: {
                 $0.localizedCaseInsensitiveCompare(cleanName) == .orderedSame ||
@@ -415,5 +487,35 @@ public struct Album: Identifiable, Codable, Sendable, Hashable {
             return String(year)
         }
         return "UNKNOWN YEAR"
+    }
+
+    /// Canonical release type title for top bar display: "ALBUM", "SINGLE", "EP", or "ALTERNATE".
+    public var releaseTypeDisplayTitle: String {
+        let lower = title.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // 1. ALTERNATE: remixes, live recordings, alternates
+        if isRemix || isLive ||
+           lower.hasSuffix("(alternates)") || lower.hasSuffix("[alternates]") ||
+           lower.hasSuffix("(alternatives)") || lower.hasSuffix("[alternatives]") ||
+           lower.contains("alternate") || lower.contains("alternative") ||
+           lower.contains("remix") ||
+           (!tracks.isEmpty && tracks.allSatisfy { $0.isAlternate == true }) {
+            return "ALTERNATE"
+        }
+
+        // 2. EP: explicit EP suffix/prefix or short 3-6 tracks single
+        if lower == "ep" || lower.hasSuffix(" - ep") || lower.hasSuffix(" (ep)") || lower.hasSuffix(" [ep]") ||
+           lower.hasPrefix("ep:") || lower.hasPrefix("ep - ") ||
+           (isSingle && tracks.count >= 3 && tracks.count <= 6) {
+            return "EP"
+        }
+
+        // 3. SINGLE: explicit single or 1-2 tracks
+        if isSingle || lower == "single" || lower.hasSuffix(" - single") || lower.hasSuffix(" (single)") || lower.hasSuffix(" [single]") || tracks.count <= 2 {
+            return "SINGLE"
+        }
+
+        // 4. Default: ALBUM
+        return "ALBUM"
     }
 }

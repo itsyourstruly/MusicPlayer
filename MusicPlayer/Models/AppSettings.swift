@@ -227,6 +227,8 @@ public struct AppSettings: Codable, Sendable {
     // Minimum track length (in minutes) required to save and remember playback position
     public var rememberPlaybackPositionMinMinutes: Double
     public var showAudioSpecsInPlayer: Bool
+    // When enabled, replaces the waveform scrubber with a full-length rectangular progress bar and square playhead
+    public var useProgressBar: Bool
     // Enables smooth audio crossfade between consecutive tracks
     public var isCrossfadeEnabled: Bool
     // Length of the crossfade transition in seconds
@@ -248,6 +250,13 @@ public struct AppSettings: Codable, Sendable {
     public var smoothSkippingEnabled: Bool
     // Persistent user preference for lyrics mode display
     public var isLyricsViewPreferred: Bool
+    public var removedTrackPaths: Set<String>
+    // System-wide tactile haptic feedback toggle (off by default)
+    public var isHapticsEnabled: Bool
+    // Set of album IDs manually designated as collaborative albums
+    public var manualCollaborativeAlbumIDs: Set<String>
+    // Preserved default album artists for tracks before being made collaborative, keyed by track UUID string
+    public var originalAlbumArtistsByTrackID: [String: String]
 
     /// Backwards compatibility property
     public var accentTheme: AppTheme {
@@ -265,6 +274,7 @@ public struct AppSettings: Codable, Sendable {
         rememberPlaybackPosition: Bool = true,
         rememberPlaybackPositionMinMinutes: Double = 10.0,
         showAudioSpecsInPlayer: Bool = true,
+        useProgressBar: Bool = false,
         isCrossfadeEnabled: Bool = false,
         crossfadeDuration: Double = 4.0,
         lastScanDate: Date? = nil,
@@ -278,7 +288,11 @@ public struct AppSettings: Codable, Sendable {
         customShuffleTarget: ShuffleTarget = .all,
         joinedArtists: [String] = [],
         smoothSkippingEnabled: Bool = false,
-        isLyricsViewPreferred: Bool = false
+        isLyricsViewPreferred: Bool = false,
+        removedTrackPaths: Set<String> = [],
+        isHapticsEnabled: Bool = false,
+        manualCollaborativeAlbumIDs: Set<String> = [],
+        originalAlbumArtistsByTrackID: [String: String] = [:]
     ) {
         self.appTheme = appTheme
         self.defaultLibraryCategory = defaultLibraryCategory
@@ -288,6 +302,7 @@ public struct AppSettings: Codable, Sendable {
         self.rememberPlaybackPosition = rememberPlaybackPosition
         self.rememberPlaybackPositionMinMinutes = rememberPlaybackPositionMinMinutes
         self.showAudioSpecsInPlayer = showAudioSpecsInPlayer
+        self.useProgressBar = useProgressBar
         self.isCrossfadeEnabled = isCrossfadeEnabled
         self.crossfadeDuration = crossfadeDuration
         self.lastScanDate = lastScanDate
@@ -302,6 +317,10 @@ public struct AppSettings: Codable, Sendable {
         self.joinedArtists = joinedArtists
         self.smoothSkippingEnabled = smoothSkippingEnabled
         self.isLyricsViewPreferred = isLyricsViewPreferred
+        self.removedTrackPaths = removedTrackPaths
+        self.isHapticsEnabled = isHapticsEnabled
+        self.manualCollaborativeAlbumIDs = manualCollaborativeAlbumIDs
+        self.originalAlbumArtistsByTrackID = originalAlbumArtistsByTrackID
     }
 
     // MARK: - Custom Codable to seamlessly decode older settings JSON
@@ -324,6 +343,8 @@ public struct AppSettings: Codable, Sendable {
         case rememberPlaybackPositionMinMinutes
         // Show audio specs in player option
         case showAudioSpecsInPlayer
+        // Use progress bar option
+        case useProgressBar
         // Is crossfade enabled option
         case isCrossfadeEnabled
         // Crossfade duration option
@@ -352,6 +373,13 @@ public struct AppSettings: Codable, Sendable {
         case smoothSkippingEnabled
         // Persistent lyrics view preference option
         case isLyricsViewPreferred
+        // Persistently removed/hidden track file paths
+        case removedTrackPaths
+        // Haptics enabled option
+        case isHapticsEnabled
+        // Collaborative album settings
+        case manualCollaborativeAlbumIDs
+        case originalAlbumArtistsByTrackID
     }
 
     // Initialize with configured properties
@@ -378,10 +406,11 @@ public struct AppSettings: Codable, Sendable {
         self.defaultLibraryCategory = try container.decodeIfPresent(LibraryCategory.self, forKey: .defaultLibraryCategory) ?? .artists
         self.playerBackgroundStyle = try container.decodeIfPresent(PlayerBackgroundStyle.self, forKey: .playerBackgroundStyle) ?? .albumColor
         self.libraryScanMethod = try container.decodeIfPresent(LibraryScanMethod.self, forKey: .libraryScanMethod) ?? .id3Tags
-        self.autoPlayNext = try container.decodeIfPresent(Bool.self, forKey: .autoPlayNext) ?? true
+        self.autoPlayNext = true
         self.rememberPlaybackPosition = try container.decodeIfPresent(Bool.self, forKey: .rememberPlaybackPosition) ?? true
         self.rememberPlaybackPositionMinMinutes = try container.decodeIfPresent(Double.self, forKey: .rememberPlaybackPositionMinMinutes) ?? 10.0
         self.showAudioSpecsInPlayer = try container.decodeIfPresent(Bool.self, forKey: .showAudioSpecsInPlayer) ?? true
+        self.useProgressBar = try container.decodeIfPresent(Bool.self, forKey: .useProgressBar) ?? false
         self.isCrossfadeEnabled = try container.decodeIfPresent(Bool.self, forKey: .isCrossfadeEnabled) ?? false
         self.crossfadeDuration = try container.decodeIfPresent(Double.self, forKey: .crossfadeDuration) ?? 4.0
         self.lastScanDate = try container.decodeIfPresent(Date.self, forKey: .lastScanDate)
@@ -396,6 +425,10 @@ public struct AppSettings: Codable, Sendable {
         self.joinedArtists = try container.decodeIfPresent([String].self, forKey: .joinedArtists) ?? []
         self.smoothSkippingEnabled = try container.decodeIfPresent(Bool.self, forKey: .smoothSkippingEnabled) ?? false
         self.isLyricsViewPreferred = try container.decodeIfPresent(Bool.self, forKey: .isLyricsViewPreferred) ?? false
+        self.removedTrackPaths = try container.decodeIfPresent(Set<String>.self, forKey: .removedTrackPaths) ?? []
+        self.isHapticsEnabled = try container.decodeIfPresent(Bool.self, forKey: .isHapticsEnabled) ?? false
+        self.manualCollaborativeAlbumIDs = try container.decodeIfPresent(Set<String>.self, forKey: .manualCollaborativeAlbumIDs) ?? []
+        self.originalAlbumArtistsByTrackID = try container.decodeIfPresent([String: String].self, forKey: .originalAlbumArtistsByTrackID) ?? [:]
     }
 
     // Encode
@@ -410,6 +443,7 @@ public struct AppSettings: Codable, Sendable {
         try container.encode(rememberPlaybackPosition, forKey: .rememberPlaybackPosition)
         try container.encode(rememberPlaybackPositionMinMinutes, forKey: .rememberPlaybackPositionMinMinutes)
         try container.encode(showAudioSpecsInPlayer, forKey: .showAudioSpecsInPlayer)
+        try container.encode(useProgressBar, forKey: .useProgressBar)
         try container.encode(isCrossfadeEnabled, forKey: .isCrossfadeEnabled)
         try container.encode(crossfadeDuration, forKey: .crossfadeDuration)
         try container.encodeIfPresent(lastScanDate, forKey: .lastScanDate)
@@ -424,6 +458,10 @@ public struct AppSettings: Codable, Sendable {
         try container.encode(joinedArtists, forKey: .joinedArtists)
         try container.encode(smoothSkippingEnabled, forKey: .smoothSkippingEnabled)
         try container.encode(isLyricsViewPreferred, forKey: .isLyricsViewPreferred)
+        try container.encode(removedTrackPaths, forKey: .removedTrackPaths)
+        try container.encode(isHapticsEnabled, forKey: .isHapticsEnabled)
+        try container.encode(manualCollaborativeAlbumIDs, forKey: .manualCollaborativeAlbumIDs)
+        try container.encode(originalAlbumArtistsByTrackID, forKey: .originalAlbumArtistsByTrackID)
     }
 }
 

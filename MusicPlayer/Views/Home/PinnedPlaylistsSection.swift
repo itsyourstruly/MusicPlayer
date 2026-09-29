@@ -30,30 +30,22 @@ public struct PinnedSection: View {
     }
 
     // Main view layout structure
+    @ViewBuilder
     public var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Text("PINS")
-                    .font(.system(size: 13, weight: .bold, design: .monospaced))
-                    .foregroundStyle(.secondary)
-
-                Spacer()
-
-                Text("\(libraryStore.pinnedItems.count)")
-                    .font(.system(size: 11, weight: .bold, design: .monospaced))
-                    .foregroundStyle(.tertiary)
-            }
-
-            if libraryStore.pinnedItems.isEmpty {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("NO PINS")
+        if !libraryStore.pinnedItems.isEmpty {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    Text("PINS")
                         .font(.system(size: 13, weight: .bold, design: .monospaced))
-                    Text("Pin albums or playlists from the Library tab to access them quickly from Home.")
-                        .font(.system(size: 13))
                         .foregroundStyle(.secondary)
+
+                    Spacer()
+
+                    Text("\(libraryStore.pinnedItems.count)")
+                        .font(.system(size: 11, weight: .bold, design: .monospaced))
+                        .foregroundStyle(.tertiary)
                 }
-                .semanticCard(cornerRadius: 10, padding: 14)
-            } else {
+
                 LazyVGrid(columns: columns, spacing: 14) {
                     ForEach(libraryStore.pinnedItems) { item in
                         pinnedCard(for: item)

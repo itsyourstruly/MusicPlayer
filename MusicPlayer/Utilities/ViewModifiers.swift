@@ -5,59 +5,6 @@ import UIKit
 import AppKit
 #endif
 
-/// Concurrency-safe tactile feedback utility.
-@MainActor
-public enum HapticFeedback {
-    /// Generates light impact feedback for taps and state transitions.
-    public static func lightImpact() {
-        #if canImport(UIKit)
-        UIImpactFeedbackGenerator(style: .light).impactOccurred()
-        #endif
-    }
-
-    /// Generates medium impact feedback for snap-to-expand / snap-to-minimize gestures.
-    public static func mediumImpact() {
-        #if canImport(UIKit)
-        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-        #endif
-    }
-
-    /// Generates rigid impact feedback for mode toggles.
-    public static func rigidImpact() {
-        #if canImport(UIKit)
-        UIImpactFeedbackGenerator(style: .rigid).impactOccurred()
-        #endif
-    }
-
-    /// Generates selection change feedback for track skipping or scrubbing.
-    public static func selectionChanged() {
-        #if canImport(UIKit)
-        UISelectionFeedbackGenerator().selectionChanged()
-        #endif
-    }
-
-    /// Generates success notification feedback.
-    public static func notificationSuccess() {
-        #if canImport(UIKit)
-        UINotificationFeedbackGenerator().notificationOccurred(.success)
-        #endif
-    }
-
-    /// Generates warning notification feedback.
-    public static func notificationWarning() {
-        #if canImport(UIKit)
-        UINotificationFeedbackGenerator().notificationOccurred(.warning)
-        #endif
-    }
-
-    /// Generates error notification feedback.
-    public static func notificationError() {
-        #if canImport(UIKit)
-        UINotificationFeedbackGenerator().notificationOccurred(.error)
-        #endif
-    }
-}
-
 // AppThemeEnvironmentKey representation
 private struct AppThemeEnvironmentKey: EnvironmentKey {
     static let defaultValue: AppTheme = .dark
@@ -69,6 +16,18 @@ public extension EnvironmentValues {
         get { self[AppThemeEnvironmentKey.self] }
         set { self[AppThemeEnvironmentKey.self] = newValue }
     }
+
+    /// Indicates whether the full-screen player is actively being dragged, swiped down to dismiss,
+    /// or in the process of collapsing, allowing descendant buttons to suppress accidental triggers.
+    var isPlayerDraggingOrDismissing: Bool {
+        get { self[PlayerDraggingOrDismissingKey.self] }
+        set { self[PlayerDraggingOrDismissingKey.self] = newValue }
+    }
+}
+
+// PlayerDraggingOrDismissingKey representation
+private struct PlayerDraggingOrDismissingKey: EnvironmentKey {
+    static let defaultValue: Bool = false
 }
 
 /// Semantic surface card modifier for standard dark/light mode responsive panels.
@@ -183,6 +142,17 @@ public struct AlbumContextMenuModifier: ViewModifier {
                     showingAlbumMetadataSheet = true
                 }) {
                     Text("ALBUM METADATA")
+                }
+
+                Button(action: {
+                    HapticFeedback.notificationSuccess()
+                    libraryStore.toggleCollaborativeAlbum(album)
+                }) {
+                    if libraryStore.isCollaborativeAlbum(album) {
+                        Label("MAKE COLLABORATIVE ALBUM", systemImage: "checkmark")
+                    } else {
+                        Text("MAKE COLLABORATIVE ALBUM")
+                    }
                 }
 
                 Button(action: {

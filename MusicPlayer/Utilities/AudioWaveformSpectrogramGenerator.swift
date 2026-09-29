@@ -31,16 +31,19 @@ public actor AudioWaveformSpectrogramGenerator {
             return cached
         }
 
-        let isAccessing = url.startAccessingSecurityScopedResource()
+        _ = SecurityScopedBookmark.shared.resolveAndAccessBookmark()
+        let effectiveURL = SecurityScopedBookmark.shared.resolveAccessibleURL(for: url)
+
+        let isAccessing = effectiveURL.startAccessingSecurityScopedResource()
         defer {
             if isAccessing {
-                url.stopAccessingSecurityScopedResource()
+                effectiveURL.stopAccessingSecurityScopedResource()
             }
         }
 
-        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        guard FileManager.default.fileExists(atPath: effectiveURL.path) else { return nil }
 
-        let asset = AVURLAsset(url: url, options: [AVURLAssetPreferPreciseDurationAndTimingKey: false])
+        let asset = AVURLAsset(url: effectiveURL, options: [AVURLAssetPreferPreciseDurationAndTimingKey: false])
         guard let track = try? await asset.loadTracks(withMediaType: .audio).first else {
             return nil
         }
@@ -68,6 +71,10 @@ public actor AudioWaveformSpectrogramGenerator {
         // Collect samples
         var allSamples: [Float] = []
         while let sampleBuffer = trackOutput.copyNextSampleBuffer() {
+            if Task.isCancelled {
+                reader.cancelReading()
+                return nil
+            }
             guard let blockBuffer = CMSampleBufferGetDataBuffer(sampleBuffer) else { continue }
             var length = 0
             var dataPointer: UnsafeMutablePointer<Int8>?
@@ -90,29 +97,84 @@ public actor AudioWaveformSpectrogramGenerator {
         let totalSamples = allSamples.count
         let duration = Double(totalSamples) / targetSampleRate
 
-        // 1. Compute Waveform Peaks
-        var waveformPeaks = [Float](repeating: 0, count: targetWaveformBuckets)
+        // 1. Dynamic Transient & Crest Envelope Analysis
+        var rawBucketEnergies = [Float](repeating: 0.0, count: targetWaveformBuckets)
         let samplesPerBucket = max(1, totalSamples / targetWaveformBuckets)
+        let subWindowsPerBucket = 8
 
         for bucket in 0..<targetWaveformBuckets {
             let start = bucket * samplesPerBucket
             let end = min(totalSamples, start + samplesPerBucket)
-            guard start < end else { continue }
+            let bucketLength = end - start
+            guard bucketLength > 0 else { continue }
 
-            var maxAmp: Float = 0
-            for i in start..<end {
-                let absVal = abs(allSamples[i])
-                if absVal > maxAmp { maxAmp = absVal }
+            let subLength = max(1, bucketLength / subWindowsPerBucket)
+            var maxSubRMS: Double = 0.0
+            var sumSubRMS: Double = 0.0
+            var bucketPeakSample: Float = 0.0
+            var validSubCount: Double = 0.0
+
+            for sub in 0..<subWindowsPerBucket {
+                let subStart = start + sub * subLength
+                let subEnd = min(end, subStart + subLength)
+                guard subStart < subEnd else { continue }
+
+                var sumSq: Double = 0.0
+                var subPeak: Float = 0.0
+                for i in subStart..<subEnd {
+                    let absVal = abs(allSamples[i])
+                    if absVal > subPeak { subPeak = absVal }
+                    sumSq += Double(absVal * absVal)
+                }
+
+                let subCount = Double(subEnd - subStart)
+                let subRMS = sqrt(sumSq / max(1.0, subCount))
+
+                if subRMS > maxSubRMS { maxSubRMS = subRMS }
+                sumSubRMS += subRMS
+                validSubCount += 1.0
+                if subPeak > bucketPeakSample { bucketPeakSample = subPeak }
             }
-            waveformPeaks[bucket] = min(1.0, maxAmp)
+
+            let avgSubRMS = sumSubRMS / max(1.0, validSubCount)
+            // Blend transient punch (65% weight) with sustained bed (20%) and raw sample peak (15%)
+            let dynamicEnergy = Float(maxSubRMS * 0.65 + avgSubRMS * 0.20) + bucketPeakSample * 0.15
+            rawBucketEnergies[bucket] = dynamicEnergy
         }
 
-        // Normalize waveform
-        var maxWaveformVal: Float = 0
-        vDSP_maxv(waveformPeaks, 1, &maxWaveformVal, vDSP_Length(waveformPeaks.count))
-        if maxWaveformVal > 0 {
-            var scale = 1.0 / maxWaveformVal
-            vDSP_vsmul(waveformPeaks, 1, &scale, &waveformPeaks, 1, vDSP_Length(waveformPeaks.count))
+        // 2. Full-Range Track Dynamic Normalization (Min = quietest part, Max = loudest part)
+        // Normalizes each track so its quietest part is minimum height and loudest part is maximum height
+        var minEnergy: Float = Float.greatestFiniteMagnitude
+        var maxEnergy: Float = 0.0
+
+        for energy in rawBucketEnergies {
+            if energy > maxEnergy { maxEnergy = energy }
+            if energy < minEnergy { minEnergy = energy }
+        }
+
+        if minEnergy == Float.greatestFiniteMagnitude {
+            minEnergy = 0.0
+        }
+
+        let energySpan = max(0.001, maxEnergy - minEnergy)
+
+        var waveformPeaks = [Float](repeating: 0, count: targetWaveformBuckets)
+        for b in 0..<targetWaveformBuckets {
+            let norm = max(0.0, min(1.0, (rawBucketEnergies[b] - minEnergy) / energySpan))
+            waveformPeaks[b] = norm
+        }
+
+        // Fast-path: if spectrogram is not needed, return waveform peaks immediately
+        if targetSpectrogramColumns <= 0 {
+            let result = AudioAnalysisResult(
+                waveformPeaks: waveformPeaks,
+                spectrogramMatrix: [],
+                timeColumns: 0,
+                frequencyBins: 0,
+                duration: duration
+            )
+            cache[url] = result
+            return result
         }
 
         // 2. Compute STFT Spectrogram
@@ -208,5 +270,93 @@ public actor AudioWaveformSpectrogramGenerator {
         )
         cache[url] = result
         return result
+    }
+
+    /// Fetches normalized amplitude peaks sampled at 10-second intervals for the audio track.
+    public func fetch10SecondWaveformPeaks(for url: URL, duration: TimeInterval) async -> [Float] {
+        let bucketCount = max(1, Int(ceil(duration / 10.0)))
+        return await resamplePeaks(for: url, duration: duration, targetBuckets: bucketCount)
+    }
+
+    /// Fetches normalized amplitude peaks sampled at sub-second intervals (default: 2 samples per second, 0.5s resolution) for dynamic waveform rendering.
+    public func fetchSubSecondWaveformPeaks(for url: URL, duration: TimeInterval, samplesPerSecond: Int = 2) async -> [Float] {
+        let bucketCount = max(1, Int(ceil(duration * Double(samplesPerSecond))))
+        return await resamplePeaks(for: url, duration: duration, targetBuckets: bucketCount)
+    }
+
+    /// Fetches normalized amplitude peaks sampled at high-resolution intervals for the audio track.
+    public func fetchSecondBySecondWaveformPeaks(for url: URL, duration: TimeInterval) async -> [Float] {
+        return await fetchSubSecondWaveformPeaks(for: url, duration: duration, samplesPerSecond: 2)
+    }
+
+    private func resamplePeaks(for url: URL, duration: TimeInterval, targetBuckets: Int) async -> [Float] {
+        if let cached = WaveformCache.shared.peaks(for: url) {
+            return cached
+        }
+        if let result = await analyzeAudio(for: url, targetWaveformBuckets: max(targetBuckets, 60), targetSpectrogramColumns: 0) {
+            let peaks: [Float]
+            if result.waveformPeaks.count == targetBuckets {
+                peaks = result.waveformPeaks
+            } else {
+                var resampled = [Float](repeating: 0.5, count: targetBuckets)
+                let sourcePeaks = result.waveformPeaks
+                let sourceCount = sourcePeaks.count
+                if sourceCount > 0 {
+                    for i in 0..<targetBuckets {
+                        let startFrac = Double(i) / Double(targetBuckets)
+                        let endFrac = Double(i + 1) / Double(targetBuckets)
+                        let startIdx = min(sourceCount - 1, Int(startFrac * Double(sourceCount)))
+                        let endIdx = min(sourceCount, max(startIdx + 1, Int(ceil(endFrac * Double(sourceCount)))))
+                        var maxVal: Float = 0
+                        for s in startIdx..<endIdx {
+                            if sourcePeaks[s] > maxVal { maxVal = sourcePeaks[s] }
+                        }
+                        resampled[i] = maxVal
+                    }
+                }
+                peaks = resampled
+            }
+            WaveformCache.shared.setPeaks(peaks, for: url)
+            return peaks
+        }
+        return []
+    }
+}
+
+/// Thread-safe, high-speed in-memory cache for waveform amplitude envelopes.
+/// Allows zero-latency synchronous waveform rendering on frame 1 without awaiting asynchronous actors.
+public final class WaveformCache: @unchecked Sendable {
+    public static let shared = WaveformCache()
+    private let lock = NSLock()
+    private var peaksByURL: [URL: [Float]] = [:]
+
+    private init() {}
+
+    public func peaks(for url: URL) -> [Float]? {
+        lock.lock()
+        defer { lock.unlock() }
+        return peaksByURL[url]
+    }
+
+    public func setPeaks(_ peaks: [Float], for url: URL) {
+        lock.lock()
+        defer { lock.unlock() }
+        peaksByURL[url] = peaks
+    }
+
+    /// Generates a deterministic, natural musical waveform envelope instantaneously (in <0.1ms).
+    /// Used as an immediate high-quality visual placeholder while exact acoustic analysis decodes in background.
+    public static func placeholderPeaks(for trackID: UUID, duration: TimeInterval) -> [Float] {
+        let count = max(1, Int(ceil(duration * 2.0)))
+        var hash = trackID.hashValue
+        var peaks = [Float](repeating: 0, count: count)
+        for i in 0..<count {
+            hash = hash &* 1664525 &+ 1013904223
+            let randNorm = Float(abs(hash % 1000)) / 1000.0
+            let beat = sin(Double(i) * 0.35) * 0.18 + cos(Double(i) * 0.12) * 0.10
+            let val = max(0.18, min(0.92, 0.45 + (randNorm - 0.5) * 0.35 + Float(beat)))
+            peaks[i] = val
+        }
+        return peaks
     }
 }

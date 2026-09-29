@@ -60,11 +60,32 @@ public struct FolderHierarchyScanner: Sendable {
         // 1. Read binary audio technical specs & embedded metadata baseline (<0.2ms)
         let binaryMeta = FastAudioMetadataReader.readMetadata(for: url)
         var durationSeconds = binaryMeta?.duration ?? 0
-        if durationSeconds <= 0 {
+        var avArtist: String? = nil
+        var avAuthor: String? = nil
+
+        if durationSeconds <= 0 || ((binaryMeta?.artist == nil || isGenericString(binaryMeta?.artist ?? "")) && (binaryMeta?.author == nil || isGenericString(binaryMeta?.author ?? ""))) {
             let asset = AVURLAsset(url: url, options: [AVURLAssetPreferPreciseDurationAndTimingKey: false])
-            if let cmDuration = try? await asset.load(.duration) {
-                let secs = CMTimeGetSeconds(cmDuration)
-                if !secs.isNaN && !secs.isInfinite && secs > 0 { durationSeconds = secs }
+            if let (cmDuration, commonMeta, genericMeta) = try? await asset.load(.duration, .commonMetadata, .metadata) {
+                if durationSeconds <= 0 {
+                    let secs = CMTimeGetSeconds(cmDuration)
+                    if !secs.isNaN && !secs.isInfinite && secs > 0 { durationSeconds = secs }
+                }
+                let allMeta = commonMeta + genericMeta
+                for item in allMeta {
+                    let commonKey = item.commonKey
+                    let keyLower = (item.keyString ?? (item.key as? String) ?? "").lowercased()
+                    let idLower = item.identifier?.rawValue.lowercased() ?? ""
+                    if commonKey == .commonKeyAuthor || keyLower.contains("author") || keyLower.contains("auth") || idLower.contains("author") || idLower.contains("auth") {
+                        if let s = item.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines), !s.isEmpty {
+                            avAuthor = s
+                        }
+                    }
+                    if commonKey == .commonKeyArtist || keyLower.contains("art") || idLower.contains("art") {
+                        if let s = item.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines), !s.isEmpty {
+                            avArtist = s
+                        }
+                    }
+                }
             }
         }
         if durationSeconds <= 0 { durationSeconds = 1.0 }
@@ -87,7 +108,7 @@ public struct FolderHierarchyScanner: Sendable {
             return filenameWithoutExt
         }()
 
-        // 5. Resolve Artist: folder artist -> filename artist -> embedded tag artist -> Unknown Artist
+        // 5. Resolve Artist: folder artist -> filename artist -> embedded tag artist -> embedded tag author -> AV artist -> AV author -> Unknown Artist
         let finalArtist: String = {
             if let a = hierarchy.artist, !a.isEmpty, !isGenericString(a) {
                 return a
@@ -96,6 +117,15 @@ public struct FolderHierarchyScanner: Sendable {
                 return a
             }
             if let a = binaryMeta?.artist?.trimmingCharacters(in: .whitespacesAndNewlines), !a.isEmpty, !isGenericString(a) {
+                return a
+            }
+            if let a = binaryMeta?.author?.trimmingCharacters(in: .whitespacesAndNewlines), !a.isEmpty, !isGenericString(a) {
+                return a
+            }
+            if let a = avArtist?.trimmingCharacters(in: .whitespacesAndNewlines), !a.isEmpty, !isGenericString(a) {
+                return a
+            }
+            if let a = avAuthor?.trimmingCharacters(in: .whitespacesAndNewlines), !a.isEmpty, !isGenericString(a) {
                 return a
             }
             return "Unknown Artist"

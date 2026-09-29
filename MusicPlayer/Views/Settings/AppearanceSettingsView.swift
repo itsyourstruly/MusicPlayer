@@ -27,8 +27,8 @@ public struct AppearanceSettingsView: View {
                 Divider()
                     .overlay(libraryStore.settings.appTheme.separatorColor.opacity(0.4))
 
-                // Player Background Style
-                playerBackgroundSection
+                // Fullscreen Player Section
+                fullscreenPlayerSection
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 24)
@@ -44,94 +44,132 @@ public struct AppearanceSettingsView: View {
 
     // MARK: - Theme Section
     private var themeSection: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            ForEach(AppTheme.allCases) { theme in
-                let isSelected = libraryStore.settings.appTheme == theme
-                Button(action: {
-                    HapticFeedback.selectionChanged()
-                    libraryStore.settings.appTheme = theme
-                    libraryStore.saveSettings()
-                }) {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("THEME")
+                .font(.system(size: 11, weight: .bold, design: .monospaced))
+                .foregroundStyle(.secondary)
+
+            VStack(alignment: .leading, spacing: 16) {
+                ForEach(AppTheme.allCases) { theme in
+                    let isSelected = libraryStore.settings.appTheme == theme
                     HStack {
                         Text(theme.displayName)
                             .font(.system(size: 14.5, weight: .bold, design: .monospaced))
-                            .foregroundStyle(isSelected ? Color.blue : Color.primary)
+                            .foregroundStyle(isSelected ? libraryStore.settings.appTheme.accentColor : Color.primary)
 
                         Spacer()
                     }
                     .padding(.vertical, 6)
                     .contentShape(Rectangle())
+                    .gesture(
+                        LongPressGesture(minimumDuration: 0.45)
+                            .onEnded { _ in
+                                HapticFeedback.notificationSuccess()
+                                activeDetail = SettingOptionCatalog.appearance
+                            }
+                            .exclusively(before: TapGesture().onEnded {
+                                HapticFeedback.selectionChanged()
+                                libraryStore.settings.appTheme = theme
+                                libraryStore.saveSettings()
+                            })
+                    )
                 }
-                .buttonStyle(.plain)
-                .simultaneousGesture(
-                    LongPressGesture(minimumDuration: 0.45).onEnded { _ in
-                        HapticFeedback.notificationSuccess()
-                        activeDetail = SettingOptionCatalog.appearance
-                    }
-                )
             }
         }
     }
 
     // MARK: - Default Library Page Section
     private var defaultLibraryPageSection: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            ForEach(LibraryCategory.allCases) { category in
-                let isSelected = libraryStore.settings.defaultLibraryCategory == category
-                Button(action: {
-                    HapticFeedback.selectionChanged()
-                    libraryStore.settings.defaultLibraryCategory = category
-                    libraryStore.saveSettings()
-                }) {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("DEFAULT LIBRARY PAGE")
+                .font(.system(size: 11, weight: .bold, design: .monospaced))
+                .foregroundStyle(.secondary)
+
+            VStack(alignment: .leading, spacing: 16) {
+                ForEach(LibraryCategory.allCases) { category in
+                    let isSelected = libraryStore.settings.defaultLibraryCategory == category
                     HStack {
                         Text(category.title)
                             .font(.system(size: 14.5, weight: .bold, design: .monospaced))
-                            .foregroundStyle(isSelected ? Color.blue : Color.primary)
+                            .foregroundStyle(isSelected ? libraryStore.settings.appTheme.accentColor : Color.primary)
 
                         Spacer()
                     }
                     .padding(.vertical, 6)
                     .contentShape(Rectangle())
+                    .gesture(
+                        LongPressGesture(minimumDuration: 0.45)
+                            .onEnded { _ in
+                                HapticFeedback.notificationSuccess()
+                                activeDetail = SettingOptionCatalog.appearance
+                            }
+                            .exclusively(before: TapGesture().onEnded {
+                                HapticFeedback.selectionChanged()
+                                libraryStore.settings.defaultLibraryCategory = category
+                                libraryStore.saveSettings()
+                            })
+                    )
                 }
-                .buttonStyle(.plain)
-                .simultaneousGesture(
-                    LongPressGesture(minimumDuration: 0.45).onEnded { _ in
-                        HapticFeedback.notificationSuccess()
-                        activeDetail = SettingOptionCatalog.appearance
-                    }
-                )
             }
         }
     }
 
-    // MARK: - Player Background Section
-    private var playerBackgroundSection: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            ForEach(PlayerBackgroundStyle.allCases) { style in
-                let isSelected = libraryStore.settings.playerBackgroundStyle == style
-                Button(action: {
-                    HapticFeedback.selectionChanged()
-                    libraryStore.settings.playerBackgroundStyle = style
-                    libraryStore.saveSettings()
-                }) {
-                    HStack {
-                        Text(style.displayName)
-                            .font(.system(size: 14.5, weight: .bold, design: .monospaced))
-                            .foregroundStyle(isSelected ? Color.blue : Color.primary)
+    // MARK: - Fullscreen Player Section
+    private var fullscreenPlayerSection: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            Text("FULLSCREEN PLAYER")
+                .font(.system(size: 11, weight: .bold, design: .monospaced))
+                .foregroundStyle(.secondary)
 
-                        Spacer()
+            VStack(alignment: .leading, spacing: 12) {
+                Text("BACKGROUND")
+                    .font(.system(size: 11, weight: .bold, design: .monospaced))
+                    .foregroundStyle(.secondary)
+
+                VStack(alignment: .leading, spacing: 16) {
+                    ForEach(PlayerBackgroundStyle.allCases) { style in
+                        let isSelected = libraryStore.settings.playerBackgroundStyle == style
+                        HStack {
+                            Text(style.displayName)
+                                .font(.system(size: 14.5, weight: .bold, design: .monospaced))
+                                .foregroundStyle(isSelected ? libraryStore.settings.appTheme.accentColor : Color.primary)
+
+                            Spacer()
+                        }
+                        .padding(.vertical, 6)
+                        .contentShape(Rectangle())
+                        .gesture(
+                            LongPressGesture(minimumDuration: 0.45)
+                                .onEnded { _ in
+                                    HapticFeedback.notificationSuccess()
+                                    activeDetail = SettingOptionCatalog.appearance
+                                }
+                                .exclusively(before: TapGesture().onEnded {
+                                    HapticFeedback.selectionChanged()
+                                    libraryStore.settings.playerBackgroundStyle = style
+                                    libraryStore.saveSettings()
+                                })
+                        )
                     }
-                    .padding(.vertical, 6)
-                    .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
-                .simultaneousGesture(
-                    LongPressGesture(minimumDuration: 0.45).onEnded { _ in
-                        HapticFeedback.notificationSuccess()
-                        activeDetail = SettingOptionCatalog.appearance
-                    }
-                )
             }
+
+            Divider()
+                .overlay(libraryStore.settings.appTheme.separatorColor.opacity(0.4))
+
+            TypographicToggleRow(
+                title: "SHOW AUDIO SPECS",
+                isOn: $libraryStore.settings.showAudioSpecsInPlayer,
+                onToggle: { libraryStore.saveSettings() },
+                onLongPress: { activeDetail = SettingOptionCatalog.showAudioSpecs }
+            )
+
+            TypographicToggleRow(
+                title: "USE PROGRESS BAR",
+                isOn: $libraryStore.settings.useProgressBar,
+                onToggle: { libraryStore.saveSettings() },
+                onLongPress: { activeDetail = SettingOptionCatalog.useProgressBar }
+            )
         }
     }
 }

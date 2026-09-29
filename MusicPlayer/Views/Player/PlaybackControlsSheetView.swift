@@ -65,14 +65,6 @@ public struct PlaybackControlsSheetView: View {
             .background(appTheme.backgroundColor.ignoresSafeArea())
             .navigationTitle("PLAYBACK")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("DONE") {
-                        dismiss()
-                    }
-                    .font(.system(size: 13, weight: .bold, design: .monospaced))
-                }
-            }
             .sheet(isPresented: $showingPresetsSheet) {
                 EqualizerPresetsSheetView(equalizerManager: equalizerManager)
             }

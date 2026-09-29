@@ -28,8 +28,22 @@ public struct AlbumDetailView: View {
         self.playerService = playerService
     }
 
-    private var displayedMainTracks: [Track] {
-        let list = album.mainTracks
+    private var currentAlbum: Album {
+        if let direct = libraryStore.album(forID: album.id) {
+            return direct
+        }
+        if let normMatch = libraryStore.album(normalizedArtist: album.normalizedArtist, normalizedTitle: album.normalizedTitle) {
+            return normMatch
+        }
+        if let firstTrackID = album.tracks.first?.id,
+           let matched = libraryStore.albums.first(where: { $0.tracks.contains(where: { $0.id == firstTrackID }) }) {
+            return matched
+        }
+        return album
+    }
+
+    private func displayedMainTracks(for activeAlbum: Album) -> [Track] {
+        let list = activeAlbum.mainTracks
         let cleanQuery = FuzzyMatcher.normalize(searchQuery)
         guard !cleanQuery.isEmpty else { return list }
         let scored: [(Track, Int)] = list.compactMap { track in
@@ -45,9 +59,12 @@ public struct AlbumDetailView: View {
         return scored.sorted { $0.1 > $1.1 }.map { $0.0 }
     }
 
-    private var displayedAlternateTracks: [Track] {
-        let list = album.alternateTracks
-        guard !list.isEmpty && list.count < album.tracks.count else { return [] }
+    private func displayedAlternateTracks(for activeAlbum: Album) -> [Track] {
+        let list = activeAlbum.alternateTracks
+        guard !list.isEmpty else { return [] }
+        if list.count == activeAlbum.tracks.count && !activeAlbum.tracks.contains(where: { $0.isAlternate == true }) {
+            return []
+        }
         let cleanQuery = FuzzyMatcher.normalize(searchQuery)
         guard !cleanQuery.isEmpty else { return list }
         let scored: [(Track, Int)] = list.compactMap { track in
@@ -65,6 +82,10 @@ public struct AlbumDetailView: View {
 
     // Main view layout structure
     public var body: some View {
+        let activeAlbum = currentAlbum
+        let mainTracks = displayedMainTracks(for: activeAlbum)
+        let altTracks = displayedAlternateTracks(for: activeAlbum)
+
         VStack(spacing: 0) {
             // Smooth Top Search Bar (Decoupled from ScrollView, zero layout jitter)
             if isSearching {
@@ -100,13 +121,13 @@ public struct AlbumDetailView: View {
             ScrollView(.vertical, showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 20) {
                     // Header with Artwork & Album Info
-                    headerView
+                    headerView(for: activeAlbum)
 
                     // Play / Shuffle Actions with Music Note Button on the far right
                     HStack(spacing: 12) {
                         Button(action: {
-                            if let first = album.tracks.first {
-                                playerService.play(track: first, inQueue: album.tracks)
+                            if let first = activeAlbum.tracks.first {
+                                playerService.play(track: first, inQueue: activeAlbum.tracks)
                             }
                         }) {
                             Text("PLAY ALBUM")
@@ -115,7 +136,7 @@ public struct AlbumDetailView: View {
 
                         Button(action: {
                             // Shuffled
-                            var shuffled = album.tracks
+                            var shuffled = activeAlbum.tracks
                             shuffled.shuffle()
                             if let first = shuffled.first {
                                 playerService.play(track: first, inQueue: shuffled)
@@ -141,6 +162,17 @@ public struct AlbumDetailView: View {
                                 Text("SEARCH ONLINE")
                             }
 
+                            Button(action: {
+                                HapticFeedback.notificationSuccess()
+                                libraryStore.toggleCollaborativeAlbum(activeAlbum)
+                            }) {
+                                if libraryStore.isCollaborativeAlbum(activeAlbum) {
+                                    Label("MAKE COLLABORATIVE ALBUM", systemImage: "checkmark")
+                                } else {
+                                    Text("MAKE COLLABORATIVE ALBUM")
+                                }
+                            }
+
                             Divider()
 
                             Button(action: {
@@ -154,7 +186,7 @@ public struct AlbumDetailView: View {
                                     ForEach(libraryStore.playlists) { playlist in
                                         Button(action: {
                                             HapticFeedback.notificationSuccess()
-                                            libraryStore.addTracks(album.tracks, toPlaylistID: playlist.id)
+                                            libraryStore.addTracks(activeAlbum.tracks, toPlaylistID: playlist.id)
                                         }) {
                                             Text(playlist.name)
                                         }
@@ -175,12 +207,12 @@ public struct AlbumDetailView: View {
 
                     // Tracklist Section (Main canonical tracks)
                     VStack(alignment: .leading, spacing: 10) {
-                        Text("TRACKLIST (\(displayedMainTracks.count))")
+                        Text("TRACKLIST (\(mainTracks.count))")
                             .font(.system(size: 12, weight: .bold, design: .monospaced))
                             .foregroundStyle(.secondary)
                             .padding(.horizontal, 2)
 
-                        if displayedMainTracks.isEmpty && displayedAlternateTracks.isEmpty {
+                        if mainTracks.isEmpty && altTracks.isEmpty {
                             EmptyStateView(
                                 title: "NO MATCHING TRACKS",
                                 message: "No tracks in this album match '\(searchQuery)'."
@@ -194,8 +226,7 @@ public struct AlbumDetailView: View {
                             let isTapToPlayNext = libraryStore.settings.tapToPlayNext
 
                             LazyVStack(spacing: 4) {
-                                ForEach(0..<displayedMainTracks.count, id: \.self) { index in
-                                    let track = displayedMainTracks[index]
+                                ForEach(Array(mainTracks.enumerated()), id: \.element.id) { index, track in
                                     TrackRowView(
                                         track: track,
                                         indexNumber: index + 1,
@@ -204,8 +235,9 @@ public struct AlbumDetailView: View {
                                         isNextTrack: track.id == nextTrackID,
                                         isInPlayNext: playNextSet.contains(track.id),
                                         isTapToPlayNextEnabled: isTapToPlayNext,
+                                        showAlbumSubtitle: false,
                                         onPlay: {
-                                            playerService.play(track: track, inQueue: displayedMainTracks, startIndex: index)
+                                            playerService.play(track: track, inQueue: mainTracks, startIndex: index)
                                         },
                                         onPlayNext: {
                                             playerService.insertPlayNextFront(track: track)
@@ -227,9 +259,7 @@ public struct AlbumDetailView: View {
                                                 selectedArtistForNavigation = artistObj
                                             }
                                         },
-                                        onSelectAlbum: {
-                                            // Already in album view
-                                        }
+                                        onSelectAlbum: nil
                                     )
                                 }
                             }
@@ -237,7 +267,7 @@ public struct AlbumDetailView: View {
                     }
 
                     // Alternates Section (Instrumentals, Remixes, Acoustics, Live Versions, etc.)
-                    if !displayedAlternateTracks.isEmpty {
+                    if !altTracks.isEmpty {
                         VStack(alignment: .leading, spacing: 10) {
                             Text("ALTERNATES")
                                 .font(.system(size: 12, weight: .bold, design: .monospaced))
@@ -251,8 +281,7 @@ public struct AlbumDetailView: View {
                             let isTapToPlayNext = libraryStore.settings.tapToPlayNext
 
                             LazyVStack(spacing: 4) {
-                                ForEach(0..<displayedAlternateTracks.count, id: \.self) { index in
-                                    let track = displayedAlternateTracks[index]
+                                ForEach(Array(altTracks.enumerated()), id: \.element.id) { index, track in
                                     TrackRowView(
                                         track: track,
                                         indexNumber: nil,
@@ -261,8 +290,9 @@ public struct AlbumDetailView: View {
                                         isNextTrack: track.id == nextTrackID,
                                         isInPlayNext: playNextSet.contains(track.id),
                                         isTapToPlayNextEnabled: isTapToPlayNext,
+                                        showAlbumSubtitle: false,
                                         onPlay: {
-                                            playerService.play(track: track, inQueue: displayedAlternateTracks, startIndex: index)
+                                            playerService.play(track: track, inQueue: altTracks, startIndex: index)
                                         },
                                         onPlayNext: {
                                             playerService.insertPlayNextFront(track: track)
@@ -284,9 +314,7 @@ public struct AlbumDetailView: View {
                                                 selectedArtistForNavigation = artistObj
                                             }
                                         },
-                                        onSelectAlbum: {
-                                            // Already in album view
-                                        }
+                                        onSelectAlbum: nil
                                     )
                                 }
                             }
@@ -301,7 +329,7 @@ public struct AlbumDetailView: View {
             .dismissKeyboardOnDrag()
         }
         .background(libraryStore.settings.appTheme.backgroundColor.ignoresSafeArea())
-        .navigationTitle(album.title)
+        .navigationTitle(activeAlbum.releaseTypeDisplayTitle)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
@@ -324,11 +352,11 @@ public struct AlbumDetailView: View {
         }
         // Modal presentation sheet
         .sheet(isPresented: $showingPlaylistPicker) {
-            playlistPickerSheet(for: album.tracks)
+            playlistPickerSheet(for: activeAlbum.tracks)
         }
         // Dedicated Album Metadata Online Search & Apply Sheet
         .sheet(isPresented: $showingAlbumMetadataSheet) {
-            AlbumMetadataSheet(album: album, libraryStore: libraryStore)
+            AlbumMetadataSheet(album: activeAlbum, libraryStore: libraryStore)
                 .tint(libraryStore.settings.appTheme.accentColor)
                 .environment(\.appTheme, libraryStore.settings.appTheme)
         }
@@ -339,7 +367,7 @@ public struct AlbumDetailView: View {
             GlobalSearchView(
                 libraryStore: libraryStore,
                 playerService: playerService,
-                initialQuery: "\(album.artist) \(album.title)",
+                initialQuery: "\(activeAlbum.artist) \(activeAlbum.title)",
                 initialOnlineMode: true
             )
         }
@@ -424,29 +452,27 @@ public struct AlbumDetailView: View {
         }
     }
 
-    private var headerView: some View {
+    @ViewBuilder
+    private func headerView(for activeAlbum: Album) -> some View {
         HStack(alignment: .top, spacing: 16) {
             AlbumArtworkView(
-                artworkKey: album.artworkKey,
-                title: album.title,
-                subtitle: album.artist,
+                artworkKey: activeAlbum.artworkKey,
+                title: activeAlbum.title,
+                subtitle: activeAlbum.artist,
                 cornerRadius: 10
             )
             .frame(width: 124, height: 124)
             .shadow(color: Color.black.opacity(0.12), radius: 8, x: 0, y: 4)
 
             VStack(alignment: .leading, spacing: 6) {
-                Text("ALBUM")
-                    .font(.system(size: 10, weight: .bold, design: .monospaced))
-                    .foregroundStyle(.secondary)
-
-                Text(album.title)
+                Text(activeAlbum.title)
                     .font(.system(size: 18, weight: .bold))
                     .foregroundStyle(Color.primary)
-                    .lineLimit(2)
+                    .lineLimit(nil)
+                    .fixedSize(horizontal: false, vertical: true)
 
                 MultiArtistButtonsView(
-                    rawArtist: album.artist,
+                    rawArtist: activeAlbum.artist,
                     joinedArtists: libraryStore.settings.joinedArtists,
                     font: .system(size: 14, weight: .medium),
                     foregroundColor: Color.primary,
@@ -458,20 +484,21 @@ public struct AlbumDetailView: View {
                         }
                     }
                 )
+                .fixedSize(horizontal: false, vertical: true)
                 .contentShape(Rectangle())
                 .contextMenu {
-                    if ArtistParser.parseArtists(from: album.artist).count > 1 || libraryStore.isArtistJoined(rawArtist: album.artist) {
-                        if libraryStore.isArtistJoined(rawArtist: album.artist) {
+                    if ArtistParser.parseArtists(from: activeAlbum.artist).count > 1 || libraryStore.isArtistJoined(rawArtist: activeAlbum.artist) {
+                        if libraryStore.isArtistJoined(rawArtist: activeAlbum.artist) {
                             Button(action: {
                                 HapticFeedback.notificationSuccess()
-                                libraryStore.unjoinArtists(for: album.artist)
+                                libraryStore.unjoinArtists(for: activeAlbum.artist)
                             }) {
                                 Text("SEPARATE ARTISTS")
                             }
                         } else {
                             Button(action: {
                                 HapticFeedback.notificationSuccess()
-                                libraryStore.joinArtists(for: album.artist)
+                                libraryStore.joinArtists(for: activeAlbum.artist)
                             }) {
                                 Text("JOIN ARTISTS")
                             }
@@ -479,16 +506,10 @@ public struct AlbumDetailView: View {
                     }
                 }
 
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(album.formattedTrackCount)
-                        .font(.system(size: 12, design: .monospaced))
-                        .foregroundStyle(.secondary)
-
-                    Text(TimeFormatting.formatSummaryDuration(seconds: album.totalDuration))
-                        .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                        .foregroundStyle(Color.primary)
-                }
-                .padding(.top, 2)
+                Text(TimeFormatting.formatSummaryDuration(seconds: activeAlbum.totalDuration))
+                    .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .padding(.top, 2)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }

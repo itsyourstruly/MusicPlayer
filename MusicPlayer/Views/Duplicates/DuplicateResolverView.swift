@@ -10,6 +10,7 @@ public struct DuplicateResolverView: View {
     @State private var trackToDelete: Track? = nil
     @State private var showingDeleteAllAlert: Bool = false
     @State private var isProcessingDeletion: Bool = false
+    @State private var isScanningDuplicates: Bool = false
     @State private var deletionStatusBanner: String? = nil
     @State private var deletionErrorAlertMessage: String? = nil
 
@@ -18,10 +19,46 @@ public struct DuplicateResolverView: View {
         self.libraryStore = libraryStore
     }
 
+    private var scanDuplicatesHeader: some View {
+        Button(action: {
+            isScanningDuplicates = true
+            Task {
+                await libraryStore.recalculateDuplicates()
+                isScanningDuplicates = false
+                HapticFeedback.notificationSuccess()
+            }
+        }) {
+            HStack(spacing: 8) {
+                if isScanningDuplicates {
+                    ProgressView()
+                        .tint(Color.blue)
+                        .scaleEffect(0.85)
+                } else {
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 13, weight: .bold))
+                }
+                Text(isScanningDuplicates ? "SCANNING LIBRARY FOR DUPLICATES..." : "SCAN LIBRARY FOR DUPLICATES")
+                    .font(.system(size: 13, weight: .bold, design: .monospaced))
+            }
+            .foregroundStyle(Color.blue)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 12)
+            .background(Color.primary.opacity(0.06))
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+        }
+        .buttonStyle(.plain)
+        .disabled(isScanningDuplicates || libraryStore.tracks.isEmpty)
+    }
+
     // Main view layout structure
     public var body: some View {
         NavigationStack {
-            Group {
+            VStack(spacing: 0) {
+                scanDuplicatesHeader
+                    .padding(.horizontal, 16)
+                    .padding(.top, 10)
+                    .padding(.bottom, 6)
+
                 if libraryStore.duplicateGroups.isEmpty && !isProcessingDeletion {
                     EmptyDuplicatesStateView(statusBanner: deletionStatusBanner)
                 } else {
@@ -77,14 +114,6 @@ public struct DuplicateResolverView: View {
             .background(appTheme.backgroundColor.ignoresSafeArea())
             .navigationTitle("DUPLICATE MANAGER")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("DONE") {
-                        dismiss()
-                    }
-                    .font(.system(size: 13, weight: .bold, design: .monospaced))
-                }
-            }
             .alert("DELETE ALL DUPLICATES FROM DISK?", isPresented: $showingDeleteAllAlert) {
                 Button("CANCEL", role: .cancel) {}
                 Button("DELETE FILES", role: .destructive) {
@@ -322,20 +351,32 @@ private struct DuplicateSummaryHeaderView: View {
 }
 
 /// Duplicate cluster card containing horizontally scrollable side-by-side candidates with artwork and full metadata.
-private struct DuplicateClusterCardView: View {
+public struct DuplicateClusterCardView: View {
     // Group
-    let group: DuplicateGroup
+    public let group: DuplicateGroup
     // Flag indicating if deleting
-    let isDeleting: Bool
+    public let isDeleting: Bool
     // On select primary
-    let onSelectPrimary: (UUID) -> Void
+    public let onSelectPrimary: (UUID) -> Void
     // On delete track
-    let onDeleteTrack: (Track) -> Void
+    public let onDeleteTrack: (Track) -> Void
 
     @Environment(\.appTheme) private var appTheme
 
+    public init(
+        group: DuplicateGroup,
+        isDeleting: Bool,
+        onSelectPrimary: @escaping (UUID) -> Void,
+        onDeleteTrack: @escaping (Track) -> Void
+    ) {
+        self.group = group
+        self.isDeleting = isDeleting
+        self.onSelectPrimary = onSelectPrimary
+        self.onDeleteTrack = onDeleteTrack
+    }
+
     // Body
-    var body: some View {
+    public var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             // Group Header
             HStack(alignment: .center) {
@@ -398,22 +439,36 @@ private struct DuplicateClusterCardView: View {
 }
 
 /// An individual candidate card displaying centered album cover at top, followed by centered metadata and actions.
-private struct CandidateComparisonCard: View {
+public struct CandidateComparisonCard: View {
     // Candidate
-    let candidate: DuplicateCandidate
+    public let candidate: DuplicateCandidate
     // Flag indicating if primary
-    let isPrimary: Bool
+    public let isPrimary: Bool
     // Flag indicating if deleting
-    let isDeleting: Bool
+    public let isDeleting: Bool
     // On select
-    let onSelect: () -> Void
+    public let onSelect: () -> Void
     // On delete
-    let onDelete: () -> Void
+    public let onDelete: () -> Void
 
     @Environment(\.appTheme) private var appTheme
 
+    public init(
+        candidate: DuplicateCandidate,
+        isPrimary: Bool,
+        isDeleting: Bool,
+        onSelect: @escaping () -> Void,
+        onDelete: @escaping () -> Void
+    ) {
+        self.candidate = candidate
+        self.isPrimary = isPrimary
+        self.isDeleting = isDeleting
+        self.onSelect = onSelect
+        self.onDelete = onDelete
+    }
+
     // Body
-    var body: some View {
+    public var body: some View {
         VStack(alignment: .center, spacing: 10) {
             // Centered Album Artwork at top with tap-to-select functionality
             VStack(spacing: 6) {

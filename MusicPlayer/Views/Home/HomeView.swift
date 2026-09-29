@@ -8,20 +8,27 @@ public struct HomeView: View {
     // On open settings
     public let onOpenSettings: () -> Void
 
-    @State private var isStatsExpanded: Bool = false
-    @State private var selectedAlbumForNavigation: Album? = nil
-    @State private var selectedPlaylistForNavigation: Playlist? = nil
+    @Binding var selectedAlbumForNavigation: Album?
+    @Binding var selectedPlaylistForNavigation: Playlist?
     @State private var showingShuffleTargetPicker: Bool = false
+
+    @Binding var navigateToSearch: Bool
 
     // Initialize with configured properties
     public init(
         libraryStore: LibraryStore,
         playerService: AudioPlayerService,
+        navigateToSearch: Binding<Bool> = .constant(false),
+        selectedAlbumForNavigation: Binding<Album?> = .constant(nil),
+        selectedPlaylistForNavigation: Binding<Playlist?> = .constant(nil),
         onNavigateToPlaylist: ((Playlist) -> Void)? = nil,
         onOpenSettings: @escaping () -> Void
     ) {
         self.libraryStore = libraryStore
         self.playerService = playerService
+        self._navigateToSearch = navigateToSearch
+        self._selectedAlbumForNavigation = selectedAlbumForNavigation
+        self._selectedPlaylistForNavigation = selectedPlaylistForNavigation
         self.onNavigateToPlaylist = onNavigateToPlaylist
         self.onOpenSettings = onOpenSettings
     }
@@ -31,32 +38,32 @@ public struct HomeView: View {
         ScrollView(.vertical, showsIndicators: false) {
             VStack(alignment: .leading, spacing: 24) {
                 // Unlinked Folder Banner or Quick Action Deck
-                if libraryStore.tracks.isEmpty {
+                if libraryStore.tracks.isEmpty && !libraryStore.isInitialLoading && libraryStore.settings.linkedFolderName == nil {
                     emptyLibraryBanner
                 } else {
                     quickActionsDeck
                 }
 
                 // Pinned Items Section (Albums & Playlists with long-press drag reordering)
-                PinnedSection(
-                    libraryStore: libraryStore,
-                    playerService: playerService,
-                    onSelectPlaylist: { playlist in
-                        if let customNav = onNavigateToPlaylist {
-                            customNav(playlist)
-                        } else {
-                            selectedPlaylistForNavigation = playlist
+                if !libraryStore.pinnedItems.isEmpty {
+                    PinnedSection(
+                        libraryStore: libraryStore,
+                        playerService: playerService,
+                        onSelectPlaylist: { playlist in
+                            if let customNav = onNavigateToPlaylist {
+                                customNav(playlist)
+                            } else {
+                                selectedPlaylistForNavigation = playlist
+                            }
+                        },
+                        onSelectAlbum: { album in
+                            selectedAlbumForNavigation = album
                         }
-                    },
-                    onSelectAlbum: { album in
-                        selectedAlbumForNavigation = album
-                    }
-                )
-
-                // Library Stats Summary
-                if !libraryStore.tracks.isEmpty {
-                    libraryStatsSection
+                    )
                 }
+
+                // Recently Listened To Albums ("LATEST PLAYS")
+                lastAlbumsSection
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 16)
@@ -68,6 +75,12 @@ public struct HomeView: View {
         // Modal presentation sheet
         .sheet(isPresented: $showingShuffleTargetPicker) {
             ShuffleTargetPickerSheet(libraryStore: libraryStore)
+        }
+        .navigationDestination(isPresented: $navigateToSearch) {
+            GlobalSearchView(
+                libraryStore: libraryStore,
+                playerService: playerService
+            )
         }
         .navigationDestination(item: $selectedAlbumForNavigation) { album in
             AlbumDetailView(
@@ -82,6 +95,76 @@ public struct HomeView: View {
                 libraryStore: libraryStore,
                 playerService: playerService
             )
+        }
+    }
+
+    @ViewBuilder
+    private var lastAlbumsSection: some View {
+        let recent = libraryStore.recentAlbums
+        if !recent.isEmpty {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("LATEST PLAYS")
+                    .font(.system(size: 13, weight: .black, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 2)
+
+                ScrollView(.horizontal, showsIndicators: false) {
+                    LazyHStack(spacing: 14) {
+                        ForEach(recent) { album in
+                            Button(action: {
+                                selectedAlbumForNavigation = album
+                            }) {
+                                VStack(alignment: .leading, spacing: 6) {
+                                    AlbumArtworkView(
+                                        artworkKey: album.artworkKey,
+                                        title: album.title,
+                                        subtitle: album.artist,
+                                        cornerRadius: 8
+                                    )
+                                    .frame(width: 130, height: 130)
+
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(album.title)
+                                            .font(.system(size: 13, weight: .bold))
+                                            .foregroundStyle(Color.primary)
+                                            .lineLimit(1)
+
+                                        Text(album.artist)
+                                            .font(.system(size: 12, weight: .medium))
+                                            .foregroundStyle(.secondary)
+                                            .lineLimit(1)
+                                    }
+                                    .frame(width: 130, alignment: .leading)
+                                }
+                            }
+                            .buttonStyle(.plain)
+                            .contextMenu {
+                                Button(action: {
+                                    let tracks = album.tracks
+                                    if let first = tracks.first {
+                                        playerService.play(track: first, inQueue: tracks)
+                                    }
+                                }) {
+                                    Label("PLAY ALBUM", systemImage: "play.fill")
+                                }
+                                Button(action: {
+                                    let tracks = album.tracks
+                                    playerService.playNext(tracks: tracks)
+                                }) {
+                                    Label("PLAY NEXT", systemImage: "text.line.first.and.arrowtriangle.forward")
+                                }
+                                Button(action: {
+                                    let tracks = album.tracks
+                                    playerService.appendToQueue(tracks: tracks)
+                                }) {
+                                    Label("ADD TO QUEUE", systemImage: "text.line.last.and.arrowtriangle.forward")
+                                }
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 2)
+                }
+            }
         }
     }
 
@@ -139,8 +222,17 @@ public struct HomeView: View {
     }
 
     private var shuffleButtonSubtitle: String {
-        // Count
-        let count = customShuffleTracks.count
+        let count: Int
+        switch libraryStore.settings.customShuffleTarget {
+        case .all:
+            count = libraryStore.tracks.count
+        case .artist(let name):
+            count = libraryStore.findArtist(name: name)?.tracks.count ?? 0
+        case .album(let title, let artist):
+            count = libraryStore.findAlbum(title: title, artist: artist)?.tracks.count ?? 0
+        case .playlist(let id, _):
+            count = libraryStore.playlists.first(where: { $0.id == id })?.trackIDs.count ?? 0
+        }
         switch libraryStore.settings.customShuffleTarget {
         case .all:
             return "\(count) TRACKS"
@@ -202,7 +294,10 @@ public struct HomeView: View {
             }
 
             // Search Library Navigation Button
-            NavigationLink(destination: GlobalSearchView(libraryStore: libraryStore, playerService: playerService)) {
+            Button(action: {
+                HapticFeedback.selectionChanged()
+                navigateToSearch = true
+            }) {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("SEARCH")
                         .font(.system(size: 13, weight: .bold, design: .monospaced))
@@ -222,58 +317,6 @@ public struct HomeView: View {
                 )
             }
             .buttonStyle(.plain)
-        }
-    }
-
-    private var libraryStatsSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Button(action: {
-                withAnimation(.spring(response: 0.28, dampingFraction: 0.8)) {
-                    isStatsExpanded.toggle()
-                }
-            }) {
-                HStack {
-                    Text("LIBRARY STATS")
-                        .font(.system(size: 13, weight: .bold, design: .monospaced))
-                        .foregroundStyle(.secondary)
-
-                    Spacer()
-
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 11, weight: .bold))
-                        .foregroundStyle(.secondary)
-                        .rotationEffect(.degrees(isStatsExpanded ? 90 : 0))
-                }
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-
-            if isStatsExpanded {
-                VStack(spacing: 10) {
-                    statRow(label: "TOTAL TRACKS", value: "\(libraryStore.tracks.count)")
-                    statRow(label: "TOTAL ALBUMS", value: "\(libraryStore.albums.count)")
-                    statRow(label: "TOTAL ARTISTS", value: "\(libraryStore.artists.count)")
-                    statRow(label: "PLAYBACK DURATION", value: TimeFormatting.formatSummaryDuration(seconds: libraryStore.totalLibraryDuration))
-                    statRow(label: "STORAGE FOOTPRINT", value: ByteFormatting.formatFileSize(bytes: libraryStore.totalLibraryDiskBytes))
-                }
-                .semanticCard(cornerRadius: 10, padding: 14)
-                .transition(.opacity.combined(with: .move(edge: .top)))
-            }
-        }
-    }
-
-    // Stat row
-    private func statRow(label: String, value: String) -> some View {
-        HStack {
-            Text(label)
-                .font(.system(size: 12, weight: .bold, design: .monospaced))
-                .foregroundStyle(.secondary)
-
-            Spacer()
-
-            Text(value)
-                .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                .foregroundStyle(Color.primary)
         }
     }
 }

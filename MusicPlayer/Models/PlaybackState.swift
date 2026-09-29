@@ -134,6 +134,8 @@ public enum TrackSortOption: String, CaseIterable, Identifiable, Sendable {
     case duration
     // Plays option
     case plays
+    // Newest added option
+    case newest
 
     // Unique track identifier
     public var id: String { rawValue }
@@ -145,6 +147,7 @@ public enum TrackSortOption: String, CaseIterable, Identifiable, Sendable {
         case .album: return "ALBUM"
         case .duration: return "DURATION"
         case .plays: return "PLAYS"
+        case .newest: return "NEW"
         }
     }
 }
@@ -155,6 +158,8 @@ public enum ArtistSortOption: String, CaseIterable, Identifiable, Sendable {
     case name
     // Most option
     case most
+    // Newest added option
+    case newest
 
     // Unique track identifier
     public var id: String { rawValue }
@@ -163,6 +168,7 @@ public enum ArtistSortOption: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .name: return "NAME"
         case .most: return "MOST"
+        case .newest: return "NEW"
         }
     }
 }
@@ -177,6 +183,8 @@ public enum AlbumSortOption: String, CaseIterable, Identifiable, Sendable {
     case artist
     // Duration option
     case duration
+    // Newest added option
+    case newest
 
     // Unique track identifier
     public var id: String { rawValue }
@@ -187,6 +195,7 @@ public enum AlbumSortOption: String, CaseIterable, Identifiable, Sendable {
         case .most: return "MOST"
         case .artist: return "ARTIST"
         case .duration: return "DURATION"
+        case .newest: return "NEW"
         }
     }
 }

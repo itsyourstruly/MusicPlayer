@@ -33,6 +33,10 @@ public struct Track: Identifiable, Codable, Sendable, Hashable {
     public let albumArtist: String?
     // Musical genre
     public let genre: String?
+    // Composer
+    public let composer: String?
+    // Performer
+    public let performer: String?
     // Release year
     public let year: Int?
     // Track number
@@ -41,6 +45,8 @@ public struct Track: Identifiable, Codable, Sendable, Hashable {
     public let totalTracks: Int?
     // Disc number
     public let discNumber: Int?
+    // Disc total
+    public let discTotal: Int?
     // Duration in seconds
     public let duration: TimeInterval
     // Local audio file URL
@@ -53,6 +59,8 @@ public struct Track: Identifiable, Codable, Sendable, Hashable {
     public let fileInfo: AudioFileInfo?
     // Track lyrics
     public let lyrics: String?
+    // Explicit alternate status
+    public let isAlternate: Bool?
 
     // Original track number
     public let originalTrackNumber: Int?
@@ -75,6 +83,8 @@ public struct Track: Identifiable, Codable, Sendable, Hashable {
         artist: String,
         album: String,
         albumArtist: String? = nil,
+        composer: String? = nil,
+        performer: String? = nil,
         genre: String? = nil,
         year: Int? = nil,
         trackNumber: Int? = nil,
@@ -82,18 +92,22 @@ public struct Track: Identifiable, Codable, Sendable, Hashable {
         deluxeTrackNumber: Int? = nil,
         totalTracks: Int? = nil,
         discNumber: Int? = nil,
+        discTotal: Int? = nil,
         duration: TimeInterval,
         url: URL,
         artworkKey: String? = nil,
         dateAdded: Date = Date(),
         fileInfo: AudioFileInfo? = nil,
-        lyrics: String? = nil
+        lyrics: String? = nil,
+        isAlternate: Bool? = nil
     ) {
         self.id = id
         self.title = title
         self.artist = artist
         self.album = album
         self.albumArtist = albumArtist
+        self.composer = composer
+        self.performer = performer
         self.genre = genre
         self.year = year
         self.trackNumber = trackNumber
@@ -101,12 +115,14 @@ public struct Track: Identifiable, Codable, Sendable, Hashable {
         self.deluxeTrackNumber = deluxeTrackNumber
         self.totalTracks = totalTracks
         self.discNumber = discNumber
+        self.discTotal = discTotal
         self.duration = duration
         self.url = url
         self.artworkKey = artworkKey
         self.dateAdded = dateAdded
         self.fileInfo = fileInfo
         self.lyrics = lyrics
+        self.isAlternate = isAlternate
 
         // N title
         let nTitle = FuzzyMatcher.normalize(title)
@@ -132,6 +148,8 @@ public struct Track: Identifiable, Codable, Sendable, Hashable {
         self.artist = try container.decodeIfPresent(String.self, forKey: .artist) ?? "Unknown Artist"
         self.album = try container.decodeIfPresent(String.self, forKey: .album) ?? "Unknown Album"
         self.albumArtist = try container.decodeIfPresent(String.self, forKey: .albumArtist)
+        self.composer = try container.decodeIfPresent(String.self, forKey: .composer)
+        self.performer = try container.decodeIfPresent(String.self, forKey: .performer)
         self.genre = try container.decodeIfPresent(String.self, forKey: .genre)
         self.year = try container.decodeIfPresent(Int.self, forKey: .year)
         self.trackNumber = try container.decodeIfPresent(Int.self, forKey: .trackNumber)
@@ -139,6 +157,7 @@ public struct Track: Identifiable, Codable, Sendable, Hashable {
         self.deluxeTrackNumber = try container.decodeIfPresent(Int.self, forKey: .deluxeTrackNumber)
         self.totalTracks = try container.decodeIfPresent(Int.self, forKey: .totalTracks)
         self.discNumber = try container.decodeIfPresent(Int.self, forKey: .discNumber)
+        self.discTotal = try container.decodeIfPresent(Int.self, forKey: .discTotal)
         self.duration = try container.decodeIfPresent(TimeInterval.self, forKey: .duration) ?? 0
         // File path location
         if let decodedURL = try? container.decode(URL.self, forKey: .url) {
@@ -165,26 +184,35 @@ public struct Track: Identifiable, Codable, Sendable, Hashable {
         self.dateAdded = try container.decodeIfPresent(Date.self, forKey: .dateAdded) ?? Date()
         self.fileInfo = try container.decodeIfPresent(AudioFileInfo.self, forKey: .fileInfo)
         self.lyrics = try container.decodeIfPresent(String.self, forKey: .lyrics)
+        self.isAlternate = try container.decodeIfPresent(Bool.self, forKey: .isAlternate)
 
-        // N title
-        let nTitle = FuzzyMatcher.normalize(self.title)
-        // N artist
-        let nArtist = FuzzyMatcher.normalize(self.artist)
-        // N album
-        let nAlbum = FuzzyMatcher.normalize(self.album)
-        // N genre
-        let nGenre = self.genre.map { FuzzyMatcher.normalize($0) } ?? ""
+        // Fast-path: deserialize precomputed search tokens if cached, avoiding expensive runtime normalization
+        if let nTitle = try container.decodeIfPresent(String.self, forKey: .normalizedTitle),
+           let nArtist = try container.decodeIfPresent(String.self, forKey: .normalizedArtist),
+           let nAlbum = try container.decodeIfPresent(String.self, forKey: .normalizedAlbum),
+           let sTokens = try container.decodeIfPresent(String.self, forKey: .searchTokens) {
+            self.normalizedTitle = nTitle
+            self.normalizedArtist = nArtist
+            self.normalizedAlbum = nAlbum
+            self.searchTokens = sTokens
+        } else {
+            let nTitle = FuzzyMatcher.normalize(self.title)
+            let nArtist = FuzzyMatcher.normalize(self.artist)
+            let nAlbum = FuzzyMatcher.normalize(self.album)
+            let nGenre = self.genre.map { FuzzyMatcher.normalize($0) } ?? ""
 
-        self.normalizedTitle = nTitle
-        self.normalizedArtist = nArtist
-        self.normalizedAlbum = nAlbum
-        self.searchTokens = "\(nTitle) \(nArtist) \(nAlbum) \(nGenre)"
+            self.normalizedTitle = nTitle
+            self.normalizedArtist = nArtist
+            self.normalizedAlbum = nAlbum
+            self.searchTokens = "\(nTitle) \(nArtist) \(nAlbum) \(nGenre)"
+        }
     }
 
     // Defines CodingKeys cases
     private enum CodingKeys: String, CodingKey {
         // Id option
-        case id, title, artist, album, albumArtist, genre, year, trackNumber, originalTrackNumber, deluxeTrackNumber, totalTracks, discNumber, duration, url, artworkKey, dateAdded, fileInfo, lyrics
+        case id, title, artist, album, albumArtist, composer, performer, genre, year, trackNumber, originalTrackNumber, deluxeTrackNumber, totalTracks, discNumber, discTotal, duration, url, artworkKey, dateAdded, fileInfo, lyrics, isAlternate
+        case normalizedTitle, normalizedArtist, normalizedAlbum, searchTokens
     }
 
     // Encode
@@ -196,6 +224,8 @@ public struct Track: Identifiable, Codable, Sendable, Hashable {
         try container.encode(artist, forKey: .artist)
         try container.encode(album, forKey: .album)
         try container.encodeIfPresent(albumArtist, forKey: .albumArtist)
+        try container.encodeIfPresent(composer, forKey: .composer)
+        try container.encodeIfPresent(performer, forKey: .performer)
         try container.encodeIfPresent(genre, forKey: .genre)
         try container.encodeIfPresent(year, forKey: .year)
         try container.encodeIfPresent(trackNumber, forKey: .trackNumber)
@@ -203,12 +233,18 @@ public struct Track: Identifiable, Codable, Sendable, Hashable {
         try container.encodeIfPresent(deluxeTrackNumber, forKey: .deluxeTrackNumber)
         try container.encodeIfPresent(totalTracks, forKey: .totalTracks)
         try container.encodeIfPresent(discNumber, forKey: .discNumber)
+        try container.encodeIfPresent(discTotal, forKey: .discTotal)
         try container.encode(duration, forKey: .duration)
         try container.encode(url, forKey: .url)
         try container.encodeIfPresent(artworkKey, forKey: .artworkKey)
         try container.encode(dateAdded, forKey: .dateAdded)
         try container.encodeIfPresent(fileInfo, forKey: .fileInfo)
         try container.encodeIfPresent(lyrics, forKey: .lyrics)
+        try container.encodeIfPresent(isAlternate, forKey: .isAlternate)
+        try container.encode(normalizedTitle, forKey: .normalizedTitle)
+        try container.encode(normalizedArtist, forKey: .normalizedArtist)
+        try container.encode(normalizedAlbum, forKey: .normalizedAlbum)
+        try container.encode(searchTokens, forKey: .searchTokens)
     }
 
     /// Formatted display string for artist and album pairing.
@@ -269,6 +305,8 @@ public struct Track: Identifiable, Codable, Sendable, Hashable {
             artist: self.artist,
             album: self.album,
             albumArtist: self.albumArtist,
+            composer: self.composer,
+            performer: self.performer,
             genre: self.genre,
             year: self.year,
             trackNumber: self.trackNumber,
@@ -276,12 +314,70 @@ public struct Track: Identifiable, Codable, Sendable, Hashable {
             deluxeTrackNumber: self.deluxeTrackNumber,
             totalTracks: self.totalTracks,
             discNumber: self.discNumber,
+            discTotal: self.discTotal,
             duration: self.duration,
             url: self.url,
             artworkKey: key,
             dateAdded: self.dateAdded,
             fileInfo: self.fileInfo,
-            lyrics: self.lyrics
+            lyrics: self.lyrics,
+            isAlternate: self.isAlternate
+        )
+    }
+
+    /// Returns a copy of the track with an updated artist.
+    public func withArtist(_ newArtist: String) -> Track {
+        Track(
+            id: self.id,
+            title: self.title,
+            artist: newArtist,
+            album: self.album,
+            albumArtist: self.albumArtist,
+            composer: self.composer,
+            performer: self.performer,
+            genre: self.genre,
+            year: self.year,
+            trackNumber: self.trackNumber,
+            originalTrackNumber: self.originalTrackNumber,
+            deluxeTrackNumber: self.deluxeTrackNumber,
+            totalTracks: self.totalTracks,
+            discNumber: self.discNumber,
+            discTotal: self.discTotal,
+            duration: self.duration,
+            url: self.url,
+            artworkKey: self.artworkKey,
+            dateAdded: self.dateAdded,
+            fileInfo: self.fileInfo,
+            lyrics: self.lyrics,
+            isAlternate: self.isAlternate
+        )
+    }
+
+    /// Returns a copy of the track with an updated albumArtist.
+    public func withAlbumArtist(_ newAlbumArtist: String?) -> Track {
+        Track(
+            id: self.id,
+            title: self.title,
+            artist: self.artist,
+            album: self.album,
+            albumArtist: newAlbumArtist,
+            composer: self.composer,
+            performer: self.performer,
+            genre: self.genre,
+            year: self.year,
+            trackNumber: self.trackNumber,
+            originalTrackNumber: self.originalTrackNumber,
+            deluxeTrackNumber: self.deluxeTrackNumber,
+            totalTracks: self.totalTracks,
+            discNumber: self.discNumber,
+            discTotal: self.discTotal,
+            duration: self.duration,
+            url: self.url,
+            artworkKey: self.artworkKey,
+            dateAdded: self.dateAdded,
+            fileInfo: self.fileInfo,
+            lyrics: self.lyrics,
+            isAlternate: self.isAlternate
         )
     }
 
@@ -293,6 +389,8 @@ public struct Track: Identifiable, Codable, Sendable, Hashable {
             artist: self.artist,
             album: self.album,
             albumArtist: self.albumArtist,
+            composer: self.composer,
+            performer: self.performer,
             genre: self.genre,
             year: newYear,
             trackNumber: self.trackNumber,
@@ -300,12 +398,111 @@ public struct Track: Identifiable, Codable, Sendable, Hashable {
             deluxeTrackNumber: self.deluxeTrackNumber,
             totalTracks: self.totalTracks,
             discNumber: self.discNumber,
+            discTotal: self.discTotal,
             duration: self.duration,
             url: self.url,
             artworkKey: self.artworkKey,
             dateAdded: self.dateAdded,
             fileInfo: self.fileInfo,
-            lyrics: self.lyrics
+            lyrics: self.lyrics,
+            isAlternate: self.isAlternate
+        )
+    }
+
+    /// Returns a copy of the track with updated user-editable tags.
+    public func withUpdatedTags(
+        title: String,
+        artist: String,
+        album: String,
+        albumArtist: String?,
+        composer: String?,
+        performer: String?,
+        genre: String?,
+        year: Int?,
+        trackNumber: Int?,
+        totalTracks: Int?,
+        discNumber: Int?,
+        discTotal: Int?
+    ) -> Track {
+        Track(
+            id: self.id,
+            title: title,
+            artist: artist,
+            album: album,
+            albumArtist: albumArtist,
+            composer: composer,
+            performer: performer,
+            genre: genre,
+            year: year,
+            trackNumber: trackNumber,
+            originalTrackNumber: self.originalTrackNumber,
+            deluxeTrackNumber: self.deluxeTrackNumber,
+            totalTracks: totalTracks,
+            discNumber: discNumber,
+            discTotal: discTotal,
+            duration: self.duration,
+            url: self.url,
+            artworkKey: self.artworkKey,
+            dateAdded: self.dateAdded,
+            fileInfo: self.fileInfo,
+            lyrics: self.lyrics,
+            isAlternate: self.isAlternate
+        )
+    }
+
+    /// Returns a copy of the track with an updated alternate status.
+    public func withAlternateStatus(_ isAlternate: Bool?) -> Track {
+        Track(
+            id: self.id,
+            title: self.title,
+            artist: self.artist,
+            album: self.album,
+            albumArtist: self.albumArtist,
+            composer: self.composer,
+            performer: self.performer,
+            genre: self.genre,
+            year: self.year,
+            trackNumber: self.trackNumber,
+            originalTrackNumber: self.originalTrackNumber,
+            deluxeTrackNumber: self.deluxeTrackNumber,
+            totalTracks: self.totalTracks,
+            discNumber: self.discNumber,
+            discTotal: self.discTotal,
+            duration: self.duration,
+            url: self.url,
+            artworkKey: self.artworkKey,
+            dateAdded: self.dateAdded,
+            fileInfo: self.fileInfo,
+            lyrics: self.lyrics,
+            isAlternate: isAlternate
+        )
+    }
+
+    /// Returns a copy of the track moved to a different album.
+    public func withAlbum(_ newAlbum: String, albumArtist: String? = nil, isAlternate: Bool? = nil) -> Track {
+        Track(
+            id: self.id,
+            title: self.title,
+            artist: self.artist,
+            album: newAlbum,
+            albumArtist: albumArtist ?? self.albumArtist,
+            composer: self.composer,
+            performer: self.performer,
+            genre: self.genre,
+            year: self.year,
+            trackNumber: self.trackNumber,
+            originalTrackNumber: self.originalTrackNumber,
+            deluxeTrackNumber: self.deluxeTrackNumber,
+            totalTracks: self.totalTracks,
+            discNumber: self.discNumber,
+            discTotal: self.discTotal,
+            duration: self.duration,
+            url: self.url,
+            artworkKey: self.artworkKey,
+            dateAdded: self.dateAdded,
+            fileInfo: self.fileInfo,
+            lyrics: self.lyrics,
+            isAlternate: isAlternate ?? self.isAlternate
         )
     }
 

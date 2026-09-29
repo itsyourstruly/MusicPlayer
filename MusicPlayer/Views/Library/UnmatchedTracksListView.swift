@@ -92,14 +92,6 @@ public struct UnmatchedTracksListView: View {
             .background(appTheme.backgroundColor.ignoresSafeArea())
             .navigationTitle("UNMATCHED TRACKS")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("DONE") {
-                        dismiss()
-                    }
-                    .font(.system(size: 13, weight: .bold, design: .monospaced))
-                }
-            }
             .sheet(item: $selectedTrackForManualSearch) { track in
                 OnlineMetadataMatchSheet(track: track, libraryStore: libraryStore)
                     .tint(appTheme.accentColor)
@@ -206,16 +198,30 @@ private struct UnmatchedHeaderCardView: View {
 }
 
 /// Centered card for an unmatched track with artwork on top, sub-artwork status, and centered metadata.
-private struct UnmatchedTrackCardView: View {
-    let track: Track
-    let isChecking: Bool
-    let statusMessage: String?
-    let onRecheck: () -> Void
-    let onManualSearch: () -> Void
+public struct UnmatchedTrackCardView: View {
+    public let track: Track
+    public let isChecking: Bool
+    public let statusMessage: String?
+    public let onRecheck: () -> Void
+    public let onManualSearch: () -> Void
 
     @Environment(\.appTheme) private var appTheme
 
-    var body: some View {
+    public init(
+        track: Track,
+        isChecking: Bool,
+        statusMessage: String?,
+        onRecheck: @escaping () -> Void,
+        onManualSearch: @escaping () -> Void
+    ) {
+        self.track = track
+        self.isChecking = isChecking
+        self.statusMessage = statusMessage
+        self.onRecheck = onRecheck
+        self.onManualSearch = onManualSearch
+    }
+
+    public var body: some View {
         VStack(alignment: .center, spacing: 14) {
             // Centered Album Artwork
             VStack(spacing: 6) {

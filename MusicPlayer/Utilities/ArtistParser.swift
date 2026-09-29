@@ -89,6 +89,25 @@ public enum ArtistParser {
 
     private static let singleArtistExceptions: Set<String> = Set(protectedArtists.map { $0.lowercased() })
 
+    private struct PrecompiledProtectedArtist: Sendable {
+        let name: String
+        let lowercaseName: String
+        let regex: NSRegularExpression
+    }
+
+    private static let precompiledProtectedArtists: [PrecompiledProtectedArtist] = {
+        return protectedArtists.compactMap { protected in
+            let escaped = NSRegularExpression.escapedPattern(for: protected)
+            let pattern = "(?i)(?:^|(?<=[\\s,;&|/]))" + escaped + "(?=[\\s,;&|/]|$)"
+            guard let rx = try? NSRegularExpression(pattern: pattern) else { return nil }
+            return PrecompiledProtectedArtist(name: protected, lowercaseName: protected.lowercased(), regex: rx)
+        }
+    }()
+
+    private static let tylerRegex: NSRegularExpression? = {
+        try? NSRegularExpression(pattern: "(?i)(?:^|(?<=[\\s,;&|/]))tyler,?\\s+the creator(?=[\\s,;&|/]|$)")
+    }()
+
     /// Checks whether an artist string is a protected single entity.
     public static func isSingleArtistException(_ name: String) -> Bool {
         let clean = name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -134,29 +153,27 @@ public enum ArtistParser {
         var workingText = trimmed
         var placeholders: [String: String] = [:]
         var placeholderIndex = 0
+        let lowerWorking = workingText.lowercased()
 
-        for protected in protectedArtists {
-            let escaped = NSRegularExpression.escapedPattern(for: protected)
-            let pattern = "(?i)(?:^|(?<=[\\s,;&|/]))" + escaped + "(?=[\\s,;&|/]|$)"
-            if let regex = try? NSRegularExpression(pattern: pattern) {
-                let nsWorking = workingText as NSString
-                let matches = regex.matches(in: workingText, options: [], range: NSRange(location: 0, length: nsWorking.length))
-                if !matches.isEmpty {
-                    let key = "___PROT_ARTIST_\(placeholderIndex)___"
-                    placeholders[key] = protected
-                    placeholderIndex += 1
-                    workingText = regex.stringByReplacingMatches(
-                        in: workingText,
-                        options: [],
-                        range: NSRange(location: 0, length: (workingText as NSString).length),
-                        withTemplate: key
-                    )
-                }
+        for item in precompiledProtectedArtists {
+            guard lowerWorking.contains(item.lowercaseName) else { continue }
+            let nsWorking = workingText as NSString
+            let matches = item.regex.matches(in: workingText, options: [], range: NSRange(location: 0, length: nsWorking.length))
+            if !matches.isEmpty {
+                let key = "___PROT_ARTIST_\(placeholderIndex)___"
+                placeholders[key] = item.name
+                placeholderIndex += 1
+                workingText = item.regex.stringByReplacingMatches(
+                    in: workingText,
+                    options: [],
+                    range: NSRange(location: 0, length: (workingText as NSString).length),
+                    withTemplate: key
+                )
             }
         }
 
         // Smart protection for Tyler, The Creator variations
-        if let tylerRegex = try? NSRegularExpression(pattern: "(?i)(?:^|(?<=[\\s,;&|/]))tyler,?\\s+the creator(?=[\\s,;&|/]|$)") {
+        if lowerWorking.contains("tyler") && lowerWorking.contains("creator"), let tylerRegex = tylerRegex {
             let nsWorking = workingText as NSString
             let matches = tylerRegex.matches(in: workingText, options: [], range: NSRange(location: 0, length: nsWorking.length))
             if !matches.isEmpty {
@@ -411,5 +428,208 @@ public enum ArtistParser {
             $0.localizedCaseInsensitiveCompare(cleanName) == .orderedSame ||
             canonicalArtistKey($0) == canonicalTarget
         }
+    }
+
+    // MARK: - Collaborative Album Artist Resolution
+
+    /// Formats an array of artist names into an intuitive display string (e.g. "Artist A & Artist B" or "A, B & C").
+    public static func formatDisplayArtist(_ artists: [String]) -> String {
+        guard !artists.isEmpty else { return "Unknown Artist" }
+        if artists.count == 1 {
+            return artists[0]
+        } else if artists.count == 2 {
+            return "\(artists[0]) & \(artists[1])"
+        } else {
+            let prefix = artists.dropLast().joined(separator: ", ")
+            return "\(prefix) & \(artists.last!)"
+        }
+    }
+
+    /// Determines the definitive artist(s) for an album based on track-level presence, collaborative thresholds,
+    /// and explicit tags. Returns multiple artists for genuine collaborative projects, while preventing
+    /// 1-2 track guest features from polluting the album's primary artist attribution.
+    public static func resolveAlbumArtists(
+        for tracks: [Track],
+        explicitAlbumArtist: String? = nil,
+        joinedArtists: [String] = []
+    ) -> [String] {
+        let cleanExplicit = explicitAlbumArtist?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let explicitCanonical = canonicalArtistKey(cleanExplicit)
+
+        // 1. Check if explicit album artist matches a joined artist rule
+        if !cleanExplicit.isEmpty {
+            for joined in joinedArtists {
+                let joinedCanonical = canonicalArtistKey(joined)
+                if explicitCanonical == joinedCanonical {
+                    return [joined]
+                }
+                let joinedParts = parseArtists(from: joined).map { canonicalArtistKey($0) }
+                if joinedParts.count > 1 {
+                    let explicitParts = parseArtists(from: cleanExplicit).map { canonicalArtistKey($0) }
+                    if Set(joinedParts).isSubset(of: Set(explicitParts)) {
+                        return [joined]
+                    }
+                }
+            }
+        }
+
+        // 2. If explicitAlbumArtist has multiple parsed artists (e.g. "Drake & 21 Savage")
+        if !cleanExplicit.isEmpty && !isGenericArtistName(cleanExplicit) {
+            let explicitParsed = parseArtists(from: cleanExplicit).filter { !isGenericArtistName($0) }
+            if explicitParsed.count > 1 {
+                return explicitParsed
+            }
+        }
+
+        guard !tracks.isEmpty else {
+            if !cleanExplicit.isEmpty && !isGenericArtistName(cleanExplicit) {
+                return [cleanExplicit]
+            }
+            return ["Unknown Artist"]
+        }
+
+        let n = tracks.count
+
+        // 3. For 1-track release (Single)
+        if n == 1 {
+            let track = tracks[0]
+            if !cleanExplicit.isEmpty && !isGenericArtistName(cleanExplicit) {
+                let parsed = parseArtists(from: cleanExplicit).filter { !isGenericArtistName($0) }
+                if !parsed.isEmpty { return parsed }
+            }
+            let trackArtists = parseArtists(from: track.artist).filter { !isGenericArtistName($0) }
+            if !trackArtists.isEmpty { return trackArtists }
+            return [track.artist.isEmpty ? "Unknown Artist" : track.artist]
+        }
+
+        // 4. For 2-track releases
+        if n == 2 {
+            var seen = Set<String>()
+            var result: [String] = []
+            if !cleanExplicit.isEmpty && !isGenericArtistName(cleanExplicit) {
+                for a in parseArtists(from: cleanExplicit) where !isGenericArtistName(a) && seen.insert(canonicalArtistKey(a)).inserted {
+                    result.append(a)
+                }
+            }
+            for track in tracks {
+                for a in parseArtists(from: track.artist) where !isGenericArtistName(a) && seen.insert(canonicalArtistKey(a)).inserted {
+                    result.append(a)
+                }
+            }
+            return result.isEmpty ? (cleanExplicit.isEmpty ? ["Unknown Artist"] : [cleanExplicit]) : result
+        }
+
+        // 5. For 3+ track albums / EPs: tally artist presences
+        struct ArtistStats {
+            var primaryCount: Int = 0
+            var totalCount: Int = 0
+            var firstSeenIndex: Int = Int.max
+            var variantCounts: [String: Int] = [:]
+        }
+
+        var statsByCanonical: [String: ArtistStats] = [:]
+
+        for (idx, track) in tracks.enumerated() {
+            let primaryParsed = parseArtists(from: track.artist).filter { !isGenericArtistName($0) }
+            let allOnTrack = allArtists(forTitle: track.title, artist: track.artist, albumArtist: track.albumArtist).filter { !isGenericArtistName($0) }
+
+            for a in primaryParsed {
+                let k = canonicalArtistKey(a)
+                guard !k.isEmpty else { continue }
+                var s = statsByCanonical[k, default: ArtistStats()]
+                s.primaryCount += 1
+                s.firstSeenIndex = min(s.firstSeenIndex, idx)
+                s.variantCounts[a, default: 0] += 1
+                statsByCanonical[k] = s
+            }
+
+            for a in allOnTrack {
+                let k = canonicalArtistKey(a)
+                guard !k.isEmpty else { continue }
+                var s = statsByCanonical[k, default: ArtistStats()]
+                s.totalCount += 1
+                s.firstSeenIndex = min(s.firstSeenIndex, idx)
+                s.variantCounts[a, default: 0] += 1
+                statsByCanonical[k] = s
+            }
+        }
+
+        func bestName(for canonical: String) -> String {
+            guard let stats = statsByCanonical[canonical] else { return canonical }
+            return stats.variantCounts.sorted { lhs, rhs in
+                if lhs.value != rhs.value { return lhs.value > rhs.value }
+                return preferredArtistDisplayName(lhs.key, rhs.key) == lhs.key
+            }.first?.key ?? canonical
+        }
+
+        // Identify candidate co-lead artists
+        var qualifiedCanonicals = Set<String>()
+
+        // Always include explicit album artist if present and non-generic
+        if !cleanExplicit.isEmpty && !isGenericArtistName(cleanExplicit) {
+            for a in parseArtists(from: cleanExplicit) where !isGenericArtistName(a) {
+                let k = canonicalArtistKey(a)
+                if !k.isEmpty {
+                    qualifiedCanonicals.insert(k)
+                }
+            }
+        }
+
+        // Find primary artist with the most primary tracks
+        let maxPrimary = statsByCanonical.values.map { $0.primaryCount }.max() ?? 0
+        let maxTotal = statsByCanonical.values.map { $0.totalCount }.max() ?? 0
+
+        // If no explicit artist was provided, always include the lead artist with max primary count
+        if qualifiedCanonicals.isEmpty {
+            if let lead = statsByCanonical.first(where: { $0.value.primaryCount == maxPrimary && maxPrimary > 0 }) {
+                qualifiedCanonicals.insert(lead.key)
+            } else if let lead = statsByCanonical.first(where: { $0.value.totalCount == maxTotal && maxTotal > 0 }) {
+                qualifiedCanonicals.insert(lead.key)
+            }
+        }
+
+        // Evaluate all other artists for collaborative co-lead status.
+        // Must appear on every single track in the album to qualify as a collaborative album.
+        for (canonical, stats) in statsByCanonical {
+            if qualifiedCanonicals.contains(canonical) { continue }
+
+            if stats.totalCount == n {
+                qualifiedCanonicals.insert(canonical)
+            }
+        }
+
+        // If no artist reached collaborative threshold (e.g. compilation of 10 tracks by 10 different artists)
+        if qualifiedCanonicals.isEmpty {
+            if !cleanExplicit.isEmpty {
+                return [cleanExplicit]
+            }
+            if n >= 4 && maxTotal <= 2 {
+                return ["Various Artists"]
+            }
+            if let top = statsByCanonical.max(by: { $0.value.totalCount < $1.value.totalCount }) {
+                return [bestName(for: top.key)]
+            }
+            return ["Unknown Artist"]
+        }
+
+        // Sort qualified artists:
+        // 1. Explicit album artist first
+        // 2. Higher primaryCount
+        // 3. Higher totalCount
+        // 4. Earlier track appearance order
+        let sortedCanonicals = qualifiedCanonicals.sorted { k1, k2 in
+            let isK1Explicit = k1 == explicitCanonical
+            let isK2Explicit = k2 == explicitCanonical
+            if isK1Explicit != isK2Explicit { return isK1Explicit }
+
+            let s1 = statsByCanonical[k1] ?? ArtistStats()
+            let s2 = statsByCanonical[k2] ?? ArtistStats()
+            if s1.primaryCount != s2.primaryCount { return s1.primaryCount > s2.primaryCount }
+            if s1.totalCount != s2.totalCount { return s1.totalCount > s2.totalCount }
+            return s1.firstSeenIndex < s2.firstSeenIndex
+        }
+
+        let resolvedNames = sortedCanonicals.map { bestName(for: $0) }
+        return resolvedNames.isEmpty ? ["Unknown Artist"] : resolvedNames
     }
 }

@@ -6,29 +6,42 @@ public struct PlayerControlsView: View {
     @Bindable var playerService: AudioPlayerService
     public var foregroundColor: Color
     public var secondaryForegroundColor: Color
+    public var canPerformAction: (() -> Bool)? = nil
+
+    @Environment(\.isPlayerDraggingOrDismissing) private var isPlayerDraggingOrDismissing: Bool
 
     // Initialize with configured properties
     public init(
         playerService: AudioPlayerService,
         foregroundColor: Color = Color.primary,
-        secondaryForegroundColor: Color = Color.secondary
+        secondaryForegroundColor: Color = Color.secondary,
+        canPerformAction: (() -> Bool)? = nil
     ) {
         self.playerService = playerService
         self.foregroundColor = foregroundColor
         self.secondaryForegroundColor = secondaryForegroundColor
+        self.canPerformAction = canPerformAction
+    }
+
+    private var canTriggerButtonPress: Bool {
+        if isPlayerDraggingOrDismissing { return false }
+        if let canPerformAction = canPerformAction, !canPerformAction() { return false }
+        return true
     }
 
     // Main view layout structure
     public var body: some View {
         VStack(spacing: 22) {
-            // Main Transport Controls (PREV, PLAY/PAUSE, NEXT) - Pure Prominent Text with Zero Drift
+            // Main Transport Controls (BACK, PLAY/PAUSE, NEXT) - Pure Prominent Text with Zero Drift
             HStack(spacing: 26) {
                 // Previous button
                 Button(action: {
-                    HapticFeedback.selectionChanged()
+                    guard canTriggerButtonPress else { return }
+                    guard playerService.hasPreviousTrack else { return }
+                    HapticFeedback.trackSkip(forward: false)
                     playerService.previous()
                 }) {
-                    Text("PREV")
+                    Text("BACK")
                         .font(.system(size: 19, weight: .heavy, design: .monospaced))
                         .foregroundStyle(
                             playerService.hasPreviousTrack
@@ -43,10 +56,9 @@ public struct PlayerControlsView: View {
 
                 // Play / Pause prominent text button
                 Button(action: {
-                    HapticFeedback.lightImpact()
-                    withAnimation(.spring(response: 0.46, dampingFraction: 0.72)) {
-                        playerService.togglePlayPause()
-                    }
+                    guard canTriggerButtonPress else { return }
+                    HapticFeedback.playPause(isPlaying: !playerService.playbackStatus.isPlaying)
+                    playerService.togglePlayPause()
                 }) {
                     Text(playerService.playbackStatus.isPlaying ? "PAUSE" : "PLAY")
                         .font(.system(size: 34, weight: .black, design: .monospaced))
@@ -59,7 +71,9 @@ public struct PlayerControlsView: View {
 
                 // Next button
                 Button(action: {
-                    HapticFeedback.selectionChanged()
+                    guard canTriggerButtonPress else { return }
+                    guard playerService.hasNextTrack else { return }
+                    HapticFeedback.trackSkip(forward: true)
                     playerService.next()
                 }) {
                     Text("NEXT")
@@ -79,12 +93,13 @@ public struct PlayerControlsView: View {
             // Secondary Mode Toggles (SHUFFLE & REPEAT) - Pure Text (Strict Single Row, Zero Wrap)
             HStack(spacing: 20) {
                 Button(action: {
-                    HapticFeedback.selectionChanged()
+                    guard canTriggerButtonPress else { return }
+                    HapticFeedback.modeToggle(isOn: playerService.shuffleMode == .off)
                     withAnimation(.spring(response: 0.25, dampingFraction: 0.75)) {
                         playerService.toggleShuffle()
                     }
                 }) {
-                    Text(playerService.shuffleMode.label)
+                    Text("SHUFFLE")
                         .font(.system(size: 12, weight: playerService.shuffleMode == .on ? .black : .bold, design: .monospaced))
                         .foregroundStyle(
                             playerService.shuffleMode == .on
@@ -94,18 +109,19 @@ public struct PlayerControlsView: View {
                         .lineLimit(1)
                         .fixedSize(horizontal: true, vertical: false)
                         .contentTransition(.interpolate)
-                        .frame(width: 114, height: 34, alignment: .center)
+                        .frame(width: 80, height: 34, alignment: .center)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
 
                 Button(action: {
-                    HapticFeedback.selectionChanged()
+                    guard canTriggerButtonPress else { return }
+                    HapticFeedback.modeToggle(isOn: playerService.repeatMode == .off)
                     withAnimation(.spring(response: 0.25, dampingFraction: 0.75)) {
                         playerService.cycleRepeatMode()
                     }
                 }) {
-                    Text(playerService.repeatMode.label)
+                    Text("REPEAT")
                         .font(.system(size: 12, weight: playerService.repeatMode != .off ? .black : .bold, design: .monospaced))
                         .foregroundStyle(
                             playerService.repeatMode != .off
@@ -115,7 +131,7 @@ public struct PlayerControlsView: View {
                         .lineLimit(1)
                         .fixedSize(horizontal: true, vertical: false)
                         .contentTransition(.interpolate)
-                        .frame(width: 114, height: 34, alignment: .center)
+                        .frame(width: 80, height: 34, alignment: .center)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)

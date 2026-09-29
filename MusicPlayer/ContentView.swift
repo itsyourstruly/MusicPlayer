@@ -15,30 +15,53 @@ public struct ContentView: View {
     @State private var selectedTab: Int = 0
     @State private var isPlayerExpanded: Bool = false
     @State private var showingSettings: Bool = false
-    @State private var homeStackID = UUID()
-    @State private var libraryStackID = UUID()
+    @State private var homeNavigateToSearch: Bool = false
+    @State private var selectedHomeAlbum: Album? = nil
+    @State private var selectedHomePlaylist: Playlist? = nil
+    @State private var isLibrarySearchFocused: Bool = false
 
-    /// Custom tab binding so re-tapping the active tab pops its navigation stack
-    /// rather than re-creating the view — mirrors the behaviour of the native Music app.
+    /// Custom tab binding so re-tapping the active tab pops its navigation stack or triggers shortcuts
     private var tabBinding: Binding<Int> {
         Binding(
             get: { selectedTab },
             set: { newTab in
-                if newTab == 1 && selectedTab == 1 {
-                    // Re-tap on Library: haptic feedback and reset to default category
+                if newTab == 0 {
                     HapticFeedback.selectionChanged()
-                    withAnimation(.spring(response: 0.25, dampingFraction: 0.8)) {
-                        libraryStackID = UUID()
-                        libraryStore.selectedCategory = libraryStore.settings.defaultLibraryCategory
+                    if selectedTab == 0 {
+                        // Already on the Home tab
+                        if selectedHomeAlbum != nil || selectedHomePlaylist != nil {
+                            // Currently in an album or playlist pushed from Home -> return to Home page
+                            selectedHomeAlbum = nil
+                            selectedHomePlaylist = nil
+                            homeNavigateToSearch = false
+                        } else if homeNavigateToSearch {
+                            // Currently in Search Library -> tap Home to return to the Home page
+                            homeNavigateToSearch = false
+                        } else {
+                            // Already on the Home page -> tap Home to go to the SEARCH LIBRARY page
+                            homeNavigateToSearch = true
+                        }
+                    } else {
+                        // Switching from Library tab to Home -> return to the Home page
+                        selectedHomeAlbum = nil
+                        selectedHomePlaylist = nil
+                        homeNavigateToSearch = false
+                        selectedTab = 0
                     }
-                } else if newTab == 0 && selectedTab == 0 {
-                    // Re-tap on Home: pop back to root
-                    HapticFeedback.selectionChanged()
-                    withAnimation(.spring(response: 0.25, dampingFraction: 0.8)) {
-                        homeStackID = UUID()
+                } else if newTab == 1 {
+                    if selectedTab == 1 {
+                        HapticFeedback.selectionChanged()
+                        let defaultCat = libraryStore.settings.defaultLibraryCategory
+                        if !libraryStore.searchQuery.isEmpty || libraryStore.selectedCategory != defaultCat {
+                            libraryStore.searchQuery = ""
+                            libraryStore.selectedCategory = defaultCat
+                            isLibrarySearchFocused = false
+                        } else {
+                            isLibrarySearchFocused = true
+                        }
                     }
+                    selectedTab = 1
                 }
-                selectedTab = newTab
             }
         )
     }
@@ -58,6 +81,7 @@ public struct ContentView: View {
         )
         .tint(libraryStore.settings.appTheme.accentColor)
         .environment(\.appTheme, libraryStore.settings.appTheme)
+        .environment(libraryStore)
         // Async lifecycle task
         .task {
             setupPlayerSync()
@@ -70,12 +94,25 @@ public struct ContentView: View {
         .onChange(of: libraryStore.settings.crossfadeDuration) { _, duration in
             playerService.crossfadeDuration = duration
         }
+        .onChange(of: libraryStore.settings.playTrackInCurrentQueue) { _, playInQueue in
+            playerService.playTrackInCurrentQueue = playInQueue
+        }
+        .onChange(of: libraryStore.settings.tapToPlayNext) { _, tapNext in
+            playerService.tapToPlayNext = tapNext
+        }
+        .onChange(of: libraryStore.settings.smoothSkippingEnabled) { _, smooth in
+            playerService.smoothSkippingEnabled = smooth
+        }
+        .onChange(of: libraryStore.settings.autoPlayNext) { _, autoPlay in
+            playerService.autoPlayNext = autoPlay
+        }
         .onChange(of: libraryStore.settings.rememberPlaybackPosition) { _, isRemember in
             playerService.rememberPlaybackPosition = isRemember
         }
         .onChange(of: libraryStore.settings.rememberPlaybackPositionMinMinutes) { _, minMinutes in
             playerService.rememberPlaybackPositionMinMinutes = minMinutes
         }
+        .preferredColorScheme(.dark)
         #else
         ZStack(alignment: .bottom) {
             // Main Tab View (100% interactive - tabs and navigation are NEVER blocked)
@@ -85,12 +122,14 @@ public struct ContentView: View {
                     HomeView(
                         libraryStore: libraryStore,
                         playerService: playerService,
+                        navigateToSearch: $homeNavigateToSearch,
+                        selectedAlbumForNavigation: $selectedHomeAlbum,
+                        selectedPlaylistForNavigation: $selectedHomePlaylist,
                         onOpenSettings: {
                             showingSettings = true
                         }
                     )
                 }
-                .id(homeStackID)
                 .tabItem {
                     Label("Home", systemImage: "house.fill")
                 }
@@ -101,12 +140,12 @@ public struct ContentView: View {
                     LibraryView(
                         libraryStore: libraryStore,
                         playerService: playerService,
+                        isSearchFocused: $isLibrarySearchFocused,
                         onOpenSettings: {
                             showingSettings = true
                         }
                     )
                 }
-                .id(libraryStackID)
                 .tabItem {
                     Label("Library", systemImage: "music.note.list")
                 }
@@ -158,12 +197,22 @@ public struct ContentView: View {
         .onChange(of: libraryStore.settings.tapToPlayNext) { _, tapNext in
             playerService.tapToPlayNext = tapNext
         }
+        .onChange(of: libraryStore.settings.smoothSkippingEnabled) { _, smooth in
+            playerService.smoothSkippingEnabled = smooth
+        }
+        .onChange(of: libraryStore.settings.autoPlayNext) { _, autoPlay in
+            playerService.autoPlayNext = autoPlay
+        }
         .onChange(of: libraryStore.settings.rememberPlaybackPosition) { _, isRemember in
             playerService.rememberPlaybackPosition = isRemember
         }
         .onChange(of: libraryStore.settings.rememberPlaybackPositionMinMinutes) { _, minMinutes in
             playerService.rememberPlaybackPositionMinMinutes = minMinutes
         }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
+            playerService.refreshAudioSessionAndRoute()
+        }
+        .preferredColorScheme(.dark)
         #endif
     }
 
@@ -172,15 +221,21 @@ public struct ContentView: View {
     /// Seeds the player service with the current persisted settings and wires up
     /// the play-count callback. Called once on `.task` so it runs after the view mounts.
     private func setupPlayerSync() {
+        playerService.refreshAudioSessionAndRoute()
         playerService.isCrossfadeEnabled = libraryStore.settings.isCrossfadeEnabled
         playerService.crossfadeDuration = libraryStore.settings.crossfadeDuration
         playerService.playTrackInCurrentQueue = libraryStore.settings.playTrackInCurrentQueue
         playerService.tapToPlayNext = libraryStore.settings.tapToPlayNext
+        playerService.smoothSkippingEnabled = libraryStore.settings.smoothSkippingEnabled
+        playerService.autoPlayNext = libraryStore.settings.autoPlayNext
         playerService.rememberPlaybackPosition = libraryStore.settings.rememberPlaybackPosition
         playerService.rememberPlaybackPositionMinMinutes = libraryStore.settings.rememberPlaybackPositionMinMinutes
         // Weak capture prevents a retain cycle between the service and the store
         playerService.onTrackPlay = { [weak libraryStore] trackID in
             libraryStore?.incrementPlayCount(for: trackID)
+            if let track = libraryStore?.tracks.first(where: { $0.id == trackID }) {
+                libraryStore?.recordTrackPlayed(track)
+            }
         }
         playerService.onSavePlaybackPosition = { [weak libraryStore] trackID, position in
             libraryStore?.setPlaybackPosition(position, for: trackID)

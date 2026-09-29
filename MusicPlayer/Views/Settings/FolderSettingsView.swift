@@ -11,13 +11,12 @@ public struct FolderSettingsView: View {
 
     @State private var showingFolderPicker: Bool = false
     @State private var showingUnlinkAlert: Bool = false
-    @State private var duplicateScanStatusText: String? = nil
-    @State private var duplicateBannerDismissTask: Task<Void, Never>? = nil
-    @State private var showingMetadataComparison: Bool = false
-    @State private var showingVerifiedGoodTracks: Bool = false
-    @State private var showingUnmatchedTracks: Bool = false
-    @State private var showingDuplicateResolver: Bool = false
-    @State private var isScanningDuplicates: Bool = false
+    @State private var showingTagFinderSheet: Bool = false
+    @State private var showingClearMetadataAlert: Bool = false
+    @State private var showingClearArtworkAlert: Bool = false
+    @State private var showingCloudWarningAlert: Bool = false
+    @State private var cloudWarningMessage: String = ""
+    @State private var artworkCacheSizeBytes: Int64 = 0
     @State private var activeDetail: SettingOptionDetail? = nil
 
     public init(libraryStore: LibraryStore) {
@@ -36,13 +35,10 @@ public struct FolderSettingsView: View {
                 Divider()
                     .overlay(appTheme.separatorColor.opacity(0.4))
 
-                // MARK: - 2. Track Enrichment Review Buttons (FOUND, GOOD, UNMATCHED, DUPLICATES)
-                trackEnrichmentButtonsSection
+                // MARK: - 2. Find Track Tags Button
+                findTrackTagsButtonSection
 
-                // MARK: - 3. Scan Library Metadata Online Button (Clean Text, No Background, No Icon)
-                scanMetadataOnlineButtonSection
-
-                // MARK: - 4. Disk Write Toggle
+                // MARK: - 3. Disk Write Toggle
                 diskWriteToggleSection
 
                 Divider()
@@ -50,6 +46,12 @@ public struct FolderSettingsView: View {
 
                 // MARK: - 5. Clean Library Scan Method Selector (METADATA vs FOLDER)
                 scanMethodSelectorSection
+
+                Divider()
+                    .overlay(appTheme.separatorColor.opacity(0.4))
+
+                // MARK: - 6. Cache Management (CLEAR METADATA CACHE & CLEAR ARTWORK CACHE)
+                cacheManagementSection
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 20)
@@ -82,90 +84,94 @@ public struct FolderSettingsView: View {
         } message: {
             Text("THIS WILL REMOVE INDEXED TRACKS AND PLAYLISTS FROM THE APP. YOUR AUDIO FILES ON DISK WILL NOT BE MODIFIED OR DELETED.")
         }
-        .sheet(isPresented: $showingMetadataComparison) {
-            MetadataComparisonListView(libraryStore: libraryStore)
-                .tint(appTheme.accentColor)
-                .environment(\.appTheme, appTheme)
+        .alert("CLEAR METADATA CACHE?", isPresented: $showingClearMetadataAlert) {
+            Button("CANCEL", role: .cancel) {}
+            Button("CLEAR", role: .destructive) {
+                libraryStore.clearDownloadedMetadataCache()
+            }
+        } message: {
+            Text("THIS WILL REMOVE ALL LOCALLY CACHED ONLINE METADATA MATCHES AND RESET ENRICHMENT QUEUES.")
         }
-        .sheet(isPresented: $showingVerifiedGoodTracks) {
-            VerifiedGoodTracksListView(libraryStore: libraryStore)
-                .tint(appTheme.accentColor)
-                .environment(\.appTheme, appTheme)
+        .alert("CLEAR ARTWORK CACHE?", isPresented: $showingClearArtworkAlert) {
+            Button("CANCEL", role: .cancel) {}
+            Button("CLEAR", role: .destructive) {
+                libraryStore.clearArtworkCache()
+                Task {
+                    await refreshArtworkCacheSize()
+                }
+            }
+        } message: {
+            Text("THIS WILL REMOVE ALL CACHED COVER ARTWORKS FROM DISK. ARTWORKS WILL BE RE-EXTRACTED AS NEEDED.")
         }
-        .sheet(isPresented: $showingUnmatchedTracks) {
-            UnmatchedTracksListView(libraryStore: libraryStore)
-                .tint(appTheme.accentColor)
-                .environment(\.appTheme, appTheme)
+        .alert("ICLOUD STORAGE DETECTED", isPresented: $showingCloudWarningAlert) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(cloudWarningMessage)
         }
-        .sheet(isPresented: $showingDuplicateResolver) {
-            DuplicateResolverView(libraryStore: libraryStore)
+        .sheet(isPresented: $showingTagFinderSheet) {
+            TrackTagFinderSheetView(libraryStore: libraryStore)
                 .tint(appTheme.accentColor)
                 .environment(\.appTheme, appTheme)
         }
         .sheet(item: $activeDetail) { detail in
             SettingOptionDetailSheet(detail: detail)
         }
-        .onDisappear {
-            duplicateBannerDismissTask?.cancel()
+        .task {
+            await refreshArtworkCacheSize()
         }
     }
 
-    // MARK: - 1. Linked Folder Header Section (Top of Sheet, No Background, Transient Status)
+    // MARK: - 1. Linked Folder Header Section (Top of Sheet, No Background)
     private var linkedFolderHeaderSection: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .center) {
-                Text(libraryStore.settings.linkedFolderName != nil ? "LINKED TO \(libraryStore.settings.linkedFolderName!.uppercased())" : "LINKED TO MUSIC FOLDER")
-                    .font(.system(size: 14, weight: .bold, design: .monospaced))
-                    .foregroundStyle(Color.white)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
+                if let folder = libraryStore.settings.linkedFolderName {
+                    Text("LINKED TO \(folder.uppercased())")
+                        .font(.system(size: 14, weight: .bold, design: .monospaced))
+                        .foregroundStyle(Color.white)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                } else {
+                    Button(action: {
+                        showingFolderPicker = true
+                    }) {
+                        Text("LINK FOLDER")
+                            .font(.system(size: 14, weight: .bold, design: .monospaced))
+                            .foregroundStyle(libraryStore.settings.appTheme.accentColor)
+                    }
+                    .buttonStyle(.plain)
+                }
 
                 Spacer()
 
-                // Gear Icon with clean, all-caps, no-icon context menu
+                Text("RESCAN")
+                    .font(.system(size: 13, weight: .bold, design: .monospaced))
+                    .foregroundStyle(
+                        (libraryStore.isScanning || libraryStore.settings.linkedFolderName == nil)
+                            ? libraryStore.settings.appTheme.accentColor.opacity(0.4)
+                            : libraryStore.settings.appTheme.accentColor
+                    )
+                    .contentShape(Rectangle())
+                    .gesture(
+                        (libraryStore.isScanning || libraryStore.settings.linkedFolderName == nil)
+                            ? nil
+                            : LongPressGesture(minimumDuration: 0.45)
+                                .onEnded { _ in
+                                    HapticFeedback.notificationSuccess()
+                                    activeDetail = SettingOptionCatalog.rescanFolder
+                                }
+                                .exclusively(before: TapGesture().onEnded {
+                                    Task {
+                                        await libraryStore.rescanCurrentDirectory()
+                                    }
+                                })
+                    )
+
+                // Gear Icon with clean context menu
                 Menu {
                     Button("CHANGE FOLDER") {
                         showingFolderPicker = true
                     }
-
-                    Button("RESCAN LIBRARY") {
-                        Task {
-                            await libraryStore.rescanCurrentDirectory()
-                        }
-                    }
-                    .disabled(libraryStore.isScanning || libraryStore.settings.linkedFolderName == nil)
-
-                    Button(isScanningDuplicates ? "SCANNING DUPLICATES..." : "SCAN DUPLICATES") {
-                        isScanningDuplicates = true
-                        Task {
-                            await libraryStore.recalculateDuplicates()
-                            isScanningDuplicates = false
-                            let count = libraryStore.duplicateGroups.count
-                            if count == 0 {
-                                withAnimation(.easeInOut(duration: 0.2)) {
-                                    duplicateScanStatusText = "NO DUPLICATES FOUND"
-                                }
-                            } else {
-                                let wastedBytes = libraryStore.duplicateGroups.reduce(0) { $0 + $1.potentialSavedBytes }
-                                let formattedSize = ByteFormatting.formatFileSize(bytes: wastedBytes).uppercased()
-                                withAnimation(.easeInOut(duration: 0.2)) {
-                                    duplicateScanStatusText = "FOUND \(count) DUPLICATE CLUSTER\(count == 1 ? "" : "S"). \(formattedSize) RECOVERABLE."
-                                }
-                            }
-                            HapticFeedback.notificationSuccess()
-
-                            duplicateBannerDismissTask?.cancel()
-                            duplicateBannerDismissTask = Task {
-                                try? await Task.sleep(nanoseconds: 5_000_000_000)
-                                if !Task.isCancelled {
-                                    withAnimation(.easeInOut(duration: 0.25)) {
-                                        duplicateScanStatusText = nil
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    .disabled(isScanningDuplicates || libraryStore.tracks.isEmpty)
 
                     if libraryStore.settings.linkedFolderName != nil {
                         Divider()
@@ -184,131 +190,65 @@ public struct FolderSettingsView: View {
                 }
             }
 
-            // Transient 5-Second Status Text for Duplicate Scan Results
-            if let status = duplicateScanStatusText {
-                Text(status)
-                    .font(.system(size: 11, weight: .bold, design: .monospaced))
-                    .foregroundStyle(Color.blue)
-                    .lineLimit(2)
-                    .transition(.opacity.combined(with: .move(edge: .top)))
-            }
+            // Plain text, slightly gray summary of tracks, albums, and artists
+            Text("\(libraryStore.tracks.count) TRACKS, \(libraryStore.albums.count) ALBUMS, \(libraryStore.artists.count) ARTISTS")
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundStyle(.secondary)
         }
         .padding(.vertical, 4)
     }
 
-    // MARK: - 2. Track Enrichment Buttons 2x2 Grid (FOUND, GOOD, UNMATCHED, DUPLICATES)
-    private var trackEnrichmentButtonsSection: some View {
-        LazyVGrid(
-            columns: [
-                GridItem(.flexible(), spacing: 10),
-                GridItem(.flexible(), spacing: 10)
-            ],
-            spacing: 10
-        ) {
-            // 1. FOUND (Formerly Ready to Enrich)
-            enrichmentCard(
-                title: "FOUND",
-                badge: "\(libraryStore.enrichmentDiffs.count) TRACKS",
-                action: {
-                    if !libraryStore.enrichmentDiffs.isEmpty {
-                        showingMetadataComparison = true
-                    }
-                },
-                detail: SettingOptionCatalog.enrichTracks,
-                isDisabled: libraryStore.enrichmentDiffs.isEmpty
-            )
+    // MARK: - 2. Find Track Tags Button (Opens Unified Tag Finder Sheet)
+    private var findTrackTagsButtonSection: some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("FIND TRACK TAGS")
+                    .font(.system(size: 14, weight: .black, design: .monospaced))
+                    .foregroundStyle(Color.black)
 
-            // 2. GOOD (Formerly Look Good)
-            enrichmentCard(
-                title: "GOOD",
-                badge: "\(libraryStore.verifiedGoodCount) TRACKS",
-                action: {
-                    if libraryStore.verifiedGoodCount > 0 {
-                        showingVerifiedGoodTracks = true
-                    }
-                },
-                detail: SettingOptionCatalog.verifiedTracks,
-                isDisabled: libraryStore.verifiedGoodCount == 0
-            )
-
-            // 3. UNMATCHED
-            enrichmentCard(
-                title: "UNMATCHED",
-                badge: "\(libraryStore.unmatchedTracksCount) TRACKS",
-                action: {
-                    showingUnmatchedTracks = true
-                },
-                detail: SettingOptionCatalog.unmatchedTracks,
-                isDisabled: false
-            )
-
-            // 4. DUPLICATES
-            enrichmentCard(
-                title: "DUPLICATES",
-                badge: "\(libraryStore.duplicateGroups.count) CLUSTERS",
-                action: {
-                    showingDuplicateResolver = true
-                },
-                detail: SettingOptionCatalog.duplicateTracks,
-                isDisabled: libraryStore.duplicateGroups.isEmpty
-            )
-        }
-    }
-
-    private func enrichmentCard(
-        title: String,
-        badge: String,
-        action: @escaping () -> Void,
-        detail: SettingOptionDetail,
-        isDisabled: Bool
-    ) -> some View {
-        Button(action: {
-            HapticFeedback.notificationSuccess()
-            action()
-        }) {
-            VStack(alignment: .leading, spacing: 6) {
-                Text(title)
-                    .font(.system(size: 13, weight: .black, design: .monospaced))
-                    .foregroundStyle(isDisabled ? Color.black.opacity(0.3) : Color.black)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.75)
-
-                Text(badge)
-                    .font(.system(size: 10.5, weight: .bold, design: .monospaced))
-                    .foregroundStyle(isDisabled ? Color.black.opacity(0.25) : Color.black.opacity(0.65))
-                    .lineLimit(1)
+                if libraryStore.isBackgroundCheckingMetadata {
+                    let total = libraryStore.backgroundCheckTotalCount > 0 ? libraryStore.backgroundCheckTotalCount : max(libraryStore.tracks.count, 1)
+                    Text("\(libraryStore.backgroundCheckScannedCount)/\(total)")
+                        .font(.system(size: 10.5, weight: .bold, design: .monospaced))
+                        .foregroundStyle(Color.black.opacity(0.65))
+                } else if libraryStore.isEnrichingMetadata {
+                    let total = libraryStore.enrichTotalCount > 0 ? libraryStore.enrichTotalCount : max(libraryStore.enrichmentDiffs.count, 1)
+                    Text("\(libraryStore.enrichProcessedCount)/\(total)")
+                        .font(.system(size: 10.5, weight: .bold, design: .monospaced))
+                        .foregroundStyle(Color.black.opacity(0.65))
+                } else {
+                    Text("\(libraryStore.enrichmentDiffs.count) FOUND • \(libraryStore.verifiedGoodCount) GOOD • \(libraryStore.unmatchedTracksCount) LOST • \(libraryStore.duplicateGroups.count) DUPES")
+                        .font(.system(size: 10.5, weight: .bold, design: .monospaced))
+                        .foregroundStyle(Color.black.opacity(0.65))
+                }
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 12)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.white)
-            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+
+            Spacer()
+
+            Image(systemName: "chevron.right")
+                .font(.system(size: 13, weight: .bold))
+                .foregroundStyle(Color.black.opacity(0.5))
         }
-        .buttonStyle(.plain)
-        .disabled(isDisabled)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.white)
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .contentShape(Rectangle())
+        .gesture(
+            LongPressGesture(minimumDuration: 0.45)
+                .onEnded { _ in
+                    HapticFeedback.notificationSuccess()
+                    activeDetail = SettingOptionCatalog.findTrackTags
+                }
+                .exclusively(before: TapGesture().onEnded {
+                    HapticFeedback.notificationSuccess()
+                    showingTagFinderSheet = true
+                })
+        )
         .contextMenu {
             Button("Option Info") {
-                activeDetail = detail
-            }
-        }
-    }
-
-    // MARK: - 3. Scan Library Metadata Online Button (Clean Text, No Background, No Icon)
-    private var scanMetadataOnlineButtonSection: some View {
-        Button(action: {
-            HapticFeedback.notificationSuccess()
-            libraryStore.rescanAllMetadata()
-        }) {
-            Text(libraryStore.isBackgroundCheckingMetadata ? "SCANNING METADATA ONLINE..." : "SCAN LIBRARY METADATA ONLINE")
-                .font(.system(size: 13.5, weight: .bold, design: .monospaced))
-                .foregroundStyle(libraryStore.isBackgroundCheckingMetadata ? Color.secondary : Color.blue)
-        }
-        .buttonStyle(.plain)
-        .disabled(libraryStore.isBackgroundCheckingMetadata || libraryStore.tracks.isEmpty)
-        .padding(.vertical, 2)
-        .contextMenu {
-            Button("Option Info") {
-                activeDetail = SettingOptionCatalog.rescanAllMetadata
+                activeDetail = SettingOptionCatalog.findTrackTags
             }
         }
     }
@@ -323,6 +263,13 @@ public struct FolderSettingsView: View {
                 set: { newValue in
                     libraryStore.settings.writeMetadataToAudioFiles = newValue
                     libraryStore.saveSettings()
+                    if newValue {
+                        let rootURL = SecurityScopedBookmark.shared.currentFolderURL ?? SecurityScopedBookmark.shared.resolveAndAccessBookmark()
+                        if let root = rootURL, AudioFileMetadataWriter.isCloudStorageURL(root) {
+                            cloudWarningMessage = "Your music folder is located in iCloud Drive. Files in cloud storage cannot be modified directly on disk. Enriched metadata will be kept safely within the app."
+                            showingCloudWarningAlert = true
+                        }
+                    }
                 }
             ),
             onLongPress: { activeDetail = SettingOptionCatalog.writeMetadataToDisk }
@@ -406,37 +353,66 @@ public struct FolderSettingsView: View {
                 HStack {
                     Text("INDEXING: \(Int(libraryStore.scanProgress * 100))%")
                         .font(.system(size: 11, weight: .bold, design: .monospaced))
-                        .foregroundStyle(Color.blue)
+                        .foregroundStyle(libraryStore.settings.appTheme.accentColor)
 
                     Spacer()
                 }
             }
-            .padding(.vertical, 2)
         }
+    }
 
-        if libraryStore.isBackgroundCheckingMetadata {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(libraryStore.backgroundCheckStatusText.uppercased())
-                    .font(.system(size: 10, design: .monospaced))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+    // MARK: - 6. Cache Management (CLEAR METADATA CACHE & CLEAR ARTWORK CACHE)
+    private var cacheManagementSection: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("CACHE MANAGEMENT")
+                .font(.system(size: 11, weight: .bold, design: .monospaced))
+                .foregroundStyle(.secondary)
 
-                HStack {
-                    Text("METADATA CHECK: \(Int(libraryStore.backgroundCheckProgress * 100))%")
-                        .font(.system(size: 11, weight: .bold, design: .monospaced))
-                        .foregroundStyle(Color.blue)
-
-                    Spacer()
-
-                    Button("CANCEL") {
-                        libraryStore.cancelBackgroundMetadataScan()
-                    }
-                    .font(.system(size: 10, weight: .bold, design: .monospaced))
-                    .foregroundStyle(Color.red)
-                    .buttonStyle(.plain)
+            // Clear Metadata Cache
+            HStack {
+                Button(action: {
+                    HapticFeedback.notificationSuccess()
+                    showingClearMetadataAlert = true
+                }) {
+                    Text("CLEAR METADATA CACHE")
+                        .font(.system(size: 13.5, weight: .bold, design: .monospaced))
+                        .foregroundStyle(Color.red)
                 }
+                .buttonStyle(.plain)
+
+                Spacer()
+
+                Text("\(libraryStore.downloadedMetadataCache.totalRecordsCount) REC")
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(.secondary)
             }
-            .padding(.vertical, 2)
+
+            // Clear Artwork Cache
+            HStack {
+                Button(action: {
+                    HapticFeedback.notificationSuccess()
+                    showingClearArtworkAlert = true
+                }) {
+                    Text("CLEAR ARTWORK CACHE")
+                        .font(.system(size: 13.5, weight: .bold, design: .monospaced))
+                        .foregroundStyle(Color.red)
+                }
+                .buttonStyle(.plain)
+
+                Spacer()
+
+                Text(ByteFormatting.formatFileSize(bytes: artworkCacheSizeBytes).uppercased())
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    private func refreshArtworkCacheSize() async {
+        let size = await ArtworkCacheService.shared.calculateDiskSize()
+        await MainActor.run {
+            self.artworkCacheSizeBytes = size
         }
     }
 }

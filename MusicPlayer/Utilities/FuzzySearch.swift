@@ -14,13 +14,16 @@ public enum FuzzyMatcher {
     @inline(__always)
     public static func normalize(_ str: String) -> String {
         guard !str.isEmpty else { return "" }
-        let folded = str.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
+
+        // Fast-path for ASCII strings: avoid expensive Foundation ICU unicode folding
+        let isPureASCII = str.utf8.allSatisfy { $0 < 128 }
+        let textToProcess = isPureASCII ? str.lowercased() : str.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: nil)
 
         var result = ""
-        result.reserveCapacity(folded.count + 8)
+        result.reserveCapacity(textToProcess.count + 8)
 
         var lastWasSpace = true
-        for scalar in folded.unicodeScalars {
+        for scalar in textToProcess.unicodeScalars {
             if (scalar >= "a" && scalar <= "z") || (scalar >= "0" && scalar <= "9") {
                 result.unicodeScalars.append(scalar)
                 lastWasSpace = false

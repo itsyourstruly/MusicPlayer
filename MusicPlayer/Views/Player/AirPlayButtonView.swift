@@ -4,6 +4,40 @@ import AVKit
 #if canImport(UIKit)
 import UIKit
 
+/// Transparent AVRoutePickerView subclass that stretches its internal button across its entire bounds
+private final class CustomRoutePickerView: AVRoutePickerView {
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        for subview in subviews {
+            subview.frame = bounds
+            subview.tintColor = .clear
+            subview.backgroundColor = .clear
+            if let btn = subview as? UIButton {
+                btn.frame = bounds
+                btn.tintColor = .clear
+            }
+        }
+    }
+}
+
+public struct RoutePickerRepresentable: UIViewRepresentable {
+    public init() {}
+
+    public func makeUIView(context: Context) -> AVRoutePickerView {
+        let picker = CustomRoutePickerView(frame: .zero)
+        picker.prioritizesVideoDevices = false
+        picker.tintColor = .clear
+        picker.backgroundColor = .clear
+        return picker
+    }
+
+    public func updateUIView(_ uiView: AVRoutePickerView, context: Context) {
+        uiView.prioritizesVideoDevices = false
+        uiView.tintColor = .clear
+        uiView.backgroundColor = .clear
+    }
+}
+
 /// Native AirPlay route picker presenter helper that triggers the system route picker modal without showing any background icon.
 public final class RoutePickerManager {
     public static let shared = RoutePickerManager()
@@ -16,8 +50,7 @@ public final class RoutePickerManager {
         guard let windowScene = UIApplication.shared.connectedScenes
             .compactMap({ $0 as? UIWindowScene })
             .first(where: { $0.activationState == .foregroundActive }),
-              let window = windowScene.windows.first(where: { $0.isKeyWindow }) ?? windowScene.windows.first,
-              let rootVC = window.rootViewController else {
+              let window = windowScene.windows.first(where: { $0.isKeyWindow }) ?? windowScene.windows.first else {
             return
         }
 
@@ -30,8 +63,9 @@ public final class RoutePickerManager {
         }
 
         guard let picker = routePickerView else { return }
-        if picker.superview == nil {
-            rootVC.view.addSubview(picker)
+        if picker.superview !== window {
+            picker.removeFromSuperview()
+            window.addSubview(picker)
         }
 
         if let button = findButton(in: picker) {
@@ -49,27 +83,34 @@ public final class RoutePickerManager {
 }
 
 /// Audio route picker button that displays the connected output device name (e.g. "THIS DEVICE", "AIRPODS PRO", "HEADPHONES")
-/// aligned to the right with NO visible background icon, opening the system route picker on tap.
+/// aligned to the right with NO visible background icon, opening the device picker sheet on tap.
 public struct AirPlayButtonView: View {
     public let routeName: String
     public let foregroundColor: Color
     public let font: Font
+    public let onTap: (() -> Void)?
 
     // Initialize with configured properties
     public init(
         routeName: String = "THIS DEVICE",
         foregroundColor: Color = .primary,
-        font: Font = .system(size: 13, weight: .bold, design: .monospaced)
+        font: Font = .system(size: 13, weight: .bold, design: .monospaced),
+        onTap: (() -> Void)? = nil
     ) {
         self.routeName = routeName
         self.foregroundColor = foregroundColor
         self.font = font
+        self.onTap = onTap
     }
 
     public var body: some View {
         Button(action: {
-            HapticFeedback.selectionChanged()
-            RoutePickerManager.shared.presentRoutePicker()
+            HapticFeedback.lightImpact()
+            if let onTap = onTap {
+                onTap()
+            } else {
+                RoutePickerManager.shared.presentRoutePicker()
+            }
         }) {
             Text(routeName)
                 .font(font)
@@ -80,6 +121,16 @@ public struct AirPlayButtonView: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .highPriorityGesture(
+            TapGesture().onEnded {
+                HapticFeedback.lightImpact()
+                if let onTap = onTap {
+                    onTap()
+                } else {
+                    RoutePickerManager.shared.presentRoutePicker()
+                }
+            }
+        )
     }
 }
 
@@ -127,21 +178,28 @@ public struct AirPlayButtonView: View {
     public let routeName: String
     public let foregroundColor: Color
     public let font: Font
+    public let onTap: (() -> Void)?
 
     // Initialize with configured properties
     public init(
         routeName: String = "THIS DEVICE",
         foregroundColor: Color = .primary,
-        font: Font = .system(size: 13, weight: .bold, design: .monospaced)
+        font: Font = .system(size: 13, weight: .bold, design: .monospaced),
+        onTap: (() -> Void)? = nil
     ) {
         self.routeName = routeName
         self.foregroundColor = foregroundColor
         self.font = font
+        self.onTap = onTap
     }
 
     public var body: some View {
         Button(action: {
-            MacRoutePickerManager.shared.presentRoutePicker()
+            if let onTap = onTap {
+                onTap()
+            } else {
+                MacRoutePickerManager.shared.presentRoutePicker()
+            }
         }) {
             Text(routeName)
                 .font(font)

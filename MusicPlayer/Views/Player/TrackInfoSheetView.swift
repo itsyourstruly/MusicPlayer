@@ -14,14 +14,38 @@ public struct TrackInfoSheetView: View {
     public var libraryStore: LibraryStore?
     @Environment(\.dismiss) private var dismiss
     @Environment(\.appTheme) private var appTheme
+    @State private var currentTrack: Track
     @State private var copiedPathToast: Bool = false
     @State private var showingOnlineMetadataSheet: Bool = false
-    @State private var dynamicTags: [(key: String, value: String)] = []
+
+    // Manual Tag Editing State
+    @State private var isEditingTags: Bool = false
+    @State private var isSavingTags: Bool = false
+    @State private var showingSaveErrorAlert: Bool = false
+    @State private var saveErrorMessage: String = ""
+    @State private var showingRemoveConfirmation: Bool = false
+    @State private var showingDeleteConfirmation: Bool = false
+    @State private var isProcessingAction: Bool = false
+
+    // 12 editable tag properties (even if empty)
+    @State private var editTitle: String = ""
+    @State private var editArtist: String = ""
+    @State private var editAlbum: String = ""
+    @State private var editAlbumArtist: String = ""
+    @State private var editComposer: String = ""
+    @State private var editPerformer: String = ""
+    @State private var editGenre: String = ""
+    @State private var editDiscNumber: String = ""
+    @State private var editDiscTotal: String = ""
+    @State private var editTrackNumber: String = ""
+    @State private var editTrackTotal: String = ""
+    @State private var editYear: String = ""
 
     // Initialize with configured properties
     public init(track: Track, libraryStore: LibraryStore? = nil) {
         self.track = track
         self.libraryStore = libraryStore
+        self._currentTrack = State(initialValue: track)
     }
 
     // Main view layout structure
@@ -52,12 +76,12 @@ public struct TrackInfoSheetView: View {
                         lyricsSection(lyrics: lyrics)
                     }
 
-                    // MARK: - 5. Extended Embedded File Tags (If present)
-                    if !dynamicTags.isEmpty {
+                    // MARK: - 5. Track Library Removal & Disk Deletion
+                    if libraryStore != nil {
                         Divider()
                             .overlay(appTheme.separatorColor.opacity(0.4))
 
-                        embeddedTagsSection
+                        trackActionsSection
                     }
                 }
                 .padding(.horizontal, 20)
@@ -67,26 +91,38 @@ public struct TrackInfoSheetView: View {
             .background(appTheme.backgroundColor.ignoresSafeArea())
             .navigationTitle("FILE INFO")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("DONE") {
-                        dismiss()
-                    }
-                    .font(.system(size: 13, weight: .bold, design: .monospaced))
-                    .foregroundStyle(appTheme.accentColor)
-                }
-            }
             // Modal presentation sheet
             .sheet(isPresented: $showingOnlineMetadataSheet) {
                 if let libraryStore = libraryStore {
-                    OnlineMetadataMatchSheet(track: track, libraryStore: libraryStore)
+                    OnlineMetadataMatchSheet(track: currentTrack, libraryStore: libraryStore)
                         .tint(libraryStore.settings.appTheme.accentColor)
                         .environment(\.appTheme, libraryStore.settings.appTheme)
                 }
             }
-            // Async lifecycle task
-            .task {
-                await loadDynamicTags()
+            .alert(saveErrorMessage, isPresented: $showingSaveErrorAlert) {
+                Button("OK", role: .cancel) {}
+            }
+            .alert(
+                "REMOVE FROM LIBRARY?",
+                isPresented: $showingRemoveConfirmation
+            ) {
+                Button("CANCEL", role: .cancel) {}
+                Button("REMOVE", role: .destructive) {
+                    performRemoveFromLibrary()
+                }
+            } message: {
+                Text("This track will be removed from your library and will not appear in the app. The audio file itself will remain intact on your device.")
+            }
+            .alert(
+                "DELETE TRACK PERMANENTLY?",
+                isPresented: $showingDeleteConfirmation
+            ) {
+                Button("CANCEL", role: .cancel) {}
+                Button("DELETE", role: .destructive) {
+                    performDeleteTrack()
+                }
+            } message: {
+                Text("Are you sure you want to permanently delete \"\(currentTrack.title)\" from your device? This will delete the audio file itself and cannot be undone.")
             }
         }
     }
@@ -95,56 +131,129 @@ public struct TrackInfoSheetView: View {
 
     private var tagMetadataSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("TAG METADATA")
-                .font(.system(size: 11, weight: .bold, design: .monospaced))
-                .foregroundStyle(appTheme.accentColor)
+            HStack {
+                Text(isEditingTags ? "EDIT TAG METADATA" : "TAG METADATA")
+                    .font(.system(size: 11, weight: .bold, design: .monospaced))
+                    .foregroundStyle(appTheme.accentColor)
 
-            VStack(spacing: 8) {
-                infoRow(label: "TITLE", value: track.title)
-                infoRow(label: "ARTIST", value: track.artist)
-                infoRow(label: "ALBUM", value: track.album)
+                Spacer()
 
-                if let year = track.year, year > 0 {
-                    infoRow(label: "RELEASE DATE", value: String(year))
-                }
+                if libraryStore != nil {
+                    if isEditingTags {
+                        Button("CANCEL") {
+                            withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                                isEditingTags = false
+                            }
+                        }
+                        .font(.system(size: 11, weight: .bold, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .buttonStyle(.plain)
 
-                if let albumArtist = track.albumArtist, !albumArtist.isEmpty {
-                    infoRow(label: "ALBUM ARTIST", value: albumArtist)
-                }
-
-                if let genre = track.genre, !genre.isEmpty {
-                    infoRow(label: "GENRE", value: genre)
-                }
-
-                if let trackNum = track.trackNumber, trackNum > 0 {
-                    if let total = track.totalTracks, total > 0 {
-                        infoRow(label: "TRACK NUMBER", value: "\(trackNum) of \(total)")
+                        Button(isSavingTags ? "SAVING..." : "SAVE") {
+                            Task {
+                                await saveTags()
+                            }
+                        }
+                        .font(.system(size: 11, weight: .bold, design: .monospaced))
+                        .foregroundStyle(Color.blue)
+                        .buttonStyle(.plain)
+                        .disabled(isSavingTags)
                     } else {
-                        infoRow(label: "TRACK NUMBER", value: String(trackNum))
+                        Button("EDIT") {
+                            populateEditFields()
+                            withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                                isEditingTags = true
+                            }
+                        }
+                        .font(.system(size: 11, weight: .bold, design: .monospaced))
+                        .foregroundStyle(Color.blue)
+                        .buttonStyle(.plain)
                     }
                 }
-
-                if let disc = track.discNumber, disc > 0 {
-                    infoRow(label: "DISC NUMBER", value: String(disc))
-                }
-
-                infoRow(label: "ARTWORK", value: track.artworkKey != nil ? "EMBEDDED (CACHED)" : "NONE / DEFAULT")
             }
 
-            if libraryStore != nil {
-                Button(action: { showingOnlineMetadataSheet = true }) {
-                    HStack {
-                        Text("FETCH ONLINE METADATA")
-                            .font(.system(size: 12, weight: .bold, design: .monospaced))
-                            .foregroundStyle(appTheme.accentColor)
-                        Spacer()
-                        Text("→")
-                            .font(.system(size: 12, weight: .bold, design: .monospaced))
-                            .foregroundStyle(appTheme.accentColor)
+            if isEditingTags {
+                VStack(spacing: 10) {
+                    editFieldRow(label: "TRACK TITLE", text: $editTitle)
+                    editFieldRow(label: "ARTIST", text: $editArtist)
+                    editFieldRow(label: "ALBUM", text: $editAlbum)
+                    editFieldRow(label: "ALBUM ARTIST", text: $editAlbumArtist)
+                    editFieldRow(label: "COMPOSER", text: $editComposer)
+                    editFieldRow(label: "PERFORMER", text: $editPerformer)
+                    editFieldRow(label: "GENRE", text: $editGenre)
+
+                    HStack(spacing: 12) {
+                        editFieldRow(label: "DISC NUMBER", text: $editDiscNumber)
+                        editFieldRow(label: "DISC TOTAL", text: $editDiscTotal)
                     }
-                    .padding(.top, 4)
+
+                    HStack(spacing: 12) {
+                        editFieldRow(label: "TRACK NUMBER", text: $editTrackNumber)
+                        editFieldRow(label: "TRACK TOTAL", text: $editTrackTotal)
+                    }
+
+                    editFieldRow(label: "YEAR", text: $editYear)
                 }
-                .buttonStyle(.plain)
+            } else {
+                VStack(spacing: 8) {
+                    infoRow(label: "TITLE", value: currentTrack.title)
+                    infoRow(label: "ARTIST", value: currentTrack.artist)
+                    infoRow(label: "ALBUM", value: currentTrack.album)
+
+                    if let year = currentTrack.year, year > 0 {
+                        infoRow(label: "RELEASE DATE", value: String(year))
+                    }
+
+                    if let albumArtist = currentTrack.albumArtist, !albumArtist.isEmpty {
+                        infoRow(label: "ALBUM ARTIST", value: albumArtist)
+                    }
+
+                    if let composer = currentTrack.composer, !composer.isEmpty {
+                        infoRow(label: "COMPOSER", value: composer)
+                    }
+
+                    if let performer = currentTrack.performer, !performer.isEmpty {
+                        infoRow(label: "PERFORMER", value: performer)
+                    }
+
+                    if let genre = currentTrack.genre, !genre.isEmpty {
+                        infoRow(label: "GENRE", value: genre)
+                    }
+
+                    if let disc = currentTrack.discNumber, disc > 0 {
+                        if let total = currentTrack.discTotal, total > 0 {
+                            infoRow(label: "DISC NUMBER", value: "\(disc) of \(total)")
+                        } else {
+                            infoRow(label: "DISC NUMBER", value: String(disc))
+                        }
+                    }
+
+                    if let trackNum = currentTrack.trackNumber, trackNum > 0 {
+                        if let total = currentTrack.totalTracks, total > 0 {
+                            infoRow(label: "TRACK NUMBER", value: "\(trackNum) of \(total)")
+                        } else {
+                            infoRow(label: "TRACK NUMBER", value: String(trackNum))
+                        }
+                    }
+
+                    infoRow(label: "ARTWORK", value: currentTrack.artworkKey != nil ? "EMBEDDED (CACHED)" : "NONE / DEFAULT")
+                }
+
+                if libraryStore != nil {
+                    Button(action: { showingOnlineMetadataSheet = true }) {
+                        HStack {
+                            Text("FETCH ONLINE METADATA")
+                                .font(.system(size: 12, weight: .bold, design: .monospaced))
+                                .foregroundStyle(appTheme.accentColor)
+                            Spacer()
+                            Text("→")
+                                .font(.system(size: 12, weight: .bold, design: .monospaced))
+                                .foregroundStyle(appTheme.accentColor)
+                        }
+                        .padding(.top, 4)
+                    }
+                    .buttonStyle(.plain)
+                }
             }
         }
     }
@@ -158,7 +267,7 @@ public struct TrackInfoSheetView: View {
                 .foregroundStyle(appTheme.accentColor)
 
             VStack(spacing: 8) {
-                if let info = track.fileInfo {
+                if let info = currentTrack.fileInfo {
                     infoRow(label: "CODEC / FORMAT", value: info.formatDescription)
                     infoRow(label: "CONTAINER", value: ".\(info.fileExtension)")
                     infoRow(label: "SAMPLE RATE", value: ByteFormatting.formatSampleRate(hz: info.sampleRate))
@@ -166,8 +275,8 @@ public struct TrackInfoSheetView: View {
                     infoRow(label: "BITRATE", value: ByteFormatting.formatBitrate(bps: info.bitRate))
                     infoRow(label: "EXACT DURATION", value: String(format: "%.3f sec (%@)", info.durationSeconds, TimeFormatting.format(seconds: info.durationSeconds)))
                 } else {
-                    infoRow(label: "DURATION", value: TimeFormatting.format(seconds: track.duration))
-                    infoRow(label: "FORMAT", value: track.url.pathExtension.uppercased())
+                    infoRow(label: "DURATION", value: TimeFormatting.format(seconds: currentTrack.duration))
+                    infoRow(label: "FORMAT", value: currentTrack.url.pathExtension.uppercased())
                 }
             }
         }
@@ -182,14 +291,14 @@ public struct TrackInfoSheetView: View {
                 .foregroundStyle(appTheme.accentColor)
 
             VStack(spacing: 8) {
-                if let info = track.fileInfo {
+                if let info = currentTrack.fileInfo {
                     infoRow(label: "FILE SIZE", value: "\(ByteFormatting.formatFileSize(bytes: info.fileSizeBytes)) (\(info.fileSizeBytes.formatted()) bytes)")
                     infoRow(label: "FILE NAME", value: info.fileName)
                 } else {
-                    infoRow(label: "FILE NAME", value: track.url.lastPathComponent)
+                    infoRow(label: "FILE NAME", value: currentTrack.url.lastPathComponent)
                 }
 
-                if let info = track.fileInfo {
+                if let info = currentTrack.fileInfo {
                     if let created = info.creationDate {
                         infoRow(label: "CREATED", value: created.formatted(date: .abbreviated, time: .shortened))
                     }
@@ -204,7 +313,7 @@ public struct TrackInfoSheetView: View {
                     .font(.system(size: 11, weight: .bold, design: .monospaced))
                     .foregroundStyle(.secondary)
 
-                Text(track.url.path)
+                Text(currentTrack.url.path)
                     .font(.system(size: 12, design: .monospaced))
                     .foregroundStyle(Color.primary)
                     .textSelection(.enabled)
@@ -241,23 +350,87 @@ public struct TrackInfoSheetView: View {
         }
     }
 
-    // MARK: - Embedded Tags Section
+    // MARK: - Helper Views & Functions
 
-    private var embeddedTagsSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("EMBEDDED FILE TAGS")
-                .font(.system(size: 11, weight: .bold, design: .monospaced))
-                .foregroundStyle(appTheme.accentColor)
-
-            VStack(spacing: 8) {
-                ForEach(dynamicTags, id: \.key) { tag in
-                    infoRow(label: tag.key, value: tag.value)
-                }
-            }
+    private func editFieldRow(label: String, text: Binding<String>) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(label)
+                .font(.system(size: 9, weight: .bold, design: .monospaced))
+                .foregroundStyle(.secondary)
+            TextField(label, text: text)
+                .font(.system(size: 13, design: .monospaced))
+                .foregroundStyle(Color.primary)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 7)
+                .background(Color.primary.opacity(0.06))
+                .clipShape(RoundedRectangle(cornerRadius: 6))
         }
     }
 
-    // MARK: - Helper Views & Functions
+    private func populateEditFields() {
+        editTitle = currentTrack.title
+        editArtist = currentTrack.artist
+        editAlbum = currentTrack.album
+        editAlbumArtist = currentTrack.albumArtist ?? ""
+        editComposer = currentTrack.composer ?? ""
+        editPerformer = currentTrack.performer ?? ""
+        editGenre = currentTrack.genre ?? ""
+        editDiscNumber = currentTrack.discNumber.map { String($0) } ?? ""
+        editDiscTotal = currentTrack.discTotal.map { String($0) } ?? ""
+        editTrackNumber = currentTrack.trackNumber.map { String($0) } ?? ""
+        editTrackTotal = currentTrack.totalTracks.map { String($0) } ?? ""
+        editYear = currentTrack.year.map { String($0) } ?? ""
+    }
+
+    private func saveTags() async {
+        guard let libraryStore = libraryStore else { return }
+        isSavingTags = true
+
+        let trackNum = Int(editTrackNumber.trimmingCharacters(in: .whitespacesAndNewlines))
+        let trackTot = Int(editTrackTotal.trimmingCharacters(in: .whitespacesAndNewlines))
+        let discNum = Int(editDiscNumber.trimmingCharacters(in: .whitespacesAndNewlines))
+        let discTot = Int(editDiscTotal.trimmingCharacters(in: .whitespacesAndNewlines))
+        let yearNum = Int(editYear.trimmingCharacters(in: .whitespacesAndNewlines))
+
+        let newTitle = editTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        let newArtist = editArtist.trimmingCharacters(in: .whitespacesAndNewlines)
+        let newAlbum = editAlbum.trimmingCharacters(in: .whitespacesAndNewlines)
+        let newAlbumArtist = editAlbumArtist.trimmingCharacters(in: .whitespacesAndNewlines)
+        let newComposer = editComposer.trimmingCharacters(in: .whitespacesAndNewlines)
+        let newPerformer = editPerformer.trimmingCharacters(in: .whitespacesAndNewlines)
+        let newGenre = editGenre.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let success = await libraryStore.updateTrackMetadata(
+            for: currentTrack.id,
+            title: newTitle.isEmpty ? currentTrack.title : newTitle,
+            artist: newArtist.isEmpty ? currentTrack.artist : newArtist,
+            album: newAlbum.isEmpty ? currentTrack.album : newAlbum,
+            albumArtist: newAlbumArtist.isEmpty ? nil : newAlbumArtist,
+            composer: newComposer.isEmpty ? nil : newComposer,
+            performer: newPerformer.isEmpty ? nil : newPerformer,
+            genre: newGenre.isEmpty ? nil : newGenre,
+            year: yearNum,
+            trackNumber: trackNum,
+            totalTracks: trackTot,
+            discNumber: discNum,
+            discTotal: discTot
+        )
+
+        isSavingTags = false
+        if success {
+            if let updated = libraryStore.tracks.first(where: { $0.id == currentTrack.id }) {
+                self.currentTrack = updated
+            }
+            HapticFeedback.notificationSuccess()
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                isEditingTags = false
+            }
+        } else {
+            HapticFeedback.notificationError()
+            saveErrorMessage = "COULD NOT WRITE METADATA TO AUDIO FILE ON DISK."
+            showingSaveErrorAlert = true
+        }
+    }
 
     private func infoRow(label: String, value: String) -> some View {
         HStack(alignment: .top, spacing: 12) {
@@ -276,47 +449,71 @@ public struct TrackInfoSheetView: View {
         .padding(.vertical, 1)
     }
 
-    private func loadDynamicTags() async {
-        let asset = AVURLAsset(url: track.url)
-        guard let metadata = try? await asset.load(.metadata) else { return }
-
-        var list: [(key: String, value: String)] = []
-        for item in metadata {
-            let rawKey = item.commonKey?.rawValue ?? item.keyString ?? (item.key as? String) ?? (item.key as? NSNumber)?.stringValue ?? ""
-            guard !rawKey.isEmpty else { continue }
-
-            let cleanKey = rawKey.replacingOccurrences(of: "com.apple.quicktime.", with: "")
-                .replacingOccurrences(of: "org.id3.", with: "")
-                .replacingOccurrences(of: "©", with: "")
-                .trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
-
-            let upper = cleanKey.uppercased()
-            if ["TITLE", "ARTIST", "ALBUM", "GENRE", "CREATIONDATE", "DATE", "YEAR", "ARTWORK"].contains(upper) {
-                continue
-            }
-
-            if let val = try? await item.load(.stringValue) {
-                let trimmedVal = val.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
-                if !trimmedVal.isEmpty && !list.contains(where: { $0.key == upper }) {
-                    list.append((key: upper, value: trimmedVal))
-                }
-            }
-        }
-
-        self.dynamicTags = list.sorted { $0.key < $1.key }
-    }
-
     private func copyFilePath() {
         #if canImport(UIKit)
-        UIPasteboard.general.string = track.url.path
+        UIPasteboard.general.string = currentTrack.url.path
         #elseif canImport(AppKit)
         NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(track.url.path, forType: .string)
+        NSPasteboard.general.setString(currentTrack.url.path, forType: .string)
         #endif
         copiedPathToast = true
         Task {
             try? await Task.sleep(nanoseconds: 2_000_000_000)
             copiedPathToast = false
+        }
+    }
+
+    // MARK: - Remove & Delete Track Actions
+
+    private var trackActionsSection: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Button(action: {
+                showingRemoveConfirmation = true
+            }) {
+                Text("REMOVE FROM LIBRARY")
+                    .font(.system(size: 13, weight: .bold, design: .monospaced))
+                    .foregroundStyle(Color.red)
+            }
+            .buttonStyle(.plain)
+            .disabled(isProcessingAction)
+
+            Button(action: {
+                showingDeleteConfirmation = true
+            }) {
+                Text("DELETE TRACK")
+                    .font(.system(size: 13, weight: .bold, design: .monospaced))
+                    .foregroundStyle(Color.red)
+            }
+            .buttonStyle(.plain)
+            .disabled(isProcessingAction)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.top, 4)
+    }
+
+    private func performRemoveFromLibrary() {
+        guard let libraryStore = libraryStore else { return }
+        isProcessingAction = true
+        HapticFeedback.notificationSuccess()
+        if let player = AudioPlayerService.shared, player.currentTrack?.id == currentTrack.id {
+            player.next()
+        }
+        libraryStore.removeTrackFromLibrary(track: currentTrack)
+        dismiss()
+    }
+
+    private func performDeleteTrack() {
+        guard let libraryStore = libraryStore else { return }
+        isProcessingAction = true
+        HapticFeedback.notificationSuccess()
+        Task {
+            if let player = AudioPlayerService.shared, player.currentTrack?.id == currentTrack.id {
+                player.next()
+            }
+            _ = await libraryStore.deleteSingleTrackFile(track: currentTrack)
+            await MainActor.run {
+                dismiss()
+            }
         }
     }
 }

@@ -41,6 +41,8 @@ public struct PlaybackSettingsView: View {
         .navigationTitle("PLAYBACK")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
+            libraryStore.settings.autoPlayNext = true
+            playerService.autoPlayNext = true
             playerService.playTrackInCurrentQueue = libraryStore.settings.playTrackInCurrentQueue
             playerService.tapToPlayNext = libraryStore.settings.tapToPlayNext
             playerService.smoothSkippingEnabled = libraryStore.settings.smoothSkippingEnabled
@@ -56,7 +58,7 @@ public struct PlaybackSettingsView: View {
     private var crossfadeSection: some View {
         VStack(alignment: .leading, spacing: 16) {
             TypographicToggleRow(
-                title: "CROSSFADE TRACKS",
+                title: "CROSSFADE",
                 isOn: $libraryStore.settings.isCrossfadeEnabled,
                 onToggle: { libraryStore.saveSettings() },
                 onLongPress: { activeDetail = SettingOptionCatalog.crossfadeTracks }
@@ -73,7 +75,7 @@ public struct PlaybackSettingsView: View {
 
                         Text(String(format: "%.1FS", libraryStore.settings.crossfadeDuration))
                             .font(.system(size: 13, weight: .bold, design: .monospaced))
-                            .foregroundStyle(Color.blue)
+                            .foregroundStyle(libraryStore.settings.appTheme.accentColor)
                     }
 
                     Slider(
@@ -81,7 +83,7 @@ public struct PlaybackSettingsView: View {
                         in: 0.0...15.0,
                         step: 0.5
                     )
-                    .tint(Color.blue)
+                    .tint(libraryStore.settings.appTheme.accentColor)
                     .onChange(of: libraryStore.settings.crossfadeDuration) { _, _ in
                         libraryStore.saveSettings()
                     }
@@ -89,6 +91,16 @@ public struct PlaybackSettingsView: View {
                 .padding(.top, 4)
                 .transition(.opacity)
             }
+
+            TypographicToggleRow(
+                title: "TRANSITION TRACKS WHEN SKIPPING",
+                isOn: $libraryStore.settings.smoothSkippingEnabled,
+                onToggle: {
+                    libraryStore.saveSettings()
+                    playerService.smoothSkippingEnabled = libraryStore.settings.smoothSkippingEnabled
+                },
+                onLongPress: { activeDetail = SettingOptionCatalog.smoothSkipping }
+            )
         }
     }
 
@@ -96,7 +108,7 @@ public struct PlaybackSettingsView: View {
     private var trackSelectionSection: some View {
         VStack(alignment: .leading, spacing: 16) {
             TypographicToggleRow(
-                title: "PLAY TRACKS IN QUEUE",
+                title: "KEEP QUEUE WHEN PLAYING TRACK",
                 isOn: $libraryStore.settings.playTrackInCurrentQueue,
                 onToggle: {
                     if libraryStore.settings.playTrackInCurrentQueue {
@@ -128,16 +140,9 @@ public struct PlaybackSettingsView: View {
     // MARK: - General Playback Section
     private var generalPlaybackSection: some View {
         VStack(alignment: .leading, spacing: 16) {
-            TypographicToggleRow(
-                title: "AUTO-PLAY NEXT",
-                isOn: $libraryStore.settings.autoPlayNext,
-                onToggle: { libraryStore.saveSettings() },
-                onLongPress: { activeDetail = SettingOptionCatalog.autoPlayNext }
-            )
-
             VStack(alignment: .leading, spacing: 12) {
                 TypographicToggleRow(
-                    title: "REMEMBER PLAYBACK POSITION",
+                    title: "SAVE PLAYBACK POSITION (LONG TRACKS)",
                     isOn: $libraryStore.settings.rememberPlaybackPosition,
                     onToggle: {
                         withAnimation(.easeInOut(duration: 0.25)) {
@@ -159,7 +164,7 @@ public struct PlaybackSettingsView: View {
 
                             Text("\(Int(libraryStore.settings.rememberPlaybackPositionMinMinutes)) MIN")
                                 .font(.system(size: 13, weight: .bold, design: .monospaced))
-                                .foregroundStyle(Color.blue)
+                                .foregroundStyle(libraryStore.settings.appTheme.accentColor)
                         }
 
                         Slider(
@@ -167,7 +172,7 @@ public struct PlaybackSettingsView: View {
                             in: 10.0...60.0,
                             step: 1.0
                         )
-                        .tint(Color.blue)
+                        .tint(libraryStore.settings.appTheme.accentColor)
                         .onChange(of: libraryStore.settings.rememberPlaybackPositionMinMinutes) { _, _ in
                             libraryStore.saveSettings()
                             playerService.rememberPlaybackPositionMinMinutes = libraryStore.settings.rememberPlaybackPositionMinMinutes
@@ -177,23 +182,6 @@ public struct PlaybackSettingsView: View {
                     .transition(.opacity)
                 }
             }
-
-            TypographicToggleRow(
-                title: "SHOW AUDIO SPECS",
-                isOn: $libraryStore.settings.showAudioSpecsInPlayer,
-                onToggle: { libraryStore.saveSettings() },
-                onLongPress: { activeDetail = SettingOptionCatalog.showAudioSpecs }
-            )
-
-            TypographicToggleRow(
-                title: "SMOOTH SKIPPING",
-                isOn: $libraryStore.settings.smoothSkippingEnabled,
-                onToggle: {
-                    libraryStore.saveSettings()
-                    playerService.smoothSkippingEnabled = libraryStore.settings.smoothSkippingEnabled
-                },
-                onLongPress: { activeDetail = SettingOptionCatalog.smoothSkipping }
-            )
         }
     }
 }

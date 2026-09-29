@@ -372,17 +372,28 @@ public enum MetadataSanitizer {
         return lower.isEmpty || lower == "unknown album" || lower == "unknown"
     }
 
+    // Is unknown title
+    public static func isUnknownTitle(_ title: String) -> Bool {
+        // Lower
+        let lower = title.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        return lower.isEmpty || lower == "unknown title" || lower == "unknown" || lower.hasPrefix("track") || lower.hasPrefix("audiotrack") || lower.hasPrefix("untitled")
+    }
+
     // MARK: - Remix, Alternate Version & Live Detection & Album Routing
 
     public static func isFreestyleOrBonusTrack(title: String, album: String = "") -> Bool {
         let titleLower = title.lowercased()
-        let albumLower = album.lowercased()
-        let keywords = ["freestyle", "bonus track", "bonus cut", "bonus song", "bonus"]
-        return keywords.contains { titleLower.contains($0) || albumLower.contains($0) }
+        let keywords = ["freestyle", "bonus track", "bonus cut", "bonus song"]
+        return keywords.contains { titleLower.contains($0) }
     }
 
     private static let alternateVersionRegex = try? NSRegularExpression(
-        pattern: #"[\(\[\{]\s*(?:clear\s+channel|heineken|red\s+star|session|sessions|live\s+session|bbc|live\s+lounge|tiny\s*desk|spotify\s+session|apple\s+music\s+session|itunes\s+session|aol\s+session|stripped|unplugged|mtv|exclusive|performance|snippet|demo|unreleased|alternate|alternative|alt\.?\s+take|take\s+\d+|rough\s+mix|work\s+in\s+progress|wip|early\s+version|outtake|b-side|clean\s+version|explicit\s+version|instrumental|acapella|a\s+cappella|orchestral|acoustic|dub|vip|re-?mix|club\s+mix|extended|radio\s+edit|radio\s+version|dance\s+mix|slowed|reverb|sped\s+up|speed\s+up|chopped\s+(?:and|&)\s+screwed|mash-?up|re-?work|re-?edit|bootleg|nightcore|daycore|intro\s+version|outro\s+version|single\s+version|album\s+version|re-?recorded|flip|mix|edit|version).*?[\)\]\}]|\s+-\s*(?:clear\s+channel|heineken|red\s+star|session|sessions|live\s+session|bbc|live\s+lounge|tiny\s*desk|stripped|unplugged|mtv|exclusive|performance|snippet|demo|unreleased|alternate|alternative|rough\s+mix|outtake|b-side|clean\s+version|instrumental|acapella|acoustic|dub|vip|re-?mix|extended|radio\s+edit|radio\s+version|slowed|sped\s+up|mash-?up|re-?work|re-?edit|bootleg|nightcore|re-?recorded|flip|mix|edit|version).*$"#,
+        pattern: #"[\(\[\{]\s*(?:clear\s+channel|heineken|red\s+star|session|sessions|live\s+session|live\b.*?|bbc|live\s+lounge|tiny\s*desk|spotify\s+session|apple\s+music\s+session|itunes\s+session|aol\s+session|stripped|unplugged|mtv|exclusive|performance|snippet|demo|unreleased|alternate|alternative|alt\.?\s*(?:take|version)?|take\s+\d+|rough\s+mix|work\s+in\s+progress|wip|early\s+version|outtake|b-side|clean\s+version|clean\b|explicit\s+version|explicit\b|instrumental|acapella|a\s+cappella|orchestral|acoustic|dub|vip|re-?mix|club\s+mix|extended|radio\s+edit|radio\s+version|dance\s+mix|slowed|reverb|sped\s+up|speed\s+up|chopped\s+(?:and|&)\s+screwed|mash-?up|re-?work|re-?edit|bootleg|nightcore|daycore|intro\s+version|outro\s+version|single\s+version|album\s+version|piano\s+version|strings\s+version|guitar\s+version|re-?recorded|flip|mix|edit|version).*?[\)\]\}]|\s+-\s*(?:clear\s+channel|heineken|red\s+star|session|sessions|live\s+session|live\b.*?|bbc|live\s+lounge|tiny\s*desk|stripped|unplugged|mtv|exclusive|performance|snippet|demo|unreleased|alternate|alternative|alt\.?\s*(?:take|version)?|take\s+\d+|rough\s+mix|outtake|b-side|clean\s+version|clean\b|explicit\s+version|explicit\b|instrumental|acapella|acoustic|dub|vip|re-?mix|extended|radio\s+edit|radio\s+version|slowed|sped\s+up|mash-?up|re-?work|re-?edit|bootleg|nightcore|re-?recorded|piano\s+version|strings\s+version|guitar\s+version|flip|mix|edit|version).*$"#,
+        options: [.caseInsensitive]
+    )
+
+    private static let liveBracketRegex = try? NSRegularExpression(
+        pattern: #"[\(\[\{][^\)\]\}]*\blive\b[^\)\]\}]*[\)\]\}]|\s+-\s*.*?\blive\b.*$"#,
         options: [.caseInsensitive]
     )
 
@@ -403,16 +414,11 @@ public enum MetadataSanitizer {
     private static let liveKeywords: [String] = [
         "live at", "live in", "live from", "(live)", "[live]", "- live",
         "live recording", "recorded live", "in concert", "live session", "unplugged",
-        "live festival", "tour live"
+        "live festival", "tour live", "live version", "live performance"
     ]
 
     /// Determines if a track title or album title indicates a remix or alternate version.
     public static func isRemixOrAlternateVersion(title: String, album: String = "") -> Bool {
-        // Freestyles and bonus tracks stay in singles, not alternates/remixes
-        if isFreestyleOrBonusTrack(title: title, album: album) {
-            return false
-        }
-
         let titleLower = title.lowercased()
         let albumLower = album.lowercased()
 
@@ -434,6 +440,12 @@ public enum MetadataSanitizer {
                 return true
             }
         }
+
+        // Freestyles and pure bonus tracks stay in standard album/singles, not alternates/remixes
+        if isFreestyleOrBonusTrack(title: title, album: album) {
+            return false
+        }
+
         return false
     }
 
@@ -441,6 +453,18 @@ public enum MetadataSanitizer {
     public static func isLiveRecording(title: String, album: String = "") -> Bool {
         let titleLower = title.lowercased()
         let albumLower = album.lowercased()
+
+        if let regex = liveBracketRegex {
+            let nsTitle = title as NSString
+            if regex.firstMatch(in: title, options: [], range: NSRange(location: 0, length: nsTitle.length)) != nil {
+                return true
+            }
+            let nsAlbum = album as NSString
+            if regex.firstMatch(in: album, options: [], range: NSRange(location: 0, length: nsAlbum.length)) != nil {
+                return true
+            }
+        }
+
         for kw in liveKeywords {
             if titleLower.contains(kw) || albumLower.contains(kw) {
                 return true

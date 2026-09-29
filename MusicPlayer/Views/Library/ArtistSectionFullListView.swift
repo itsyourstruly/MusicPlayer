@@ -34,14 +34,34 @@ public struct ArtistSectionFullListView: View {
         self.playerService = playerService
     }
 
+    private var activeAlbums: [Album] {
+        if let currentArtist = libraryStore.findArtist(name: artistName) {
+            let joined = libraryStore.settings.joinedArtists
+            switch title.uppercased() {
+            case "ALBUMS":
+                return currentArtist.albums.filter { $0.isLeadOrCollaborativeAlbum(for: currentArtist.name, joinedArtists: joined) && $0.isStudioAlbum }
+            case "SINGLES & EPS":
+                return currentArtist.albums.filter { $0.isLeadOrCollaborativeAlbum(for: currentArtist.name, joinedArtists: joined) && $0.isSingle }
+            case "ALTERNATES":
+                return currentArtist.albums.filter { $0.isLeadOrCollaborativeAlbum(for: currentArtist.name, joinedArtists: joined) && ($0.isRemix || $0.isLive) }
+            case "FEATURED ON":
+                return currentArtist.albums.filter { $0.isFeaturedAlbum(for: currentArtist.name, joinedArtists: joined) }
+            default:
+                return currentArtist.albums
+            }
+        }
+        return albums
+    }
+
     private var displayedAlbums: [Album] {
+        let baseAlbums = activeAlbums
         // Clean query
         let cleanQuery = FuzzyMatcher.normalize(searchQuery)
         // Ensure preconditions are met before proceeding
-        guard !cleanQuery.isEmpty else { return albums }
+        guard !cleanQuery.isEmpty else { return baseAlbums }
 
         // Scored
-        let scored: [(Album, Int)] = albums.compactMap { album in
+        let scored: [(Album, Int)] = baseAlbums.compactMap { album in
             // Score
             let score = FuzzyMatcher.scoreAlbum(
                 normalizedTitle: album.normalizedTitle,

@@ -50,11 +50,8 @@ public struct MacHomeView: View {
                 }
 
                 // Pinned Playlists & Albums Section
-                pinnedItemsSection
-
-                // Library Overview Metrics
-                if !libraryStore.tracks.isEmpty {
-                    libraryStatsSection
+                if !libraryStore.pinnedItems.isEmpty {
+                    pinnedItemsSection
                 }
             }
             .padding(.horizontal, 20)
@@ -199,38 +196,23 @@ public struct MacHomeView: View {
 
     // MARK: - Pinned Items Section
 
+    @ViewBuilder
     private var pinnedItemsSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Text("PINNED FAVORITES")
-                    .font(.system(size: 11, weight: .bold, design: .monospaced))
-                    .tracking(1.0)
-                    .foregroundStyle(appTheme.primaryTextColor)
+        if !libraryStore.pinnedItems.isEmpty {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    Text("PINNED FAVORITES")
+                        .font(.system(size: 11, weight: .bold, design: .monospaced))
+                        .tracking(1.0)
+                        .foregroundStyle(appTheme.primaryTextColor)
 
-                Spacer()
+                    Spacer()
 
-                if !libraryStore.pinnedItems.isEmpty {
                     Text("\(libraryStore.pinnedItems.count) PINNED")
                         .font(.system(size: 9, design: .monospaced))
                         .foregroundStyle(.tertiary)
                 }
-            }
 
-            if libraryStore.pinnedItems.isEmpty {
-                VStack(spacing: 6) {
-                    Text("NO PINNED ITEMS")
-                        .font(.system(size: 11, weight: .medium, design: .monospaced))
-                        .foregroundStyle(.secondary)
-
-                    Text("Right-click any album or playlist in your library to pin it here.")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.tertiary)
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 24)
-                .background(appTheme.secondaryBackgroundColor.opacity(0.3))
-                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-            } else {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 140, maximum: 170), spacing: 14)], spacing: 14) {
                     ForEach(libraryStore.pinnedItems) { item in
                         pinnedItemCard(item: item)
@@ -293,48 +275,5 @@ public struct MacHomeView: View {
             )
         }
         .buttonStyle(.plain)
-    }
-
-    // MARK: - Library Stats Section
-
-    private var libraryStatsSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("LIBRARY SPECIFICATIONS")
-                .font(.system(size: 11, weight: .bold, design: .monospaced))
-                .tracking(1.0)
-                .foregroundStyle(appTheme.primaryTextColor)
-
-            HStack(spacing: 8) {
-                statCard(title: "SONGS", value: "\(libraryStore.tracks.count)")
-                statCard(title: "ALBUMS", value: "\(libraryStore.albums.count)")
-                statCard(title: "ARTISTS", value: "\(libraryStore.artists.count)")
-                statCard(title: "PLAYLISTS", value: "\(libraryStore.playlists.count)")
-                statCard(title: "TOTAL TIME", value: TimeFormatting.formatTotalDuration(libraryStore.totalLibraryDuration))
-                statCard(title: "STORAGE", value: ByteFormatting.formatBytes(libraryStore.totalLibraryDiskBytes))
-            }
-        }
-    }
-
-    // Stat card
-    private func statCard(title: String, value: String) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(title)
-                .font(.system(size: 8.5, weight: .bold, design: .monospaced))
-                .foregroundStyle(.secondary)
-
-            Text(value)
-                .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                .foregroundStyle(appTheme.primaryTextColor)
-                .lineLimit(1)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
-        .background(appTheme.secondaryBackgroundColor.opacity(0.4))
-        .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 5, style: .continuous)
-                .stroke(appTheme.separatorColor.opacity(0.25), lineWidth: 0.5)
-        )
     }
 }

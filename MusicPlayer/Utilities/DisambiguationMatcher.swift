@@ -154,15 +154,15 @@ public enum DisambiguationMatcher {
 
         if signature.duration > 0, let onlineDuration = online.duration, onlineDuration > 0 {
             let delta = abs(signature.duration - onlineDuration)
-            if delta <= 5.0 {
+            if delta <= 4.0 {
                 durationSim = 1.0
-            } else if delta <= 15.0 {
-                durationSim = max(0.0, 1.0 - ((delta - 5.0) / 10.0) * 0.5)
+            } else if delta <= 8.0 {
+                durationSim = max(0.0, 1.0 - ((delta - 4.0) / 4.0) * 0.5)
             } else {
-                // HARD GUARDRAIL 3: Apply -0.30 penalty if duration delta > 15s
+                // HARD GUARDRAIL 3: Apply strict -0.35 penalty if duration delta > 8s on studio tracks
                 durationSim = 0.0
                 if !signature.isLive && signature.versionModifier == nil {
-                    durationPenalty = 0.30
+                    durationPenalty = 0.35
                 }
             }
         }
@@ -385,15 +385,7 @@ public enum DisambiguationMatcher {
                 let track = candidate.track
                 let sig = candidate.sig
 
-                // 1. Remix & Live Consistency
-                let isTrackRemix = (sig.versionModifier != nil && MetadataSanitizer.isRemixOrAlternateVersion(title: sig.versionModifier!)) || MetadataSanitizer.isRemixOrAlternateVersion(title: sig.coreTitle, album: track.album)
-                let isTrackLive = sig.isLive || MetadataSanitizer.isLiveRecording(title: sig.coreTitle, album: track.album)
-
-                if isTrackRemix != isCutRemix || isTrackLive != isCutLive {
-                    continue
-                }
-
-                // 2. Title Similarity (Check tag title + filename title)
+                // 1. Title Similarity (Check tag title + filename title)
                 let normTrackTitle = normalize(sig.coreTitle)
                 let normFnTitle = normalize(candidate.filenameTitle)
 
@@ -417,7 +409,7 @@ public enum DisambiguationMatcher {
                     continue
                 }
 
-                // 3. Artist Compatibility ("Right artist, or one of the right artists")
+                // 2. Artist Compatibility ("Right artist, or one of the right artists")
                 let (isArtistCompat, artistSim) = isArtistCompatible(
                     localArtist: track.artist,
                     localTitle: track.title,
@@ -431,6 +423,21 @@ public enum DisambiguationMatcher {
                 // If not artist compatible, allow if exact title matches (last-case scenario for multi-artist / miscategorized tracks)
                 if !isArtistCompat && artistSim < 0.70 && !MetadataSanitizer.isUnknownArtist(track.artist) && !isExactTitle {
                     continue
+                }
+
+                // 3. Remix & Live Consistency
+                // Note: Do not evaluate track.album here as local track's album tag may be mislabeled (e.g. "Reset (Instrumental)")
+                let isTrackRemix = (sig.versionModifier != nil && MetadataSanitizer.isRemixOrAlternateVersion(title: sig.versionModifier!)) || MetadataSanitizer.isRemixOrAlternateVersion(title: sig.coreTitle)
+                let isTrackLive = sig.isLive || MetadataSanitizer.isLiveRecording(title: sig.coreTitle)
+
+                let remixMismatch = (isTrackRemix != isCutRemix)
+                let liveMismatch = (isTrackLive != isCutLive)
+
+                if remixMismatch || liveMismatch {
+                    let hasStrongMatch = isExactTitle || (titleSim >= 0.70 && (isArtistCompat || artistSim >= 0.70))
+                    if !hasStrongMatch {
+                        continue
+                    }
                 }
 
                 // 4. Duration Proximity
@@ -458,6 +465,13 @@ public enum DisambiguationMatcher {
                 let numScore = isTrackNumMatch ? 1.0 : 0.0
                 let effectiveArtistScore = isArtistCompat ? max(0.85, artistSim) : (isExactTitle ? max(0.50, artistSim) : artistSim)
                 var rawScore = (wTitle * titleSim) + (wArtist * effectiveArtistScore) + (wDuration * durationSim) + (wNum * numScore)
+
+                if remixMismatch {
+                    rawScore -= 0.08
+                }
+                if liveMismatch {
+                    rawScore -= 0.08
+                }
                 
                 // Priority tier 1: track already in local target album
                 if track.album.localizedCaseInsensitiveCompare(albumTitle) == .orderedSame {
@@ -584,6 +598,7 @@ public enum DisambiguationMatcher {
         let normLocalTitle = normalize(signature.coreTitle)
 
         // 1. Direct Track Number Match if local track number is valid (>0)
+        var fallbackNumMatch: OnlineTrackMetadata?
         if let localNum = track.trackNumber, localNum > 0 {
             if let numMatch = availableCuts.first(where: { $0.trackNumber == localNum }) {
                 let normCutTitle = normalize(numMatch.title)
@@ -594,7 +609,7 @@ public enum DisambiguationMatcher {
 
                 let durationOk: Bool = {
                     guard track.duration > 0, let cutDur = numMatch.duration, cutDur > 0 else { return true }
-                    return abs(track.duration - cutDur) <= 20.0 || signature.isLive
+                    return abs(track.duration - cutDur) <= 8.0 || signature.isLive
                 }()
 
                 let remixMatch: Bool = {
@@ -604,13 +619,17 @@ public enum DisambiguationMatcher {
                 }()
 
                 let liveMatch: Bool = {
-                    let isLocalLive = signature.isLive || MetadataSanitizer.isLiveRecording(title: signature.coreTitle, album: track.album)
+                    let isLocalLive = signature.isLive || MetadataSanitizer.isLiveRecording(title: signature.coreTitle)
                     let isCutLive = MetadataSanitizer.isLiveRecording(title: numMatch.title, album: numMatch.album)
                     return isLocalLive == isCutLive
                 }()
 
-                if (titleSim >= 0.70 || normLocalTitle == normCutTitle) && durationOk && remixMatch && liveMatch {
-                    return numMatch
+                if (titleSim >= 0.70 || normLocalTitle == normCutTitle) && durationOk {
+                    if remixMatch && liveMatch {
+                        return numMatch
+                    } else {
+                        fallbackNumMatch = numMatch
+                    }
                 }
             }
         }
@@ -618,6 +637,7 @@ public enum DisambiguationMatcher {
         // 2. High Title Similarity Match across available album cuts
         var bestCut: OnlineTrackMetadata?
         var bestCutSim: Double = 0.0
+        var fallbackExactCut: OnlineTrackMetadata?
 
         for cut in availableCuts {
             let normCutTitle = normalize(cut.title)
@@ -625,7 +645,7 @@ public enum DisambiguationMatcher {
                 // Exact title match: verify duration, remix & live
                 let durationOk: Bool = {
                     guard track.duration > 0, let cutDur = cut.duration, cutDur > 0 else { return true }
-                    return abs(track.duration - cutDur) <= 20.0 || signature.isLive
+                    return abs(track.duration - cutDur) <= 6.0 || signature.isLive
                 }()
                 let remixMatch: Bool = {
                     let isLocalRemix = (signature.versionModifier != nil && MetadataSanitizer.isRemixOrAlternateVersion(title: signature.versionModifier!)) || MetadataSanitizer.isRemixOrAlternateVersion(title: signature.coreTitle)
@@ -633,12 +653,16 @@ public enum DisambiguationMatcher {
                     return isLocalRemix == isCutRemix
                 }()
                 let liveMatch: Bool = {
-                    let isLocalLive = signature.isLive || MetadataSanitizer.isLiveRecording(title: signature.coreTitle, album: track.album)
+                    let isLocalLive = signature.isLive || MetadataSanitizer.isLiveRecording(title: signature.coreTitle)
                     let isCutLive = MetadataSanitizer.isLiveRecording(title: cut.title, album: cut.album)
                     return isLocalLive == isCutLive
                 }()
-                if durationOk && remixMatch && liveMatch {
-                    return cut
+                if durationOk {
+                    if remixMatch && liveMatch {
+                        return cut
+                    } else if fallbackExactCut == nil {
+                        fallbackExactCut = cut
+                    }
                 }
             }
 
@@ -653,10 +677,17 @@ public enum DisambiguationMatcher {
             }
         }
 
+        if let exactCut = fallbackExactCut {
+            return exactCut
+        }
+        if let numMatch = fallbackNumMatch {
+            return numMatch
+        }
+
         if bestCutSim >= 0.75, let cut = bestCut {
             let durationOk: Bool = {
                 guard track.duration > 0, let cutDur = cut.duration, cutDur > 0 else { return true }
-                return abs(track.duration - cutDur) <= 20.0 || signature.isLive
+                return abs(track.duration - cutDur) <= 4.0 || signature.isLive
             }()
             let remixMatch: Bool = {
                 let isLocalRemix = (signature.versionModifier != nil && MetadataSanitizer.isRemixOrAlternateVersion(title: signature.versionModifier!)) || MetadataSanitizer.isRemixOrAlternateVersion(title: signature.coreTitle)
@@ -664,11 +695,11 @@ public enum DisambiguationMatcher {
                 return isLocalRemix == isCutRemix
             }()
             let liveMatch: Bool = {
-                let isLocalLive = signature.isLive || MetadataSanitizer.isLiveRecording(title: signature.coreTitle, album: track.album)
+                let isLocalLive = signature.isLive || MetadataSanitizer.isLiveRecording(title: signature.coreTitle)
                 let isCutLive = MetadataSanitizer.isLiveRecording(title: cut.title, album: cut.album)
                 return isLocalLive == isCutLive
             }()
-            if durationOk && remixMatch && liveMatch {
+            if durationOk && (remixMatch && liveMatch || bestCutSim >= 0.85) {
                 return cut
             }
         }

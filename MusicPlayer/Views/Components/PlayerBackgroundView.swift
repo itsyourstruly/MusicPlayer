@@ -134,18 +134,20 @@ public struct PlayerBackgroundView: View {
     private func handleArtworkChange(newKey: String?) async {
         loadTask?.cancel()
 
-        guard let key = newKey, !key.isEmpty else {
-            withAnimation(.easeInOut(duration: 0.45)) {
-                previousImage = currentImage
-                currentImage = nil
-                crossfadeOpacity = 1.0
-            }
-            return
+        var loaded: PlatformImage? = nil
+        if let key = newKey, !key.isEmpty {
+            loaded = await ArtworkCacheService.shared.loadDecodedArtwork(key: key, maxDimension: 128)
         }
 
-        let loaded = await ArtworkCacheService.shared.loadDecodedArtwork(key: key, maxDimension: 128)
-
         guard !Task.isCancelled else { return }
+
+        if loaded == nil {
+            #if canImport(UIKit)
+            loaded = UIImage(named: "art")
+            #elseif canImport(AppKit)
+            loaded = NSImage(named: "art")
+            #endif
+        }
 
         if let loaded = loaded {
             if currentImage == nil {
