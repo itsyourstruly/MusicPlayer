@@ -53,7 +53,6 @@ public struct ArtistsListView: View {
                                     cornerRadius: 6
                                 )
                                 .frame(width: 48, height: 48)
-                                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
 
                                 VStack(alignment: .leading, spacing: 3) {
                                     Text(artist.name)

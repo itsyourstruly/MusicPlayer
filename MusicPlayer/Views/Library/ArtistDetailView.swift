@@ -443,7 +443,6 @@ public struct ArtistDetailView: View {
                     cornerRadius: 12
                 )
                 .frame(width: 88, height: 88)
-                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 .shadow(color: Color.black.opacity(0.18), radius: 8, x: 0, y: 4)
 
                 VStack(alignment: .leading, spacing: 4) {

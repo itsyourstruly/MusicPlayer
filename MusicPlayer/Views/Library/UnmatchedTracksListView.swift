@@ -232,7 +232,6 @@ public struct UnmatchedTrackCardView: View {
                     cornerRadius: 8
                 )
                 .frame(width: 150, height: 150)
-                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
 
                 // Sub-Artwork Status Label
                 Text("ORIGINAL LOCAL METADATA")

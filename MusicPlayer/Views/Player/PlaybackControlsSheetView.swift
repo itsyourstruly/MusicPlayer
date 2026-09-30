@@ -7,10 +7,19 @@ public struct PlaybackControlsSheetView: View {
     @Bindable var equalizerManager: EqualizerManager = EqualizerManager.shared
     @Environment(\.dismiss) private var dismiss
     @Environment(\.appTheme) private var appTheme
-    @State private var showingPresetsSheet: Bool = false
+    @Environment(LibraryStore.self) private var envLibraryStore: LibraryStore?
+    var injectedLibraryStore: LibraryStore? = nil
+    private var libraryStore: LibraryStore? { injectedLibraryStore ?? envLibraryStore }
 
-    public init(playerService: AudioPlayerService) {
+    @State private var showingPresetsSheet: Bool = false
+    @State private var isVolumeBoosterExpanded: Bool = false
+    @State private var isPlaybackSpeedExpanded: Bool = false
+
+    private let toggleAnimation = Animation.easeInOut(duration: 0.22)
+
+    public init(playerService: AudioPlayerService, libraryStore: LibraryStore? = nil) {
         self.playerService = playerService
+        self.injectedLibraryStore = libraryStore
         EqualizerManager.shared.playerService = playerService
     }
 
@@ -30,35 +39,17 @@ public struct PlaybackControlsSheetView: View {
                     sleepTimerSection
                         .padding(.horizontal, 20)
 
-                    // MARK: - 4. Equalizer 10-Band Line Graph (Edge-to-Edge)
-                    VStack(alignment: .leading, spacing: 10) {
-                        HStack {
-                            Text("EQUALIZER")
-                                .font(.system(size: 12, weight: .bold, design: .monospaced))
-                                .foregroundStyle(.secondary)
+                    // MARK: - 4. Equalizer
+                    equalizerSection
 
-                            Spacer()
+                    // MARK: - 5. Crossfade & Smooth Skipping
+                    if let store = libraryStore {
+                        crossfadeSection(store: store)
+                            .padding(.horizontal, 20)
 
-                            Button(action: {
-                                HapticFeedback.lightImpact()
-                                withAnimation(.easeInOut(duration: 0.2)) {
-                                    equalizerManager.isEqualizerEnabled.toggle()
-                                }
-                            }) {
-                                Text(equalizerManager.isEqualizerEnabled ? "EQUALIZER IS ENABLED" : "EQUALIZER IS DISABLED")
-                                    .font(.system(size: 11, weight: .bold, design: .monospaced))
-                                    .foregroundStyle(equalizerManager.isEqualizerEnabled ? Color.green : Color.red)
-                            }
-                            .buttonStyle(.plain)
-                        }
-                        .padding(.horizontal, 20)
-
-                        EqualizerGraphView(equalizerManager: equalizerManager)
+                        transitionTracksSection(store: store)
+                            .padding(.horizontal, 20)
                     }
-
-                    // MARK: - 5. Equalizer Action Options & Presets
-                    equalizerOptionsSection
-                        .padding(.horizontal, 20)
                 }
                 .padding(.vertical, 16)
             }
@@ -67,9 +58,13 @@ public struct PlaybackControlsSheetView: View {
             .navigationBarTitleDisplayMode(.inline)
             .sheet(isPresented: $showingPresetsSheet) {
                 EqualizerPresetsSheetView(equalizerManager: equalizerManager)
+                    .tint(appTheme.accentColor)
+                    .environment(\.appTheme, appTheme)
             }
             .onAppear {
                 equalizerManager.playerService = playerService
+                isVolumeBoosterExpanded = equalizerManager.volumeBoosterDB != 0.0
+                isPlaybackSpeedExpanded = equalizerManager.playbackSpeed != 1.0
             }
             .onChange(of: equalizerManager.playbackSpeed) { _, newSpeed in
                 playerService.applyPlaybackSpeed(newSpeed)
@@ -84,69 +79,89 @@ public struct PlaybackControlsSheetView: View {
             HStack {
                 Text("VOLUME BOOSTER")
                     .font(.system(size: 12, weight: .bold, design: .monospaced))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(isVolumeBoosterExpanded ? Color.white : .secondary)
 
                 Spacer()
 
                 Button(action: {
-                    if equalizerManager.volumeBoosterDB != 0.0 {
-                        HapticFeedback.lightImpact()
-                        equalizerManager.volumeBoosterDB = 0.0
+                    HapticFeedback.lightImpact()
+                    withAnimation(toggleAnimation) {
+                        if isVolumeBoosterExpanded {
+                            isVolumeBoosterExpanded = false
+                            equalizerManager.volumeBoosterDB = 0.0
+                        } else {
+                            isVolumeBoosterExpanded = true
+                        }
                     }
                 }) {
-                    Text(formatDB(equalizerManager.volumeBoosterDB))
-                        .font(.system(size: 13, weight: .bold, design: .monospaced))
-                        .foregroundStyle(volumeBoosterColor)
+                    ZStack(alignment: .trailing) {
+                        if isVolumeBoosterExpanded {
+                            Text(formatDB(equalizerManager.volumeBoosterDB))
+                                .font(.system(size: 13, weight: .bold, design: .monospaced))
+                                .foregroundStyle(volumeBoosterColor)
+                                .transition(.opacity)
+                        } else {
+                            Text("OFF")
+                                .font(.system(size: 13, weight: .bold, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                                .transition(.opacity)
+                        }
+                    }
+                    .frame(minWidth: 72, alignment: .trailing)
+                    .contentTransition(.opacity)
                 }
                 .buttonStyle(.plain)
             }
 
-            // Custom Slider with Accurately Positioned Reference Points (-8 dB, 0 dB at 34.8%, +15 dB)
-            VStack(spacing: 6) {
-                Slider(
-                    value: $equalizerManager.volumeBoosterDB,
-                    in: -8.0...15.0,
-                    step: 0.5
-                )
-                .tint(volumeBoosterColor)
+            if isVolumeBoosterExpanded {
+                // Custom Slider with Accurately Positioned Reference Points (-8 dB, 0 dB at 34.8%, +15 dB)
+                VStack(spacing: 6) {
+                    Slider(
+                        value: $equalizerManager.volumeBoosterDB,
+                        in: -8.0...15.0,
+                        step: 0.5
+                    )
+                    .tint(volumeBoosterColor)
 
-                // Marked Reference Points with 0 dB in its exact proportional position
-                GeometryReader { geo in
-                    let width = geo.size.width
-                    let thumbRadius: CGFloat = 14.0
-                    let trackWidth = max(1, width - 2 * thumbRadius)
-                    let zeroX = thumbRadius + (8.0 / 23.0) * trackWidth
+                    // Marked Reference Points with 0 dB in its exact proportional position
+                    GeometryReader { geo in
+                        let width = geo.size.width
+                        let thumbRadius: CGFloat = 14.0
+                        let trackWidth = max(1, width - 2 * thumbRadius)
+                        let zeroX = thumbRadius + (8.0 / 23.0) * trackWidth
 
-                    ZStack {
-                        Text("-8 dB")
-                            .font(.system(size: 9, design: .monospaced))
-                            .foregroundStyle(.secondary)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.leading, 2)
+                        ZStack {
+                            Text("-8 dB")
+                                .font(.system(size: 9, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.leading, 2)
 
-                        Button(action: {
-                            if equalizerManager.volumeBoosterDB != 0.0 {
-                                HapticFeedback.lightImpact()
-                                equalizerManager.volumeBoosterDB = 0.0
+                            Button(action: {
+                                if equalizerManager.volumeBoosterDB != 0.0 {
+                                    HapticFeedback.lightImpact()
+                                    equalizerManager.volumeBoosterDB = 0.0
+                                }
+                            }) {
+                                Text("0 dB")
+                                    .font(.system(size: 9, weight: equalizerManager.volumeBoosterDB == 0 ? .bold : .medium, design: .monospaced))
+                                    .foregroundStyle(equalizerManager.volumeBoosterDB == 0 ? Color.white : .secondary)
                             }
-                        }) {
-                            Text("0 dB")
-                                .font(.system(size: 9, weight: equalizerManager.volumeBoosterDB == 0 ? .bold : .medium, design: .monospaced))
-                                .foregroundStyle(equalizerManager.volumeBoosterDB == 0 ? Color.white : .secondary)
-                        }
-                        .buttonStyle(.plain)
-                        .position(x: zeroX, y: 7)
+                            .buttonStyle(.plain)
+                            .position(x: zeroX, y: 7)
 
-                        Text("+15 dB")
-                            .font(.system(size: 9, design: .monospaced))
-                            .foregroundStyle(.secondary)
-                            .frame(maxWidth: .infinity, alignment: .trailing)
-                            .padding(.trailing, 2)
+                            Text("+15 dB")
+                                .font(.system(size: 9, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity, alignment: .trailing)
+                                .padding(.trailing, 2)
+                        }
                     }
+                    .frame(height: 14)
                 }
-                .frame(height: 14)
+                .padding(.horizontal, 2)
+                .transition(.opacity.combined(with: .move(edge: .top)))
             }
-            .padding(.horizontal, 2)
         }
     }
 
@@ -179,70 +194,90 @@ public struct PlaybackControlsSheetView: View {
             HStack {
                 Text("PLAYBACK SPEED")
                     .font(.system(size: 12, weight: .bold, design: .monospaced))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(isPlaybackSpeedExpanded ? Color.white : .secondary)
 
                 Spacer()
 
                 Button(action: {
-                    if equalizerManager.playbackSpeed != 1.0 {
-                        HapticFeedback.lightImpact()
-                        equalizerManager.playbackSpeed = 1.0
-                        playerService.applyPlaybackSpeed(1.0)
+                    HapticFeedback.lightImpact()
+                    withAnimation(toggleAnimation) {
+                        if isPlaybackSpeedExpanded {
+                            isPlaybackSpeedExpanded = false
+                            equalizerManager.playbackSpeed = 1.0
+                            playerService.applyPlaybackSpeed(1.0)
+                        } else {
+                            isPlaybackSpeedExpanded = true
+                        }
                     }
                 }) {
-                    Text(formatRate(equalizerManager.playbackSpeed))
-                        .font(.system(size: 13, weight: .bold, design: .monospaced))
-                        .foregroundStyle(equalizerManager.playbackSpeed != 1.0 ? appTheme.accentColor : .secondary)
+                    ZStack(alignment: .trailing) {
+                        if isPlaybackSpeedExpanded {
+                            Text(formatRate(equalizerManager.playbackSpeed))
+                                .font(.system(size: 13, weight: .bold, design: .monospaced))
+                                .foregroundStyle(appTheme.accentColor)
+                                .transition(.opacity)
+                        } else {
+                            Text("OFF")
+                                .font(.system(size: 13, weight: .bold, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                                .transition(.opacity)
+                        }
+                    }
+                    .frame(minWidth: 72, alignment: .trailing)
+                    .contentTransition(.opacity)
                 }
                 .buttonStyle(.plain)
             }
 
-            // Custom Slider with Accurately Positioned Reference Points (0.25x, 1.0x at 42.9%, 2.0x)
-            VStack(spacing: 6) {
-                Slider(
-                    value: $equalizerManager.playbackSpeed,
-                    in: 0.25...2.0,
-                    step: 0.25
-                )
-                .tint(appTheme.accentColor)
+            if isPlaybackSpeedExpanded {
+                // Custom Slider with Accurately Positioned Reference Points (0.25x, 1.0x at 42.9%, 2.0x)
+                VStack(spacing: 6) {
+                    Slider(
+                        value: $equalizerManager.playbackSpeed,
+                        in: 0.25...2.0,
+                        step: 0.25
+                    )
+                    .tint(appTheme.accentColor)
 
-                GeometryReader { geo in
-                    let width = geo.size.width
-                    let thumbRadius: CGFloat = 14.0
-                    let trackWidth = max(1, width - 2 * thumbRadius)
-                    let oneX = thumbRadius + (3.0 / 7.0) * trackWidth
+                    GeometryReader { geo in
+                        let width = geo.size.width
+                        let thumbRadius: CGFloat = 14.0
+                        let trackWidth = max(1, width - 2 * thumbRadius)
+                        let oneX = thumbRadius + (3.0 / 7.0) * trackWidth
 
-                    ZStack {
-                        Text("0.25x")
-                            .font(.system(size: 9, design: .monospaced))
-                            .foregroundStyle(.secondary)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.leading, 2)
+                        ZStack {
+                            Text("0.25x")
+                                .font(.system(size: 9, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.leading, 2)
 
-                        Button(action: {
-                            if equalizerManager.playbackSpeed != 1.0 {
-                                HapticFeedback.lightImpact()
-                                equalizerManager.playbackSpeed = 1.0
-                                playerService.applyPlaybackSpeed(1.0)
+                            Button(action: {
+                                if equalizerManager.playbackSpeed != 1.0 {
+                                    HapticFeedback.lightImpact()
+                                    equalizerManager.playbackSpeed = 1.0
+                                    playerService.applyPlaybackSpeed(1.0)
+                                }
+                            }) {
+                                Text("1.0x")
+                                    .font(.system(size: 9, weight: equalizerManager.playbackSpeed == 1.0 ? .bold : .medium, design: .monospaced))
+                                    .foregroundStyle(equalizerManager.playbackSpeed == 1.0 ? Color.white : .secondary)
                             }
-                        }) {
-                            Text("1.0x")
-                                .font(.system(size: 9, weight: equalizerManager.playbackSpeed == 1.0 ? .bold : .medium, design: .monospaced))
-                                .foregroundStyle(equalizerManager.playbackSpeed == 1.0 ? Color.white : .secondary)
-                        }
-                        .buttonStyle(.plain)
-                        .position(x: oneX, y: 7)
+                            .buttonStyle(.plain)
+                            .position(x: oneX, y: 7)
 
-                        Text("2.0x")
-                            .font(.system(size: 9, design: .monospaced))
-                            .foregroundStyle(.secondary)
-                            .frame(maxWidth: .infinity, alignment: .trailing)
-                            .padding(.trailing, 2)
+                            Text("2.0x")
+                                .font(.system(size: 9, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity, alignment: .trailing)
+                                .padding(.trailing, 2)
+                        }
                     }
+                    .frame(height: 14)
                 }
-                .frame(height: 14)
+                .padding(.horizontal, 2)
+                .transition(.opacity.combined(with: .move(edge: .top)))
             }
-            .padding(.horizontal, 2)
         }
     }
 
@@ -253,19 +288,31 @@ public struct PlaybackControlsSheetView: View {
             HStack {
                 Text("SLEEP TIMER")
                     .font(.system(size: 12, weight: .bold, design: .monospaced))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(playerService.isSleepTimerEnabled ? Color.white : .secondary)
 
                 Spacer()
 
                 Button(action: {
                     HapticFeedback.lightImpact()
-                    withAnimation(.easeInOut(duration: 0.2)) {
+                    withAnimation(toggleAnimation) {
                         playerService.toggleSleepTimer(defaultMinutes: 30)
                     }
                 }) {
-                    Text(playerService.isSleepTimerEnabled ? "\(Int(playerService.sleepTimerMinutes)) MIN" : "OFF")
-                        .font(.system(size: 13, weight: .bold, design: .monospaced))
-                        .foregroundStyle(playerService.isSleepTimerEnabled ? appTheme.accentColor : .secondary)
+                    ZStack(alignment: .trailing) {
+                        if playerService.isSleepTimerEnabled {
+                            Text("\(Int(playerService.sleepTimerMinutes)) MIN")
+                                .font(.system(size: 13, weight: .bold, design: .monospaced))
+                                .foregroundStyle(appTheme.accentColor)
+                                .transition(.opacity)
+                        } else {
+                            Text("OFF")
+                                .font(.system(size: 13, weight: .bold, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                                .transition(.opacity)
+                        }
+                    }
+                    .frame(minWidth: 72, alignment: .trailing)
+                    .contentTransition(.opacity)
                 }
                 .buttonStyle(.plain)
             }
@@ -324,6 +371,194 @@ public struct PlaybackControlsSheetView: View {
                 .padding(.horizontal, 2)
                 .transition(.opacity.combined(with: .move(edge: .top)))
             }
+        }
+    }
+
+    // MARK: - Equalizer Section
+
+    private var equalizerSection: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Text("EQUALIZER")
+                    .font(.system(size: 12, weight: .bold, design: .monospaced))
+                    .foregroundStyle(equalizerManager.isEqualizerEnabled ? Color.white : .secondary)
+
+                Spacer()
+
+                Button(action: {
+                    HapticFeedback.lightImpact()
+                    withAnimation(toggleAnimation) {
+                        equalizerManager.isEqualizerEnabled.toggle()
+                    }
+                }) {
+                    ZStack(alignment: .trailing) {
+                        if equalizerManager.isEqualizerEnabled {
+                            Text("ON")
+                                .font(.system(size: 13, weight: .bold, design: .monospaced))
+                                .foregroundStyle(Color.green)
+                                .transition(.opacity)
+                        } else {
+                            Text("OFF")
+                                .font(.system(size: 13, weight: .bold, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                                .transition(.opacity)
+                        }
+                    }
+                    .frame(minWidth: 72, alignment: .trailing)
+                    .contentTransition(.opacity)
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 20)
+
+            if equalizerManager.isEqualizerEnabled {
+                VStack(alignment: .leading, spacing: 16) {
+                    EqualizerGraphView(equalizerManager: equalizerManager)
+
+                    equalizerOptionsSection
+                        .padding(.horizontal, 20)
+                }
+                .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+    }
+
+    // MARK: - Crossfade Section
+
+    private func crossfadeSection(store: LibraryStore) -> some View {
+        let isEnabled = store.settings.isCrossfadeEnabled
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("CROSSFADE")
+                    .font(.system(size: 12, weight: .bold, design: .monospaced))
+                    .foregroundStyle(isEnabled ? Color.white : .secondary)
+
+                Spacer()
+
+                Button(action: {
+                    HapticFeedback.lightImpact()
+                    withAnimation(toggleAnimation) {
+                        store.settings.isCrossfadeEnabled.toggle()
+                        playerService.isCrossfadeEnabled = store.settings.isCrossfadeEnabled
+                        store.saveSettings()
+                    }
+                }) {
+                    ZStack(alignment: .trailing) {
+                        if isEnabled {
+                            Text(String(format: "%.1FS", store.settings.crossfadeDuration))
+                                .font(.system(size: 13, weight: .bold, design: .monospaced))
+                                .foregroundStyle(appTheme.accentColor)
+                                .transition(.opacity)
+                        } else {
+                            Text("OFF")
+                                .font(.system(size: 13, weight: .bold, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                                .transition(.opacity)
+                        }
+                    }
+                    .frame(minWidth: 72, alignment: .trailing)
+                    .contentTransition(.opacity)
+                }
+                .buttonStyle(.plain)
+            }
+
+            if isEnabled {
+                VStack(spacing: 6) {
+                    Slider(
+                        value: Binding(
+                            get: { store.settings.crossfadeDuration },
+                            set: { newDuration in
+                                store.settings.crossfadeDuration = newDuration
+                                playerService.crossfadeDuration = newDuration
+                                store.saveSettings()
+                            }
+                        ),
+                        in: 0.0...15.0,
+                        step: 0.5
+                    )
+                    .tint(appTheme.accentColor)
+
+                    GeometryReader { geo in
+                        let width = geo.size.width
+                        let thumbRadius: CGFloat = 14.0
+                        let trackWidth = max(1, width - 2 * thumbRadius)
+                        let fiveX = thumbRadius + (5.0 / 15.0) * trackWidth
+
+                        ZStack {
+                            Text("0.0s")
+                                .font(.system(size: 9, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.leading, 2)
+
+                            Button(action: {
+                                if abs(store.settings.crossfadeDuration - 5.0) >= 0.1 {
+                                    HapticFeedback.lightImpact()
+                                    store.settings.crossfadeDuration = 5.0
+                                    playerService.crossfadeDuration = 5.0
+                                    store.saveSettings()
+                                }
+                            }) {
+                                Text("5.0s")
+                                    .font(.system(size: 9, weight: abs(store.settings.crossfadeDuration - 5.0) < 0.1 ? .bold : .medium, design: .monospaced))
+                                    .foregroundStyle(abs(store.settings.crossfadeDuration - 5.0) < 0.1 ? Color.white : .secondary)
+                            }
+                            .buttonStyle(.plain)
+                            .position(x: fiveX, y: 7)
+
+                            Text("15.0s")
+                                .font(.system(size: 9, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity, alignment: .trailing)
+                                .padding(.trailing, 2)
+                        }
+                    }
+                    .frame(height: 14)
+                }
+                .padding(.horizontal, 2)
+                .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+    }
+
+    // MARK: - Transition Tracks When Skipping Section
+
+    private func transitionTracksSection(store: LibraryStore) -> some View {
+        let isEnabled = store.settings.smoothSkippingEnabled
+        return HStack {
+            Text("TRANSITION TRACKS WHEN SKIPPING")
+                .font(.system(size: 12, weight: .bold, design: .monospaced))
+                .foregroundStyle(isEnabled ? Color.white : .secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+
+            Spacer()
+
+            Button(action: {
+                HapticFeedback.lightImpact()
+                withAnimation(toggleAnimation) {
+                    store.settings.smoothSkippingEnabled.toggle()
+                    playerService.smoothSkippingEnabled = store.settings.smoothSkippingEnabled
+                    store.saveSettings()
+                }
+            }) {
+                ZStack(alignment: .trailing) {
+                    if isEnabled {
+                        Text("ON")
+                            .font(.system(size: 13, weight: .bold, design: .monospaced))
+                            .foregroundStyle(appTheme.accentColor)
+                            .transition(.opacity)
+                    } else {
+                        Text("OFF")
+                            .font(.system(size: 13, weight: .bold, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                            .transition(.opacity)
+                    }
+                }
+                .frame(minWidth: 72, alignment: .trailing)
+                .contentTransition(.opacity)
+            }
+            .buttonStyle(.plain)
         }
     }
 

@@ -281,7 +281,7 @@ public struct GlobalSearchView: View {
                     Image(systemName: "chevron.left")
                         .font(.system(size: 16, weight: .bold))
                         .foregroundStyle(Color.primary)
-                        .frame(width: 32, height: 32, alignment: .leading)
+                        .frame(width: 32, height: 32, alignment: .center)
                         .contentShape(Rectangle())
                 }
             }
@@ -1142,7 +1142,6 @@ public struct SearchAlbumTreeNodeRow: View, Equatable {
                     cornerRadius: 6
                 )
                 .frame(width: 30, height: 30)
-                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
 
                 VStack(alignment: .leading, spacing: 1) {
                     Text(albumNode.album.title)
@@ -1250,7 +1249,6 @@ public struct SearchArtistTreeNodeRow: View, Equatable {
                     cornerRadius: 8
                 )
                 .frame(width: 38, height: 38)
-                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(artistNode.artist.name)
@@ -1620,7 +1618,6 @@ public struct LibrarySearchResultsContainer: View, Equatable {
                             cornerRadius: 8
                         )
                         .frame(width: 38, height: 38)
-                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
 
                         VStack(alignment: .leading, spacing: 2) {
                             Text(artistNode.artist.name)
@@ -1674,7 +1671,6 @@ public struct LibrarySearchResultsContainer: View, Equatable {
                             cornerRadius: 6
                         )
                         .frame(width: 40, height: 40)
-                        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
 
                         VStack(alignment: .leading, spacing: 2) {
                             Text(album.title)

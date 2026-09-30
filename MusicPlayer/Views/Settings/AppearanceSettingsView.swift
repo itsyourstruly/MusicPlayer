@@ -170,6 +170,13 @@ public struct AppearanceSettingsView: View {
                 onToggle: { libraryStore.saveSettings() },
                 onLongPress: { activeDetail = SettingOptionCatalog.useProgressBar }
             )
+
+            TypographicToggleRow(
+                title: "ROUNDED ARTWORK",
+                isOn: $libraryStore.settings.isArtworkRounded,
+                onToggle: { libraryStore.saveSettings() },
+                onLongPress: { activeDetail = SettingOptionCatalog.roundedArtwork }
+            )
         }
     }
 }

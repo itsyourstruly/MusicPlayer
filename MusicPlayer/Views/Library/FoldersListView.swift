@@ -49,13 +49,26 @@ public struct FoldersListView: View {
             } else {
                 LazyVStack(alignment: .leading, spacing: 18) {
                     ForEach(sortedFolders) { folder in
-                        Text(folder.name)
-                            .font(.system(size: 22, weight: .bold))
-                            .foregroundStyle(Color.primary)
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.85)
+                        let isEnabled = libraryStore.isFolderEnabled(folder.id)
+                        Button {
+                            HapticFeedback.selectionChanged()
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                libraryStore.toggleFolderEnabled(folder.id)
+                            }
+                        } label: {
+                            HStack {
+                                Text(folder.name)
+                                    .font(.system(size: 22, weight: .bold))
+                                    .foregroundStyle(isEnabled ? Color.primary : Color.secondary.opacity(0.35))
+                                    .lineLimit(1)
+                                    .minimumScaleFactor(0.85)
+                                Spacer()
+                            }
+                            .contentShape(Rectangle())
                             .padding(.horizontal, 16)
                             .padding(.vertical, 4)
+                        }
+                        .buttonStyle(.plain)
                     }
                 }
                 .padding(.top, 6)

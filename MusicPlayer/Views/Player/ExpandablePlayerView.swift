@@ -247,7 +247,7 @@ public struct ExpandablePlayerView: View {
                     .environment(\.appTheme, libraryStore.settings.appTheme)
             }
             .sheet(isPresented: $showingPlaybackSheet) {
-                PlaybackControlsSheetView(playerService: playerService)
+                PlaybackControlsSheetView(playerService: playerService, libraryStore: libraryStore)
                     .environment(\.appTheme, libraryStore.settings.appTheme)
                     .presentationDetents([.large])
                     .presentationDragIndicator(.visible)
@@ -541,20 +541,21 @@ private struct MorphingPlayerCard: View, Animatable {
         let cardCornerRadius: CGFloat = lerp(start: 16, end: 0, t: clampedProgress)
 
         // Single Shared Artwork Geometry
+        let isArtworkRounded = libraryStore.settings.isArtworkRounded
         let miniArtworkSize: CGFloat = 46
-        let miniArtworkCorner: CGFloat = 10
+        let miniArtworkCorner: CGFloat = isArtworkRounded ? 10 : 0
         let miniArtworkX: CGFloat = 12
         let miniArtworkY: CGFloat = (miniHeight - miniArtworkSize) / 2 // 9pt centered
 
         // Full artwork dimension in standard mode vs lyrics header mode
         let fullArtworkDimension: CGFloat = min(screenWidth - 44, screenHeight * 0.42, 350)
-        let fullArtworkCorner: CGFloat = 22
+        let fullArtworkCorner: CGFloat = isArtworkRounded ? 22 : 0
         let fullArtworkX: CGFloat = (screenWidth - fullArtworkDimension) / 2
         let fullArtworkY: CGFloat = topSafeArea + 70
 
         // Target coordinates in full screen mode (smoothly adopts top header coordinates in lyrics mode)
         let targetFullArtworkDimension: CGFloat = isLyricsViewActive ? 38 : fullArtworkDimension
-        let targetFullArtworkCorner: CGFloat = isLyricsViewActive ? 6 : fullArtworkCorner
+        let targetFullArtworkCorner: CGFloat = isArtworkRounded ? (isLyricsViewActive ? 6 : fullArtworkCorner) : 0
         let targetFullArtworkX: CGFloat = isLyricsViewActive ? 20 : fullArtworkX
         let targetFullArtworkY: CGFloat = isLyricsViewActive ? (topSafeArea + 19) : fullArtworkY
 
@@ -1638,6 +1639,23 @@ private struct MorphingPlayerCard: View, Animatable {
                 }
             }
 
+            // 4. ROUNDED Toggle Button (Toggle rounded vs sharp square artwork)
+            Button(action: {
+                guard canTriggerButtonPress() else { return }
+                HapticFeedback.modeToggle(isOn: !libraryStore.settings.isArtworkRounded)
+                withAnimation(.spring(response: 0.38, dampingFraction: 0.78)) {
+                    libraryStore.settings.isArtworkRounded.toggle()
+                    libraryStore.saveSettings()
+                }
+            }) {
+                Text("ROUNDED")
+                    .font(.system(size: 14, weight: .bold, design: .monospaced))
+                    .foregroundStyle(libraryStore.settings.isArtworkRounded ? Color.blue : Color.white.opacity(0.40))
+                    .frame(minHeight: 28)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
             Spacer()
 
             // Flip back prompt
@@ -1648,15 +1666,15 @@ private struct MorphingPlayerCard: View, Animatable {
         }
         .frame(width: dimension, height: dimension)
         .background(
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
+            RoundedRectangle(cornerRadius: libraryStore.settings.isArtworkRounded ? 22 : 0, style: .continuous)
                 .fill(Color(red: 0.12, green: 0.12, blue: 0.14).opacity(0.95))
         )
-        .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: libraryStore.settings.isArtworkRounded ? 22 : 0, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
+            RoundedRectangle(cornerRadius: libraryStore.settings.isArtworkRounded ? 22 : 0, style: .continuous)
                 .stroke(Color.white.opacity(0.15), lineWidth: 1)
         )
-        .contentShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .contentShape(RoundedRectangle(cornerRadius: libraryStore.settings.isArtworkRounded ? 22 : 0, style: .continuous))
         .onTapGesture {
             HapticFeedback.cardFlip()
             withAnimation(.spring(response: 0.52, dampingFraction: 0.76)) {

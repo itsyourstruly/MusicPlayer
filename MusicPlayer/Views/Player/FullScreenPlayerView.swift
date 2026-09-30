@@ -25,6 +25,13 @@ public struct FullScreenPlayerView: View {
 
     // 3D Flip & Lyrics Mode State
     @State private var isArtworkFlipped: Bool = false
+    private var isArtworkRounded: Bool {
+        get { libraryStore.settings.isArtworkRounded }
+        nonmutating set {
+            libraryStore.settings.isArtworkRounded = newValue
+            libraryStore.saveSettings()
+        }
+    }
     private var isLyricsViewPreferred: Bool {
         get { libraryStore.settings.isLyricsViewPreferred }
         nonmutating set {
@@ -35,6 +42,15 @@ public struct FullScreenPlayerView: View {
     @State private var currentTrackHasLyrics: Bool = true
     @State private var isArtworkAnimationEnabled: Bool = true
     @State private var isLyricsExpanded: Bool = false
+
+    // Temporary Added to Playlist Banner State
+    private struct AddedToPlaylistBannerState: Equatable {
+        let playlistID: UUID
+        var playlistName: String
+    }
+    @State private var addedToPlaylistBanner: AddedToPlaylistBannerState? = nil
+    @State private var bannerDismissTask: Task<Void, Never>? = nil
+    @State private var showingChangePlaylistSheet: Bool = false
 
     private var isLyricsViewActive: Bool {
         isLyricsViewPreferred
@@ -147,6 +163,8 @@ public struct FullScreenPlayerView: View {
             }
             .onDisappear {
                 swayAnimationTask?.cancel()
+                bannerDismissTask?.cancel()
+                addedToPlaylistBanner = nil
                 resetArtworkOrientation()
                 isArtworkFlipped = false
                 isLyricsExpanded = false
@@ -198,6 +216,11 @@ public struct FullScreenPlayerView: View {
         .sheet(isPresented: $showingPlaylistPicker) {
             if let track = playerService.currentTrack {
                 playlistPickerSheet(for: track)
+            }
+        }
+        .sheet(isPresented: $showingChangePlaylistSheet) {
+            if let track = playerService.currentTrack, let banner = addedToPlaylistBanner {
+                changePlaylistSheet(for: track, currentPlaylistID: banner.playlistID)
             }
         }
         .sheet(item: $selectedArtistForNavigation) { artist in
@@ -496,9 +519,9 @@ public struct FullScreenPlayerView: View {
                     artworkKey: track.artworkKey,
                     title: track.album,
                     subtitle: track.artist,
-                    cornerRadius: 22
+                    cornerRadius: isArtworkRounded ? 22 : 0
                 )
-                .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+                .clipShape(RoundedRectangle(cornerRadius: isArtworkRounded ? 22 : 0, style: .continuous))
                 .frame(width: dimension, height: dimension)
                 .aspectRatio(1.0, contentMode: .fit)
                 .onTapGesture {
@@ -537,7 +560,7 @@ public struct FullScreenPlayerView: View {
         )
         .scaleEffect(effectiveScale, anchor: .center)
         .animation(.spring(response: 0.38, dampingFraction: 0.74), value: isPlaying)
-        .contentShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .contentShape(RoundedRectangle(cornerRadius: isArtworkRounded ? 22 : 0, style: .continuous))
         .gesture(
             LongPressGesture(minimumDuration: 1.0)
                 .sequenced(before: DragGesture(minimumDistance: 0, coordinateSpace: .local))
@@ -571,8 +594,16 @@ public struct FullScreenPlayerView: View {
     // MARK: - Artwork Back View
 
     private func artworkBackView(dimension: CGFloat) -> some View {
-        VStack(spacing: 26) {
-            Spacer()
+        VStack(spacing: 14) {
+            Spacer(minLength: 6)
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    guard canTriggerButtonPress else { return }
+                    HapticFeedback.cardFlip()
+                    withAnimation(.spring(response: 0.52, dampingFraction: 0.76)) {
+                        isArtworkFlipped = false
+                    }
+                }
 
             // 1. LYRICS Button (Large text, no background, blue when enabled)
             Button(action: {
@@ -587,8 +618,10 @@ public struct FullScreenPlayerView: View {
                 }
             }) {
                 Text("LYRICS")
-                    .font(.system(size: 20, weight: .bold, design: .monospaced))
+                    .font(.system(size: 19, weight: .bold, design: .monospaced))
                     .foregroundStyle(isLyricsViewPreferred ? Color.blue : Color.white.opacity(0.40))
+                    .frame(minHeight: 34)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
 
@@ -607,18 +640,20 @@ public struct FullScreenPlayerView: View {
                 }
             }) {
                 Text("ANIMATE ARTWORK")
-                    .font(.system(size: 16, weight: .bold, design: .monospaced))
+                    .font(.system(size: 14, weight: .bold, design: .monospaced))
                     .foregroundStyle(isArtworkAnimationEnabled ? Color.blue : Color.white.opacity(0.40))
+                    .frame(minHeight: 28)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
 
             // 3. BACKGROUND Picker (Large text, gray when unselected, white when selected)
-            VStack(spacing: 12) {
+            VStack(spacing: 8) {
                 Text("BACKGROUND")
-                    .font(.system(size: 13, weight: .bold, design: .monospaced))
+                    .font(.system(size: 12, weight: .bold, design: .monospaced))
                     .foregroundStyle(Color.white.opacity(0.40))
 
-                HStack(spacing: 14) {
+                HStack(spacing: 10) {
                     ForEach(PlayerBackgroundStyle.allCases, id: \.self) { style in
                         Button(action: {
                             guard canTriggerButtonPress else { return }
@@ -629,43 +664,75 @@ public struct FullScreenPlayerView: View {
                             }
                         }) {
                             Text(style.displayName.uppercased())
-                                .font(.system(size: 13, weight: .bold, design: .monospaced))
+                                .font(.system(size: 11, weight: .bold, design: .monospaced))
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.80)
                                 .foregroundStyle(
                                     libraryStore.settings.playerBackgroundStyle == style ?
                                         Color.white :
                                         Color.white.opacity(0.35)
                                 )
+                                .padding(.horizontal, 4)
+                                .padding(.vertical, 4)
+                                .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
                     }
                 }
             }
 
-            Spacer()
+            // 4. ROUNDED Toggle Button (Toggle rounded vs sharp square artwork)
+            Button(action: {
+                guard canTriggerButtonPress else { return }
+                HapticFeedback.modeToggle(isOn: !isArtworkRounded)
+                withAnimation(.spring(response: 0.38, dampingFraction: 0.78)) {
+                    isArtworkRounded.toggle()
+                }
+            }) {
+                Text("ROUNDED")
+                    .font(.system(size: 14, weight: .bold, design: .monospaced))
+                    .foregroundStyle(isArtworkRounded ? Color.blue : Color.white.opacity(0.40))
+                    .frame(minHeight: 28)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            Spacer(minLength: 6)
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    guard canTriggerButtonPress else { return }
+                    HapticFeedback.cardFlip()
+                    withAnimation(.spring(response: 0.52, dampingFraction: 0.76)) {
+                        isArtworkFlipped = false
+                    }
+                }
 
             // Flip back prompt
-            Text("TAP ANYWHERE TO FLIP BACK")
-                .font(.system(size: 11, weight: .bold, design: .monospaced))
-                .foregroundStyle(Color.white.opacity(0.30))
-                .padding(.bottom, 12)
+            Button(action: {
+                guard canTriggerButtonPress else { return }
+                HapticFeedback.cardFlip()
+                withAnimation(.spring(response: 0.52, dampingFraction: 0.76)) {
+                    isArtworkFlipped = false
+                }
+            }) {
+                Text("TAP ANYWHERE TO FLIP BACK")
+                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+                    .foregroundStyle(Color.white.opacity(0.30))
+                    .padding(.bottom, 6)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
         }
         .frame(width: dimension, height: dimension)
         .background(
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
+            RoundedRectangle(cornerRadius: isArtworkRounded ? 22 : 0, style: .continuous)
                 .fill(Color(red: 0.12, green: 0.12, blue: 0.14).opacity(0.95))
         )
-        .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: isArtworkRounded ? 22 : 0, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
+            RoundedRectangle(cornerRadius: isArtworkRounded ? 22 : 0, style: .continuous)
                 .stroke(Color.white.opacity(0.15), lineWidth: 1)
         )
-        .contentShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
-        .onTapGesture {
-            HapticFeedback.cardFlip()
-            withAnimation(.spring(response: 0.52, dampingFraction: 0.76)) {
-                isArtworkFlipped = false
-            }
-        }
     }
 
     private var backgroundDisplayName: String {
@@ -710,65 +777,110 @@ public struct FullScreenPlayerView: View {
                                 cornerRadius: 6
                             )
                             .frame(width: 38, height: 38)
-                            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                            .clipShape(RoundedRectangle(cornerRadius: isArtworkRounded ? 6 : 0, style: .continuous))
                             .shadow(color: Color.black.opacity(0.3), radius: 4, x: 0, y: 2)
                         }
                         .buttonStyle(.plain)
 
-                        // Title & Artist moved to top position
+                        // Title & Artist moved to top position (or banner when active)
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(track.title)
-                                .font(.system(size: 14, weight: .bold))
-                                .foregroundStyle(palette.foregroundColor)
-                                .lineLimit(1)
+                            if let banner = addedToPlaylistBanner {
+                                Button(action: {
+                                    guard canTriggerButtonPress else { return }
+                                    HapticFeedback.lightImpact()
+                                    showingChangePlaylistSheet = true
+                                }) {
+                                    HStack(spacing: 4) {
+                                        Text("ADDED TO \(banner.playlistName.uppercased())")
+                                            .font(.system(size: 13, weight: .bold, design: .monospaced))
+                                            .foregroundStyle(Color.blue)
+                                            .lineLimit(1)
+                                        Image(systemName: "chevron.right")
+                                            .font(.system(size: 9, weight: .bold))
+                                            .foregroundStyle(Color.blue)
+                                    }
+                                }
+                                .buttonStyle(.plain)
+                                .transition(.opacity)
+                            } else {
+                                Text(track.title)
+                                    .font(.system(size: 14, weight: .bold))
+                                    .foregroundStyle(palette.foregroundColor)
+                                    .lineLimit(1)
 
-                            Text(track.artist)
-                                .font(.system(size: 12, weight: .medium))
-                                .foregroundStyle(palette.secondaryForegroundColor)
-                                .lineLimit(1)
+                                Text(track.artist)
+                                    .font(.system(size: 12, weight: .medium))
+                                    .foregroundStyle(palette.secondaryForegroundColor)
+                                    .lineLimit(1)
+                            }
                         }
+                        .animation(.easeInOut(duration: 0.35), value: addedToPlaylistBanner)
 
                         Spacer()
                     }
                     .transition(.opacity)
                 } else {
-                    // Standard Centered Header with clickable album name
+                    // Standard Centered Header with clickable album name or banner
                     VStack(spacing: 2) {
-                        Text("NOW PLAYING")
-                            .font(.system(size: 10, weight: .bold, design: .monospaced))
-                            .foregroundStyle(palette.secondaryForegroundColor)
+                        if let banner = addedToPlaylistBanner {
+                            Button(action: {
+                                guard canTriggerButtonPress else { return }
+                                HapticFeedback.lightImpact()
+                                showingChangePlaylistSheet = true
+                            }) {
+                                HStack(spacing: 5) {
+                                    Text("ADDED TO \(banner.playlistName.uppercased())")
+                                        .font(.system(size: 13, weight: .bold, design: .monospaced))
+                                        .foregroundStyle(Color.blue)
+                                        .lineLimit(1)
+                                        .minimumScaleFactor(0.70)
+                                        .truncationMode(.tail)
+                                    Image(systemName: "chevron.right")
+                                        .font(.system(size: 10, weight: .bold))
+                                        .foregroundStyle(Color.blue)
+                                }
+                            }
+                            .buttonStyle(.plain)
+                            .transition(.opacity)
+                        } else {
+                            Text("NOW PLAYING")
+                                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                                .foregroundStyle(palette.secondaryForegroundColor)
 
-                        Button(action: {
-                            guard canTriggerButtonPress else { return }
-                            HapticFeedback.lightImpact()
-                            if let albumObj = libraryStore.findAlbum(title: track.album, artist: track.artist) {
-                                selectedAlbumForNavigation = albumObj
+                            Button(action: {
+                                guard canTriggerButtonPress else { return }
+                                HapticFeedback.lightImpact()
+                                if let albumObj = libraryStore.findAlbum(title: track.album, artist: track.artist) {
+                                    selectedAlbumForNavigation = albumObj
+                                }
+                            }) {
+                                Text(track.album)
+                                    .font(.system(size: 13, weight: .semibold))
+                                    .foregroundStyle(palette.foregroundColor)
+                                    .lineLimit(1)
+                                    .minimumScaleFactor(0.70)
+                                    .truncationMode(.tail)
                             }
-                        }) {
-                            Text(track.album)
-                                .font(.system(size: 13, weight: .semibold))
-                                .foregroundStyle(palette.foregroundColor)
-                                .lineLimit(1)
-                                .minimumScaleFactor(0.70)
-                                .truncationMode(.tail)
-                        }
-                        .buttonStyle(.plain)
-                        .contextMenu {
-                            Button {
-                                HapticFeedback.notificationSuccess()
-                                playAlbumNext(for: track)
-                            } label: {
-                                Label("PLAY ALBUM NEXT", systemImage: "text.line.first.and.arrowtriangle.forward")
+                            .buttonStyle(.plain)
+                            .contextMenu {
+                                Button {
+                                    HapticFeedback.notificationSuccess()
+                                    playAlbumNext(for: track)
+                                } label: {
+                                    Label("PLAY ALBUM NEXT", systemImage: "text.line.first.and.arrowtriangle.forward")
+                                }
                             }
+                            .transition(.opacity)
                         }
                     }
                     .padding(.horizontal, 64)
                     .frame(maxWidth: .infinity, alignment: .center)
+                    .animation(.easeInOut(duration: 0.35), value: addedToPlaylistBanner)
                     .transition(.opacity)
                 }
 
-                // Trailing Controls: Previous / Play-Pause / Next when lyrics are active AND expanded, otherwise INFO Menu Button
-                HStack {
+                // Trailing Controls: Previous / Play-Pause / Next when lyrics are active AND expanded, plus INFO Menu Button
+                HStack(spacing: 12) {
                     Spacer()
 
                     if isLyricsViewActive && isLyricsExpanded {
@@ -807,43 +919,42 @@ public struct FullScreenPlayerView: View {
                             .buttonStyle(.plain)
                         }
                         .transition(.opacity.combined(with: .scale(scale: 0.92)))
-                        Menu {
-                            Button(action: {
-                                guard canTriggerButtonPress else { return }
-                                HapticFeedback.lightImpact()
-                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-                                    showingPlaybackSheet = true
-                                }
-                            }) {
-                                Text("PLAYBACK")
-                            }
-                            Button(action: {
-                                guard canTriggerButtonPress else { return }
-                                HapticFeedback.lightImpact()
-                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-                                    showingPlaylistPicker = true
-                                }
-                            }) {
-                                Text("ADD TO PLAYLIST")
-                            }
-                            Button(action: {
-                                guard canTriggerButtonPress else { return }
-                                HapticFeedback.lightImpact()
-                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-                                    showingFileInfo = true
-                                }
-                            }) {
-                                Text("FILE INFO")
-                            }
-                        } label: {
-                            Text("INFO")
-                                .font(.system(size: 13, weight: .bold, design: .monospaced))
-                                .foregroundStyle(palette.foregroundColor)
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 4)
-                        }
-                        .transition(.opacity.combined(with: .scale(scale: 0.92)))
                     }
+
+                    Menu {
+                        Button(action: {
+                            guard canTriggerButtonPress else { return }
+                            HapticFeedback.lightImpact()
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                                showingPlaybackSheet = true
+                            }
+                        }) {
+                            Text("PLAYBACK")
+                        }
+                        Button(action: {
+                            guard canTriggerButtonPress else { return }
+                            HapticFeedback.lightImpact()
+                            handleAddToPlaylist(track: track)
+                        }) {
+                            Text("ADD TO PLAYLIST")
+                        }
+                        Button(action: {
+                            guard canTriggerButtonPress else { return }
+                            HapticFeedback.lightImpact()
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                                showingFileInfo = true
+                            }
+                        }) {
+                            Text("FILE INFO")
+                        }
+                    } label: {
+                        Text("INFO")
+                            .font(.system(size: 13, weight: .bold, design: .monospaced))
+                            .foregroundStyle(palette.foregroundColor)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 4)
+                    }
+                    .transition(.opacity.combined(with: .scale(scale: 0.92)))
                 }
             }
             .padding(.horizontal, 20)
@@ -906,6 +1017,7 @@ public struct FullScreenPlayerView: View {
                             libraryStore.addTrack(track, toPlaylistID: playlist.id)
                             HapticFeedback.notificationSuccess()
                             showingPlaylistPicker = false
+                            triggerAddedToPlaylistBanner(playlistID: playlist.id, playlistName: playlist.name)
                         }) {
                             HStack {
                                 Text(playlist.name)
@@ -930,6 +1042,97 @@ public struct FullScreenPlayerView: View {
                     }
                     .font(.system(size: 13, weight: .bold, design: .monospaced))
                 }
+            }
+        }
+    }
+
+    // MARK: - Change Playlist Sheet (Move Track)
+
+    private func changePlaylistSheet(for track: Track, currentPlaylistID: UUID) -> some View {
+        NavigationStack {
+            List {
+                if libraryStore.playlists.isEmpty {
+                    Text("No playlists created yet.")
+                        .font(.system(size: 13, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(libraryStore.playlists) { playlist in
+                        let isCurrent = playlist.id == currentPlaylistID
+                        Button(action: {
+                            if !isCurrent {
+                                libraryStore.moveTrack(track, fromPlaylistID: currentPlaylistID, toPlaylistID: playlist.id)
+                                HapticFeedback.notificationSuccess()
+                                triggerAddedToPlaylistBanner(playlistID: playlist.id, playlistName: playlist.name)
+                            }
+                            showingChangePlaylistSheet = false
+                        }) {
+                            HStack {
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(playlist.name)
+                                        .font(.system(size: 14, weight: .semibold))
+                                        .foregroundStyle(isCurrent ? Color.blue : Color.primary)
+                                    if isCurrent {
+                                        Text("CURRENT PLAYLIST")
+                                            .font(.system(size: 10, weight: .bold, design: .monospaced))
+                                            .foregroundStyle(Color.blue)
+                                    }
+                                }
+                                Spacer()
+                                if isCurrent {
+                                    Image(systemName: "checkmark")
+                                        .font(.system(size: 13, weight: .bold))
+                                        .foregroundStyle(Color.blue)
+                                } else {
+                                    Text(playlist.formattedTrackCount)
+                                        .font(.system(size: 11, design: .monospaced))
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+            .navigationTitle("MOVE TO PLAYLIST")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("DONE") {
+                        showingChangePlaylistSheet = false
+                    }
+                    .font(.system(size: 13, weight: .bold, design: .monospaced))
+                }
+            }
+        }
+    }
+
+    private func handleAddToPlaylist(track: Track) {
+        if let lastID = libraryStore.lastAddedPlaylistID,
+           let targetPlaylist = libraryStore.playlists.first(where: { $0.id == lastID }) {
+            libraryStore.addTrack(track, toPlaylistID: targetPlaylist.id)
+            HapticFeedback.notificationSuccess()
+            triggerAddedToPlaylistBanner(playlistID: targetPlaylist.id, playlistName: targetPlaylist.name)
+        } else if libraryStore.playlists.count == 1, let singlePlaylist = libraryStore.playlists.first {
+            libraryStore.addTrack(track, toPlaylistID: singlePlaylist.id)
+            HapticFeedback.notificationSuccess()
+            triggerAddedToPlaylistBanner(playlistID: singlePlaylist.id, playlistName: singlePlaylist.name)
+        } else {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                showingPlaylistPicker = true
+            }
+        }
+    }
+
+    private func triggerAddedToPlaylistBanner(playlistID: UUID, playlistName: String) {
+        bannerDismissTask?.cancel()
+        withAnimation(.easeInOut(duration: 0.25)) {
+            addedToPlaylistBanner = AddedToPlaylistBannerState(playlistID: playlistID, playlistName: playlistName)
+        }
+        bannerDismissTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 5_000_000_000)
+            guard !Task.isCancelled else { return }
+            withAnimation(.easeInOut(duration: 0.35)) {
+                addedToPlaylistBanner = nil
             }
         }
     }

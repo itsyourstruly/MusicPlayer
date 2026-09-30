@@ -8,6 +8,8 @@ import AppKit
 
 /// High-performance asynchronous album artwork view with decoded image caching and typographic fallback.
 public struct AlbumArtworkView: View {
+    @Environment(LibraryStore.self) private var libraryStore: LibraryStore?
+
     // Artwork key
     public let artworkKey: String?
     // Display title
@@ -16,6 +18,7 @@ public struct AlbumArtworkView: View {
     public let subtitle: String?
     public var cornerRadius: CGFloat = 8
     public var targetDimension: CGFloat = 128
+    public var isArtworkRounded: Bool? = nil
 
     @State private var loadedImage: Image?
     @State private var isLoading: Bool = false
@@ -26,13 +29,15 @@ public struct AlbumArtworkView: View {
         title: String,
         subtitle: String? = nil,
         cornerRadius: CGFloat = 8,
-        targetDimension: CGFloat = 128
+        targetDimension: CGFloat = 128,
+        isArtworkRounded: Bool? = nil
     ) {
         self.artworkKey = artworkKey
         self.title = title
         self.subtitle = subtitle
         self.cornerRadius = cornerRadius
         self.targetDimension = targetDimension
+        self.isArtworkRounded = isArtworkRounded
 
         if let key = artworkKey, !key.isEmpty,
            let cached = ArtworkCacheService.shared.cachedImage(key: key, maxDimension: targetDimension) {
@@ -56,6 +61,11 @@ public struct AlbumArtworkView: View {
         #endif
     }()
 
+    private var effectiveCornerRadius: CGFloat {
+        let isRounded = isArtworkRounded ?? libraryStore?.settings.isArtworkRounded ?? (UserDefaults.standard.object(forKey: "isArtworkRounded") as? Bool ?? true)
+        return isRounded ? cornerRadius : 0
+    }
+
     public var body: some View {
         ZStack {
             if let image = loadedImage {
@@ -68,7 +78,8 @@ public struct AlbumArtworkView: View {
                 defaultArtworkPlaceholder
             }
         }
-        .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: effectiveCornerRadius, style: .continuous))
+        .contentShape(RoundedRectangle(cornerRadius: effectiveCornerRadius, style: .continuous))
         .task(id: artworkKey) {
             await loadArtwork()
         }

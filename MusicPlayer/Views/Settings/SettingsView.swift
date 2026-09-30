@@ -183,6 +183,12 @@ public enum SettingOptionCatalog {
         description: "Replaces the circular scrubber with a continuous progress bar in the fullscreen player."
     )
 
+    public static let roundedArtwork = SettingOptionDetail(
+        id: "roundedArtwork",
+        title: "ROUNDED ARTWORK",
+        description: "Toggles rounded corners on album artwork in the player. When disabled, artwork is displayed as a sharp square."
+    )
+
     public static let smoothSkipping = SettingOptionDetail(
         id: "smoothSkipping",
         title: "TRANSITION TRACKS WHEN SKIPPING",

@@ -286,6 +286,10 @@ public struct AppSettings: Codable, Sendable {
     public var manualCollaborativeAlbumIDs: Set<String>
     // Preserved default album artists for tracks before being made collaborative, keyed by track UUID string
     public var originalAlbumArtistsByTrackID: [String: String]
+    // Set of folder UUIDs disabled for display in Library tabs
+    public var disabledFolderIDs: Set<UUID>
+    // When enabled, fullscreen album artwork has rounded corners; when disabled, artwork is a non-rounded square
+    public var isArtworkRounded: Bool
 
     /// Backwards compatibility property
     public var accentTheme: AppTheme {
@@ -322,7 +326,9 @@ public struct AppSettings: Codable, Sendable {
         removedTrackPaths: Set<String> = [],
         isHapticsEnabled: Bool = false,
         manualCollaborativeAlbumIDs: Set<String> = [],
-        originalAlbumArtistsByTrackID: [String: String] = [:]
+        originalAlbumArtistsByTrackID: [String: String] = [:],
+        disabledFolderIDs: Set<UUID> = [],
+        isArtworkRounded: Bool = true
     ) {
         self.appTheme = appTheme
         self.defaultLibraryCategory = defaultLibraryCategory
@@ -352,6 +358,8 @@ public struct AppSettings: Codable, Sendable {
         self.isHapticsEnabled = isHapticsEnabled
         self.manualCollaborativeAlbumIDs = manualCollaborativeAlbumIDs
         self.originalAlbumArtistsByTrackID = originalAlbumArtistsByTrackID
+        self.disabledFolderIDs = disabledFolderIDs
+        self.isArtworkRounded = isArtworkRounded
     }
 
     // MARK: - Custom Codable to seamlessly decode older settings JSON
@@ -413,6 +421,8 @@ public struct AppSettings: Codable, Sendable {
         // Collaborative album settings
         case manualCollaborativeAlbumIDs
         case originalAlbumArtistsByTrackID
+        case disabledFolderIDs
+        case isArtworkRounded
     }
 
     // Initialize with configured properties
@@ -478,6 +488,8 @@ public struct AppSettings: Codable, Sendable {
         self.isHapticsEnabled = try container.decodeIfPresent(Bool.self, forKey: .isHapticsEnabled) ?? false
         self.manualCollaborativeAlbumIDs = try container.decodeIfPresent(Set<String>.self, forKey: .manualCollaborativeAlbumIDs) ?? []
         self.originalAlbumArtistsByTrackID = try container.decodeIfPresent([String: String].self, forKey: .originalAlbumArtistsByTrackID) ?? [:]
+        self.disabledFolderIDs = try container.decodeIfPresent(Set<UUID>.self, forKey: .disabledFolderIDs) ?? []
+        self.isArtworkRounded = try container.decodeIfPresent(Bool.self, forKey: .isArtworkRounded) ?? true
     }
 
     // Encode
@@ -512,6 +524,8 @@ public struct AppSettings: Codable, Sendable {
         try container.encode(isHapticsEnabled, forKey: .isHapticsEnabled)
         try container.encode(manualCollaborativeAlbumIDs, forKey: .manualCollaborativeAlbumIDs)
         try container.encode(originalAlbumArtistsByTrackID, forKey: .originalAlbumArtistsByTrackID)
+        try container.encode(disabledFolderIDs, forKey: .disabledFolderIDs)
+        try container.encode(isArtworkRounded, forKey: .isArtworkRounded)
     }
 }
 

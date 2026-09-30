@@ -109,6 +109,8 @@ public final class LibraryStore {
     public private(set) var playlists: [Playlist] = [] {
         didSet { invalidateSortedCaches() }
     }
+    // ID of the last playlist to which a track was added
+    public private(set) var lastAddedPlaylistID: UUID?
     // Track playback counts keyed by track ID
     public private(set) var playCounts: [UUID: Int] = [:]
     // Track saved playback positions (in seconds) keyed by track ID
@@ -220,6 +222,7 @@ public final class LibraryStore {
     public private(set) var isInitialLoading: Bool = true
     // Indicates active file system audio scanning
     public private(set) var isScanning: Bool = false
+    public private(set) var currentlyScanningFolderID: UUID? = nil
     // Overall scanning completion progress (0.0 - 1.0)
     public private(set) var scanProgress: Double = 0.0
     // Human-readable status text for scanner UI
@@ -270,6 +273,9 @@ public final class LibraryStore {
     @ObservationIgnored private var cachedSortedAlbums: [Album]? = nil
     @ObservationIgnored private var cachedSortedArtists: [Artist]? = nil
     @ObservationIgnored private var cachedSortedPlaylists: [Playlist]? = nil
+    @ObservationIgnored private var cachedActiveTracks: [Track]? = nil
+    @ObservationIgnored private var cachedActiveAlbums: [Album]? = nil
+    @ObservationIgnored private var cachedActiveArtists: [Artist]? = nil
     @ObservationIgnored private var albumsByID: [String: Album] = [:]
     @ObservationIgnored private var albumsByNormalizedKey: [String: Album] = [:]
 
@@ -307,6 +313,9 @@ public final class LibraryStore {
         cachedSortedAlbums = nil
         cachedSortedArtists = nil
         cachedSortedPlaylists = nil
+        cachedActiveTracks = nil
+        cachedActiveAlbums = nil
+        cachedActiveArtists = nil
     }
 
     // MARK: - File Paths
@@ -363,6 +372,86 @@ public final class LibraryStore {
         playlists.filter { $0.isPinned }
     }
 
+    /// Returns tracks belonging strictly to enabled linked folders.
+    public var activeTracks: [Track] {
+        if settings.disabledFolderIDs.isEmpty {
+            return tracks
+        }
+        if let cached = cachedActiveTracks {
+            return cached
+        }
+        let filtered = tracks.filter { isTrackFromEnabledFolder($0) }
+        cachedActiveTracks = filtered
+        return filtered
+    }
+
+    /// Returns albums containing tracks belonging strictly to enabled linked folders.
+    public var activeAlbums: [Album] {
+        if settings.disabledFolderIDs.isEmpty {
+            return albums
+        }
+        if let cached = cachedActiveAlbums {
+            return cached
+        }
+        var result: [Album] = []
+        for album in albums {
+            let filtered = album.tracks.filter { isTrackFromEnabledFolder($0) }
+            if !filtered.isEmpty {
+                if filtered.count == album.tracks.count {
+                    result.append(album)
+                } else {
+                    result.append(Album(
+                        title: album.title,
+                        artist: album.artist,
+                        year: album.year,
+                        genre: album.genre,
+                        artworkKey: album.artworkKey,
+                        tracks: filtered
+                    ))
+                }
+            }
+        }
+        cachedActiveAlbums = result
+        return result
+    }
+
+    /// Returns artists containing tracks and albums belonging strictly to enabled linked folders.
+    public var activeArtists: [Artist] {
+        if settings.disabledFolderIDs.isEmpty {
+            return artists
+        }
+        if let cached = cachedActiveArtists {
+            return cached
+        }
+        var result: [Artist] = []
+        for artist in artists {
+            let filteredTracks = artist.tracks.filter { isTrackFromEnabledFolder($0) }
+            if !filteredTracks.isEmpty {
+                let filteredAlbums = artist.albums.compactMap { album -> Album? in
+                    let tr = album.tracks.filter { isTrackFromEnabledFolder($0) }
+                    guard !tr.isEmpty else { return nil }
+                    if tr.count == album.tracks.count { return album }
+                    return Album(
+                        title: album.title,
+                        artist: album.artist,
+                        year: album.year,
+                        genre: album.genre,
+                        artworkKey: album.artworkKey,
+                        tracks: tr
+                    )
+                }
+                result.append(Artist(
+                    name: artist.name,
+                    albums: filteredAlbums,
+                    tracks: filteredTracks,
+                    joinedArtists: settings.joinedArtists
+                ))
+            }
+        }
+        cachedActiveArtists = result
+        return result
+    }
+
     public var filteredTracks: [Track] {
         let cleanQuery = FuzzyMatcher.normalize(searchQuery)
         if cleanQuery.isEmpty {
@@ -372,9 +461,9 @@ public final class LibraryStore {
             let sourceList: [Track]
             if settings.autoHideDuplicates && !duplicateGroups.isEmpty {
                 let hiddenTrackIDs = Set(duplicateGroups.flatMap { $0.duplicateCandidates.map { $0.track.id } })
-                sourceList = tracks.filter { !hiddenTrackIDs.contains($0.id) }
+                sourceList = activeTracks.filter { !hiddenTrackIDs.contains($0.id) }
             } else {
-                sourceList = tracks
+                sourceList = activeTracks
             }
             let sorted = sortTracks(sourceList, by: trackSortOption, isReversed: isTrackSortReversed)
             cachedSortedTracks = sorted
@@ -384,9 +473,9 @@ public final class LibraryStore {
         let sourceList: [Track]
         if settings.autoHideDuplicates && !duplicateGroups.isEmpty {
             let hiddenTrackIDs = Set(duplicateGroups.flatMap { $0.duplicateCandidates.map { $0.track.id } })
-            sourceList = tracks.filter { !hiddenTrackIDs.contains($0.id) }
+            sourceList = activeTracks.filter { !hiddenTrackIDs.contains($0.id) }
         } else {
-            sourceList = tracks
+            sourceList = activeTracks
         }
 
         let scored: [(Track, Int)] = sourceList.compactMap { track in
@@ -408,9 +497,9 @@ public final class LibraryStore {
     /// Standardized, high-performance album search scoring title, artist, and track titles.
     public func searchAlbums(query: String) -> [Album] {
         let cleanQuery = FuzzyMatcher.normalize(query)
-        guard !cleanQuery.isEmpty else { return albums }
+        guard !cleanQuery.isEmpty else { return activeAlbums }
 
-        let scored: [(Album, Int)] = albums.compactMap { album in
+        let scored: [(Album, Int)] = activeAlbums.compactMap { album in
             var maxScore = FuzzyMatcher.scoreAlbum(
                 normalizedTitle: album.normalizedTitle,
                 normalizedArtist: album.normalizedArtist,
@@ -442,7 +531,7 @@ public final class LibraryStore {
             if let cached = cachedSortedAlbums {
                 return cached
             }
-            let sorted = sortAlbums(albums, by: albumSortOption, isReversed: isAlbumSortReversed)
+            let sorted = sortAlbums(activeAlbums, by: albumSortOption, isReversed: isAlbumSortReversed)
             cachedSortedAlbums = sorted
             return sorted
         }
@@ -455,11 +544,11 @@ public final class LibraryStore {
             if let cached = cachedSortedArtists {
                 return cached
             }
-            let sorted = sortArtists(artists, by: artistSortOption, isReversed: isArtistSortReversed)
+            let sorted = sortArtists(activeArtists, by: artistSortOption, isReversed: isArtistSortReversed)
             cachedSortedArtists = sorted
             return sorted
         }
-        let scored: [(Artist, Int)] = artists.compactMap { artist in
+        let scored: [(Artist, Int)] = activeArtists.compactMap { artist in
             let score = FuzzyMatcher.scoreArtist(normalizedName: artist.normalizedName, cleanQuery: cleanQuery)
             return score > 0 ? (artist, score) : nil
         }
@@ -635,19 +724,50 @@ public final class LibraryStore {
         if settings.linkedFolders.count == 1 {
             return settings.linkedFolders.first
         }
+        let trackCanonical = track.url.resolvingSymlinksInPath().standardizedFileURL.path
         for f in settings.linkedFolders {
-            if let p = f.path, track.url.path.hasPrefix(p) {
-                return f
+            if let p = f.path {
+                let canonicalPath = URL(fileURLWithPath: p).resolvingSymlinksInPath().standardizedFileURL.path
+                if trackCanonical.hasPrefix(canonicalPath) || track.url.path.hasPrefix(p) {
+                    return f
+                }
             }
-        }
-        for f in settings.linkedFolders {
             if let fURL = SecurityScopedBookmark.shared.url(for: f.id) {
-                if track.url.standardizedFileURL.path.hasPrefix(fURL.standardizedFileURL.path) {
+                let fCanonical = fURL.resolvingSymlinksInPath().standardizedFileURL.path
+                if trackCanonical.hasPrefix(fCanonical) || track.url.standardizedFileURL.path.hasPrefix(fURL.standardizedFileURL.path) {
                     return f
                 }
             }
         }
         return nil
+    }
+
+    /// Checks whether a linked folder is currently enabled for display in the Library tabs.
+    public func isFolderEnabled(_ folderID: UUID) -> Bool {
+        !settings.disabledFolderIDs.contains(folderID)
+    }
+
+    /// Toggles the enabled state of a linked folder for Library views.
+    public func toggleFolderEnabled(_ folderID: UUID) {
+        if settings.disabledFolderIDs.contains(folderID) {
+            settings.disabledFolderIDs.remove(folderID)
+        } else {
+            settings.disabledFolderIDs.insert(folderID)
+        }
+        saveSettings()
+        invalidateSortedCaches()
+    }
+
+    /// Determines if a track belongs to an enabled folder.
+    public func isTrackFromEnabledFolder(_ track: Track) -> Bool {
+        guard !settings.disabledFolderIDs.isEmpty else { return true }
+        if let fID = track.folderID {
+            return !settings.disabledFolderIDs.contains(fID)
+        }
+        if let f = folder(for: track) {
+            return !settings.disabledFolderIDs.contains(f.id)
+        }
+        return true
     }
 
     /// Determines if a track should be excluded from tag enrichment sheets and scans.
@@ -664,32 +784,88 @@ public final class LibraryStore {
         saveSettings()
     }
 
-    /// Track count for an individual linked folder.
+    public struct FolderStats: Sendable, Equatable {
+        public var trackCount: Int
+        public var albumCount: Int
+        public var artistCount: Int
+    }
+    @ObservationIgnored private var cachedFolderStats: [UUID: FolderStats] = [:]
+
+    /// Track count for an individual linked folder (O(1) indexed).
     public func trackCount(for folder: LinkedFolder) -> Int {
         if settings.linkedFolders.count <= 1 {
             return tracks.count
         }
-        return tracks.filter { $0.folderID == folder.id || self.folder(for: $0)?.id == folder.id }.count
+        if let stats = cachedFolderStats[folder.id] {
+            return stats.trackCount
+        }
+        rebuildFolderStats()
+        return cachedFolderStats[folder.id]?.trackCount ?? 0
     }
 
-    /// Album count for an individual linked folder.
+    /// Album count for an individual linked folder (O(1) indexed).
     public func albumCount(for folder: LinkedFolder) -> Int {
         if settings.linkedFolders.count <= 1 {
             return albums.count
         }
-        let folderTracks = tracks.filter { $0.folderID == folder.id || self.folder(for: $0)?.id == folder.id }
-        let albums = Set(folderTracks.map { "\($0.album.lowercased())---\($0.artist.lowercased())" })
-        return albums.count
+        if let stats = cachedFolderStats[folder.id] {
+            return stats.albumCount
+        }
+        rebuildFolderStats()
+        return cachedFolderStats[folder.id]?.albumCount ?? 0
     }
 
-    /// Artist count for an individual linked folder.
+    /// Artist count for an individual linked folder (O(1) indexed).
     public func artistCount(for folder: LinkedFolder) -> Int {
         if settings.linkedFolders.count <= 1 {
             return artists.count
         }
-        let folderTracks = tracks.filter { $0.folderID == folder.id || self.folder(for: $0)?.id == folder.id }
-        let artists = Set(folderTracks.map { $0.artist.lowercased() })
-        return artists.count
+        if let stats = cachedFolderStats[folder.id] {
+            return stats.artistCount
+        }
+        rebuildFolderStats()
+        return cachedFolderStats[folder.id]?.artistCount ?? 0
+    }
+
+    /// Rebuilds cached statistics for all linked folders in a single O(N) pass.
+    public func rebuildFolderStats() {
+        var statsMap: [UUID: (tracks: Int, albums: Set<String>, artists: Set<String>)] = [:]
+        for folder in settings.linkedFolders {
+            statsMap[folder.id] = (0, Set<String>(), Set<String>())
+        }
+
+        let folderLookups: [(id: UUID, path: String)] = settings.linkedFolders.compactMap { folder in
+            let path = folder.path.map { URL(fileURLWithPath: $0).resolvingSymlinksInPath().standardizedFileURL.path }
+                ?? SecurityScopedBookmark.shared.url(for: folder.id)?.resolvingSymlinksInPath().standardizedFileURL.path
+            return path.map { (folder.id, $0) }
+        }
+
+        let singleFolderID = settings.linkedFolders.count == 1 ? settings.linkedFolders.first?.id : nil
+
+        for track in tracks {
+            let matchedFolderID: UUID?
+            if let fID = track.folderID {
+                matchedFolderID = fID
+            } else if let sID = singleFolderID {
+                matchedFolderID = sID
+            } else {
+                let trackPath = track.url.resolvingSymlinksInPath().standardizedFileURL.path
+                matchedFolderID = folderLookups.first(where: { trackPath.hasPrefix($0.path) })?.id
+            }
+
+            if let fID = matchedFolderID, var cur = statsMap[fID] {
+                cur.tracks += 1
+                cur.albums.insert("\(track.album.lowercased())---\(track.artist.lowercased())")
+                cur.artists.insert(track.artist.lowercased())
+                statsMap[fID] = cur
+            }
+        }
+
+        var result: [UUID: FolderStats] = [:]
+        for (fID, cur) in statsMap {
+            result[fID] = FolderStats(trackCount: cur.tracks, albumCount: cur.albums.count, artistCount: cur.artists.count)
+        }
+        self.cachedFolderStats = result
     }
 
     /// Adds a new music directory, creates a security bookmark, and initiates indexing for that folder.
@@ -723,6 +899,7 @@ public final class LibraryStore {
 
     /// Rescans a specific linked folder by its UUID.
     public func rescanFolder(id: UUID) async {
+        guard !isScanning else { return }
         guard let folder = settings.linkedFolders.first(where: { $0.id == id }) else { return }
         guard let url = SecurityScopedBookmark.shared.resolveAndAccessBookmark(folderID: folder.id, bookmarkData: folder.bookmarkData) ??
               (folder.path.map { URL(fileURLWithPath: $0) }) else {
@@ -792,6 +969,7 @@ public final class LibraryStore {
 
     /// Rescans all linked directories.
     public func rescanCurrentDirectory() async {
+        guard !isScanning else { return }
         if settings.linkedFolders.isEmpty {
             guard let url = SecurityScopedBookmark.shared.resolveAndAccessBookmark() else {
                 AppLogger.library.warning("No active security-scoped directory available to rescan.")
@@ -831,11 +1009,31 @@ public final class LibraryStore {
     // Rescans an individual folder directory and integrates its tracks
     private func rescanSingleFolder(folder: LinkedFolder, url: URL) async {
         self.isScanning = true
+        self.currentlyScanningFolderID = folder.id
         self.scanProgress = 0.0
         self.scanStatusText = "Scanning \(folder.name)..."
 
-        let folderTracks = self.tracks.filter { self.folder(for: $0)?.id == folder.id }
-        let otherTracks = self.tracks.filter { self.folder(for: $0)?.id != folder.id }
+        defer {
+            self.isScanning = false
+            self.currentlyScanningFolderID = nil
+        }
+
+        let folderCanonical = url.resolvingSymlinksInPath().standardizedFileURL.path
+        let folderPathCanonical = (folder.path.map { URL(fileURLWithPath: $0).resolvingSymlinksInPath().standardizedFileURL.path }) ?? folderCanonical
+
+        func isFolderTrack(_ track: Track) -> Bool {
+            if let fID = track.folderID {
+                return fID == folder.id
+            }
+            let trackPath = track.url.resolvingSymlinksInPath().standardizedFileURL.path
+            return trackPath.hasPrefix(folderCanonical) || trackPath.hasPrefix(folderPathCanonical)
+        }
+
+        let folderTracks = self.tracks.filter { isFolderTrack($0) }
+        let otherTracks = self.tracks.filter { !isFolderTrack($0) }
+
+        // Throttle UI updates to at most ~10 FPS to avoid main thread starvation
+        var lastUIUpdateTime = Date.distantPast
 
         // Scanned tracks with smart differential fast-path
         let scannedTracks = await AudioScannerService.shared.scanDirectory(
@@ -843,6 +1041,9 @@ public final class LibraryStore {
             existingTracks: folderTracks,
             scanMethod: self.settings.libraryScanMethod
         ) { [weak self] current, total, name in
+            let now = Date()
+            guard now.timeIntervalSince(lastUIUpdateTime) > 0.1 || current == total else { return }
+            lastUIUpdateTime = now
             Task { @MainActor [weak self] in
                 guard let self = self else { return }
                 self.scanProgress = total > 0 ? Double(current) / Double(total) : 0.0
@@ -851,19 +1052,70 @@ public final class LibraryStore {
         }
 
         let removedPaths = self.settings.removedTrackPaths
-        let filteredTracks = scannedTracks
+        var filteredTracks = scannedTracks
             .filter { !removedPaths.contains($0.url.standardizedFileURL.path) }
             .map { $0.withFolderID(folder.id) }
 
+        // Re-attach cached online metadata and artwork ONLY to the newly scanned tracks
+        for i in 0..<filteredTracks.count {
+            if let record = lookupCachedMetadata(for: filteredTracks[i]) {
+                if record.wasApplied {
+                    let appliedArtist: String = {
+                        if let a = record.appliedArtist, !a.isEmpty, !MetadataSanitizer.isUnknownArtist(a) {
+                            return a
+                        }
+                        return filteredTracks[i].artist
+                    }()
+                    let appliedAlbum: String = {
+                        if let a = record.appliedAlbum, !a.isEmpty, !MetadataSanitizer.isUnknownAlbum(a) {
+                            return a
+                        }
+                        return filteredTracks[i].album
+                    }()
+                    let appliedTitle: String = {
+                        if let t = record.appliedTitle, !t.isEmpty, !MetadataSanitizer.isUnknownTitle(t) {
+                            return t
+                        }
+                        return filteredTracks[i].title
+                    }()
+
+                    filteredTracks[i] = Track(
+                        id: filteredTracks[i].id,
+                        title: appliedTitle,
+                        artist: appliedArtist,
+                        album: appliedAlbum,
+                        albumArtist: record.appliedAlbumArtist ?? filteredTracks[i].albumArtist,
+                        composer: filteredTracks[i].composer,
+                        performer: filteredTracks[i].performer,
+                        genre: record.appliedGenre ?? filteredTracks[i].genre,
+                        year: record.appliedYear ?? filteredTracks[i].year,
+                        trackNumber: record.appliedTrackNumber ?? filteredTracks[i].trackNumber,
+                        originalTrackNumber: record.appliedOriginalTrackNumber ?? filteredTracks[i].originalTrackNumber,
+                        deluxeTrackNumber: record.appliedDeluxeTrackNumber ?? filteredTracks[i].deluxeTrackNumber,
+                        totalTracks: record.appliedTotalTracks ?? filteredTracks[i].totalTracks,
+                        discNumber: record.appliedDiscNumber ?? filteredTracks[i].discNumber,
+                        discTotal: filteredTracks[i].discTotal,
+                        duration: filteredTracks[i].duration,
+                        url: filteredTracks[i].url,
+                        artworkKey: record.cachedArtworkKey ?? filteredTracks[i].artworkKey,
+                        dateAdded: filteredTracks[i].dateAdded,
+                        fileInfo: filteredTracks[i].fileInfo,
+                        lyrics: filteredTracks[i].lyrics,
+                        isAlternate: filteredTracks[i].isAlternate,
+                        folderID: folder.id
+                    )
+                } else if filteredTracks[i].artworkKey == nil, let artKey = record.cachedArtworkKey {
+                    filteredTracks[i] = filteredTracks[i].withArtworkKey(artKey)
+                }
+            }
+        }
+
         self.scanStatusText = "Building albums and artists..."
+        await Task.yield()
+
         self.tracks = otherTracks + filteredTracks
         rebuildAlbumsAndArtists()
-
-        self.scanStatusText = "Re-attaching cached metadata & artwork..."
-        let reattached = reattachCachedMetadataToTracks()
-        if reattached > 0 {
-            rebuildAlbumsAndArtists()
-        }
+        rebuildFolderStats()
 
         // Re-apply manual collaborative albums if any exist
         if !self.settings.manualCollaborativeAlbumIDs.isEmpty {
@@ -874,16 +1126,15 @@ public final class LibraryStore {
             }
         }
 
-        // Cache baseline metadata and artwork for all scanned tracks non-blockingly
-        self.scanStatusText = "Finalizing library index..."
-        cacheScannedTracks(self.tracks)
+        // Cache baseline metadata for newly indexed tracks non-blockingly
+        self.cacheScannedTracks(filteredTracks)
 
         self.settings.lastScanDate = Date()
         self.settings.totalScannedFiles = self.tracks.count
-        self.isScanning = false
         self.scanProgress = 1.0
         self.scanStatusText = "Scan complete for \(folder.name). Indexed \(filteredTracks.count) tracks."
 
+        // Save state non-blockingly
         saveLibrary()
         saveSettings()
         saveEnrichmentCache()
@@ -903,9 +1154,15 @@ public final class LibraryStore {
             )
         }
 
-        Task {
-            await self.recalculateDuplicates()
+        Task.detached(priority: .utility) { [weak self] in
+            guard let self = self else { return }
+            let groups = await DuplicateDetectionService.shared.analyzeDuplicates(in: currentTracks)
+            await MainActor.run {
+                self.duplicateGroups = groups
+                self.saveDuplicates()
+            }
         }
+
         AppLogger.library.info("Folder [\(folder.name)] scanned with \(filteredTracks.count) tracks.")
     }
 
@@ -938,6 +1195,10 @@ public final class LibraryStore {
         // Id string
         let idString = id.uuidString
         pinnedItemIDs.removeAll { $0.type == .playlist && $0.targetID == idString }
+        if lastAddedPlaylistID == id {
+            lastAddedPlaylistID = nil
+            UserDefaults.standard.removeObject(forKey: "last_added_playlist_id_v1")
+        }
         savePlaylists()
         savePins()
     }
@@ -1016,6 +1277,8 @@ public final class LibraryStore {
     public func addTrack(_ track: Track, toPlaylistID playlistID: UUID) {
         // Ensure preconditions are met before proceeding
         guard let index = playlists.firstIndex(where: { $0.id == playlistID }) else { return }
+        lastAddedPlaylistID = playlistID
+        UserDefaults.standard.set(playlistID.uuidString, forKey: "last_added_playlist_id_v1")
         if !playlists[index].trackIDs.contains(track.id) {
             playlists[index].trackIDs.append(track.id)
             playlists[index].dateModified = Date()
@@ -1027,6 +1290,8 @@ public final class LibraryStore {
     public func addTracks(_ newTracks: [Track], toPlaylistID playlistID: UUID) {
         // Ensure preconditions are met before proceeding
         guard let index = playlists.firstIndex(where: { $0.id == playlistID }) else { return }
+        lastAddedPlaylistID = playlistID
+        UserDefaults.standard.set(playlistID.uuidString, forKey: "last_added_playlist_id_v1")
         // Unique identifier for updated track i ds
         var updatedTrackIDs = playlists[index].trackIDs
         for track in newTracks {
@@ -1046,6 +1311,12 @@ public final class LibraryStore {
         playlists[index].trackIDs.removeAll { $0 == trackID }
         playlists[index].dateModified = Date()
         savePlaylists()
+    }
+
+    /// Moves a track from one playlist to another playlist.
+    public func moveTrack(_ track: Track, fromPlaylistID sourceID: UUID, toPlaylistID destinationID: UUID) {
+        removeTrack(trackID: track.id, fromPlaylistID: sourceID)
+        addTrack(track, toPlaylistID: destinationID)
     }
 
     /// Reorders tracks within a playlist.
@@ -1232,6 +1503,10 @@ public final class LibraryStore {
 
     // Rebuild albums and artists with O(N) performance
     private func rebuildAlbumsAndArtists() {
+        var workingTracks = self.tracks
+        let trackIndexByID: [UUID: Int] = Dictionary(workingTracks.enumerated().map { ($0.element.id, $0.offset) }, uniquingKeysWith: { first, _ in first })
+        var tracksModified = false
+
         // 1. Initial grouping strictly by Album (preserving unified albums without splitting by individual track artists)
         var albumTitleBuckets: [String: [Track]] = [:]
         var standaloneSingleTracks: [Track] = []
@@ -1357,8 +1632,9 @@ public final class LibraryStore {
                 for i in 0..<uniqueClusterTracks.count {
                     if uniqueClusterTracks[i].artworkKey == nil || uniqueClusterTracks[i].artworkKey?.isEmpty == true {
                         uniqueClusterTracks[i] = uniqueClusterTracks[i].withArtworkKey(validArtworkKey)
-                        if let globalIdx = self.tracks.firstIndex(where: { $0.id == uniqueClusterTracks[i].id }) {
-                            self.tracks[globalIdx] = self.tracks[globalIdx].withArtworkKey(validArtworkKey)
+                        if let globalIdx = trackIndexByID[uniqueClusterTracks[i].id] {
+                            workingTracks[globalIdx] = workingTracks[globalIdx].withArtworkKey(validArtworkKey)
+                            tracksModified = true
                         }
                     }
                 }
@@ -1379,8 +1655,9 @@ public final class LibraryStore {
                 for i in 0..<uniqueClusterTracks.count {
                     if uniqueClusterTracks[i].year == nil || uniqueClusterTracks[i].year == 0 {
                         uniqueClusterTracks[i] = uniqueClusterTracks[i].withYear(validConsensusYear)
-                        if let globalIdx = self.tracks.firstIndex(where: { $0.id == uniqueClusterTracks[i].id }) {
-                            self.tracks[globalIdx] = self.tracks[globalIdx].withYear(validConsensusYear)
+                        if let globalIdx = trackIndexByID[uniqueClusterTracks[i].id] {
+                            workingTracks[globalIdx] = workingTracks[globalIdx].withYear(validConsensusYear)
+                            tracksModified = true
                         }
                     }
                 }
@@ -1396,8 +1673,9 @@ public final class LibraryStore {
                     let trackArtist = uniqueClusterTracks[i].artist.trimmingCharacters(in: .whitespacesAndNewlines)
                     if trackArtist.isEmpty || MetadataSanitizer.isUnknownArtist(trackArtist) {
                         uniqueClusterTracks[i] = uniqueClusterTracks[i].withArtist(validAlbumArtist)
-                        if let globalIdx = self.tracks.firstIndex(where: { $0.id == uniqueClusterTracks[i].id }) {
-                            self.tracks[globalIdx] = self.tracks[globalIdx].withArtist(validAlbumArtist)
+                        if let globalIdx = trackIndexByID[uniqueClusterTracks[i].id] {
+                            workingTracks[globalIdx] = workingTracks[globalIdx].withArtist(validAlbumArtist)
+                            tracksModified = true
                         }
                     }
                 }
@@ -1428,6 +1706,10 @@ public final class LibraryStore {
                 tracks: sortedAlbumTracks
             )
             newAlbums.append(album)
+        }
+
+        if tracksModified {
+            self.tracks = workingTracks
         }
 
         // Deduplicate any colliding album IDs to guarantee 100% unique IDs
@@ -4095,6 +4377,7 @@ rebuildAlbumsAndArtists()
     // Save settings asynchronously
     public func saveSettings() {
         HapticManager.shared.isEnabled = self.settings.isHapticsEnabled
+        UserDefaults.standard.set(self.settings.isArtworkRounded, forKey: "isArtworkRounded")
         let currentSettings = self.settings
         let url = self.settingsFileURL
         Task.detached(priority: .utility) {
@@ -4296,6 +4579,11 @@ rebuildAlbumsAndArtists()
            let loadedSearchTracks = try? JSONDecoder().decode([UUID].self, from: data) {
             self.recentSearchPlayedTrackIDs = loadedSearchTracks
         }
+
+        if let lastIDStr = UserDefaults.standard.string(forKey: "last_added_playlist_id_v1"),
+           let lastID = UUID(uuidString: lastIDStr) {
+            self.lastAddedPlaylistID = lastID
+        }
     }
 
     // Rebuilds fast lookup index from loaded artist entities
@@ -4369,7 +4657,23 @@ rebuildAlbumsAndArtists()
                 self.isInitialLoading = false
 
                 if let t = loadedTracks {
-                    self.tracks = t
+                    var tracksWithFolder = t
+                    var didBackfillFolderID = false
+                    let folders = self.settings.linkedFolders
+                    if !folders.isEmpty {
+                        for i in 0..<tracksWithFolder.count {
+                            if tracksWithFolder[i].folderID == nil {
+                                if let f = self.folder(for: tracksWithFolder[i]) {
+                                    tracksWithFolder[i] = tracksWithFolder[i].withFolderID(f.id)
+                                    didBackfillFolderID = true
+                                }
+                            }
+                        }
+                    }
+                    self.tracks = tracksWithFolder
+                    if didBackfillFolderID {
+                        self.saveLibrary()
+                    }
                 }
                 if let a = loadedAlbums, let ar = loadedArtists, !a.isEmpty {
                     self.albums = a
@@ -4394,6 +4698,7 @@ rebuildAlbumsAndArtists()
                     }, uniquingKeysWith: { first, _ in first })
                 }
 
+                self.rebuildFolderStats()
                 self.invalidateSortedCaches()
                 AppLogger.storage.info("Core library loaded instantly: \(self.tracks.count) tracks, \(self.albums.count) albums, \(self.artists.count) artists.")
 

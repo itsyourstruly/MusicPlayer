@@ -33,7 +33,6 @@ public struct MiniPlayerView: View {
                     cornerRadius: 8
                 )
                 .frame(width: 44, height: 44)
-                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                 .shadow(color: Color.black.opacity(0.18), radius: 4, x: 0, y: 2)
 
                 // Track Title & Artist

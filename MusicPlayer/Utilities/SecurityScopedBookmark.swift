@@ -84,14 +84,18 @@ public final class SecurityScopedBookmark: @unchecked Sendable {
             )
 
             activeFolders[folderID] = (url: url, isAccessActive: startedAccessing)
-            self.activeSecurityScopedURL = url
-            self.isAccessActive = startedAccessing
+            if self.activeSecurityScopedURL == nil {
+                self.activeSecurityScopedURL = url
+                self.isAccessActive = startedAccessing
+            }
 
             // Save in map and primary key
             var map = UserDefaults.standard.dictionary(forKey: multiBookmarksKey) as? [String: Data] ?? [:]
             map[folderID.uuidString] = bookmarkData
             UserDefaults.standard.set(map, forKey: multiBookmarksKey)
-            UserDefaults.standard.set(bookmarkData, forKey: userDefaultsKey)
+            if UserDefaults.standard.data(forKey: userDefaultsKey) == nil {
+                UserDefaults.standard.set(bookmarkData, forKey: userDefaultsKey)
+            }
 
             AppLogger.storage.info("Successfully persisted security-scoped bookmark for folder \(folderID) (\(url.lastPathComponent))")
             return bookmarkData
@@ -152,7 +156,7 @@ public final class SecurityScopedBookmark: @unchecked Sendable {
         }
 
         let map = UserDefaults.standard.dictionary(forKey: multiBookmarksKey) as? [String: Data]
-        guard let data = bookmarkData ?? map?[folderID.uuidString] ?? UserDefaults.standard.data(forKey: userDefaultsKey) else {
+        guard let data = bookmarkData ?? map?[folderID.uuidString] else {
             return nil
         }
 
@@ -260,6 +264,67 @@ public final class SecurityScopedBookmark: @unchecked Sendable {
             AppLogger.storage.error("Failed to resolve bookmark: \(error.localizedDescription)")
             return nil
         }
+    }
+
+    /// Ensures security-scoped access is active for the linked folder containing this track, and returns the resolved accessible URL.
+    @discardableResult
+    public func ensureAccess(for fileURL: URL, folderID: UUID? = nil) -> URL {
+        lock.lock()
+        // 1. If folderID matches an active folder, make sure its security scope is active
+        if let fID = folderID {
+            if let entry = activeFolders[fID] {
+                if !entry.isAccessActive {
+                    let didAccess = entry.url.startAccessingSecurityScopedResource()
+                    activeFolders[fID] = (url: entry.url, isAccessActive: didAccess)
+                }
+            } else {
+                lock.unlock()
+                _ = resolveAndAccessBookmark(folderID: fID, bookmarkData: nil)
+                lock.lock()
+            }
+        }
+
+        // 2. Match by canonical and standardized path prefix across activeFolders
+        let normPath = fileURL.resolvingSymlinksInPath().standardizedFileURL.path
+        let rawPath = fileURL.standardizedFileURL.path
+        var matched = false
+
+        for (fID, entry) in activeFolders {
+            let entryCanonical = entry.url.resolvingSymlinksInPath().standardizedFileURL.path
+            let entryRaw = entry.url.standardizedFileURL.path
+            if normPath.hasPrefix(entryCanonical) || rawPath.hasPrefix(entryRaw) || fileURL.path.hasPrefix(entry.url.path) {
+                if !entry.isAccessActive {
+                    let didAccess = entry.url.startAccessingSecurityScopedResource()
+                    activeFolders[fID] = (url: entry.url, isAccessActive: didAccess)
+                }
+                matched = true
+                break
+            }
+        }
+
+        // 3. If not matched, try resolving any bookmarks stored in UserDefaults map
+        if !matched, let map = UserDefaults.standard.dictionary(forKey: multiBookmarksKey) as? [String: Data] {
+            for (uuidStr, data) in map {
+                guard let uID = UUID(uuidString: uuidStr), activeFolders[uID] == nil else { continue }
+                lock.unlock()
+                let resolved = resolveAndAccessBookmark(folderID: uID, bookmarkData: data)
+                lock.lock()
+                if let resolved = resolved {
+                    let rPath = resolved.resolvingSymlinksInPath().standardizedFileURL.path
+                    if normPath.hasPrefix(rPath) || fileURL.path.hasPrefix(resolved.path) {
+                        break
+                    }
+                }
+            }
+        }
+
+        // 4. Ensure primary root is also actively accessed if set
+        if !isAccessActive, let active = activeSecurityScopedURL {
+            isAccessActive = active.startAccessingSecurityScopedResource()
+        }
+        lock.unlock()
+
+        return resolveAccessibleURL(for: fileURL)
     }
 
     /// Dynamically resolves a track's file URL into a valid, reachable URL on the current file system.

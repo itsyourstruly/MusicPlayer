@@ -60,7 +60,10 @@ public struct PlaybackSettingsView: View {
             TypographicToggleRow(
                 title: "CROSSFADE",
                 isOn: $libraryStore.settings.isCrossfadeEnabled,
-                onToggle: { libraryStore.saveSettings() },
+                onToggle: {
+                    playerService.isCrossfadeEnabled = libraryStore.settings.isCrossfadeEnabled
+                    libraryStore.saveSettings()
+                },
                 onLongPress: { activeDetail = SettingOptionCatalog.crossfadeTracks }
             )
 
@@ -84,7 +87,8 @@ public struct PlaybackSettingsView: View {
                         step: 0.5
                     )
                     .tint(libraryStore.settings.appTheme.accentColor)
-                    .onChange(of: libraryStore.settings.crossfadeDuration) { _, _ in
+                    .onChange(of: libraryStore.settings.crossfadeDuration) { _, newDuration in
+                        playerService.crossfadeDuration = newDuration
                         libraryStore.saveSettings()
                     }
                 }

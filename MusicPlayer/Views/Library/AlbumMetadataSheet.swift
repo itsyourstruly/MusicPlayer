@@ -284,7 +284,6 @@ public struct AlbumMetadataSheet: View {
                 cornerRadius: 8
             )
             .frame(width: 86, height: 86)
-            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(album.title)

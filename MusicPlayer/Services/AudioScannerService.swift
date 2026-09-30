@@ -41,6 +41,7 @@ public struct AudioScannerService: Sendable {
 
         let fileManager = FileManager.default
         var audioFileURLs: [URL] = []
+        var fileSizesByPath: [String: Int64] = [:]
         var seenAudioFilePaths = Set<String>()
         var visitedDirectories = Set<String>()
         var isDir: ObjCBool = false
@@ -54,6 +55,9 @@ public struct AudioScannerService: Sendable {
                 let ext = folderURL.pathExtension.lowercased()
                 if supportedExtensions.contains(ext) {
                     audioFileURLs.append(folderURL)
+                    if let res = try? folderURL.resourceValues(forKeys: [.fileSizeKey]), let size = res.fileSize {
+                        fileSizesByPath[folderURL.standardizedFileURL.path] = Int64(size)
+                    }
                 }
             } else {
                 // Recursive directory enumeration with cycle & symlink loop protection
@@ -86,6 +90,9 @@ public struct AudioScannerService: Sendable {
                             let path = fileURL.standardizedFileURL.path
                             if seenAudioFilePaths.insert(path).inserted {
                                 audioFileURLs.append(fileURL)
+                                if let res = try? fileURL.resourceValues(forKeys: [.fileSizeKey]), let size = res.fileSize {
+                                    fileSizesByPath[path] = Int64(size)
+                                }
                             }
                         }
                     }
@@ -93,13 +100,16 @@ public struct AudioScannerService: Sendable {
 
                 // Fallback shallow directory scan if enumerator yielded no files
                 if audioFileURLs.isEmpty {
-                    if let directContents = try? fileManager.contentsOfDirectory(at: folderURL, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]) {
+                    if let directContents = try? fileManager.contentsOfDirectory(at: folderURL, includingPropertiesForKeys: [.fileSizeKey], options: [.skipsHiddenFiles]) {
                         for fileURL in directContents {
                             let ext = fileURL.pathExtension.lowercased()
                             if supportedExtensions.contains(ext) {
                                 let path = fileURL.standardizedFileURL.path
                                 if seenAudioFilePaths.insert(path).inserted {
                                     audioFileURLs.append(fileURL)
+                                    if let res = try? fileURL.resourceValues(forKeys: [.fileSizeKey]), let size = res.fileSize {
+                                        fileSizesByPath[path] = Int64(size)
+                                    }
                                 }
                             }
                         }
@@ -125,18 +135,12 @@ public struct AudioScannerService: Sendable {
                 let isAlbumValid = !cachedTrack.album.isEmpty && !MetadataSanitizer.isUnknownAlbum(cachedTrack.album)
 
                 if isArtistValid && isAlbumValid {
-                    // Fast size check to verify file hasn't been modified on disk
-                    if let cachedSize = cachedTrack.fileInfo?.fileSizeBytes, cachedSize > 0,
-                       let artKey = cachedTrack.artworkKey, !artKey.isEmpty {
-                        if let attr = try? fileManager.attributesOfItem(atPath: fileURL.path),
-                           let currentSize = (attr[.size] as? NSNumber)?.int64Value,
-                           currentSize == cachedSize {
-                            // Only reuse if artwork is confirmed available
-                            if await ArtworkCacheService.shared.hasArtwork(key: artKey) {
-                                scannedTracks.append(cachedTrack)
-                                continue
-                            }
-                        }
+                    let cachedSize = cachedTrack.fileInfo?.fileSizeBytes ?? 0
+                    let currentSize = fileSizesByPath[standardizedPath] ?? ((try? fileManager.attributesOfItem(atPath: fileURL.path)[.size] as? NSNumber)?.int64Value ?? 0)
+
+                    if cachedSize > 0 && currentSize == cachedSize {
+                        scannedTracks.append(cachedTrack)
+                        continue
                     }
                 }
             }

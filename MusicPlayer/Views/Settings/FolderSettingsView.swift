@@ -70,6 +70,7 @@ public struct FolderSettingsView: View {
             switch result {
             case .success(let urls):
                 if let selectedURL = urls.first {
+                    _ = selectedURL.startAccessingSecurityScopedResource()
                     if let folder = folderToChange {
                         Task {
                             await libraryStore.changeFolder(id: folder.id, newURL: selectedURL)
@@ -134,7 +135,9 @@ public struct FolderSettingsView: View {
             SettingOptionDetailSheet(detail: detail)
         }
         .task {
-            await refreshArtworkCacheSize()
+            if artworkCacheSizeBytes == 0 {
+                await refreshArtworkCacheSize()
+            }
         }
     }
 
@@ -176,7 +179,10 @@ public struct FolderSettingsView: View {
     }
 
     private func linkedFolderRow(folder: LinkedFolder) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
+        let isThisScanning = libraryStore.currentlyScanningFolderID == folder.id
+        let isAnotherScanning = libraryStore.isScanning && !isThisScanning
+
+        return VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .center) {
                 Text("LINKED TO \(folder.name.uppercased())")
                     .font(.system(size: 14, weight: .bold, design: .monospaced))
@@ -186,28 +192,38 @@ public struct FolderSettingsView: View {
 
                 Spacer()
 
-                Text("RESCAN")
+                Button {
+                    HapticFeedback.selectionChanged()
+                    Task {
+                        await libraryStore.rescanFolder(id: folder.id)
+                    }
+                } label: {
+                    HStack(spacing: 5) {
+                        if isThisScanning {
+                            ProgressView()
+                                .progressViewStyle(CircularProgressViewStyle(tint: libraryStore.settings.appTheme.accentColor))
+                                .scaleEffect(0.7)
+                                .frame(width: 12, height: 12)
+                            Text("SCANNING...")
+                        } else {
+                            Text("RESCAN")
+                        }
+                    }
                     .font(.system(size: 13, weight: .bold, design: .monospaced))
                     .foregroundStyle(
-                        libraryStore.isScanning
-                            ? libraryStore.settings.appTheme.accentColor.opacity(0.4)
+                        isAnotherScanning
+                            ? libraryStore.settings.appTheme.accentColor.opacity(0.35)
                             : libraryStore.settings.appTheme.accentColor
                     )
                     .contentShape(Rectangle())
-                    .gesture(
-                        libraryStore.isScanning
-                            ? nil
-                            : LongPressGesture(minimumDuration: 0.45)
-                                .onEnded { _ in
-                                    HapticFeedback.notificationSuccess()
-                                    activeDetail = SettingOptionCatalog.rescanFolder
-                                }
-                                .exclusively(before: TapGesture().onEnded {
-                                    Task {
-                                        await libraryStore.rescanFolder(id: folder.id)
-                                    }
-                                })
-                    )
+                }
+                .buttonStyle(.plain)
+                .disabled(libraryStore.isScanning)
+                .contextMenu {
+                    Button("Option Info") {
+                        activeDetail = SettingOptionCatalog.rescanFolder
+                    }
+                }
 
                 // Gear Icon with clean context menu
                 Menu {
@@ -252,52 +268,47 @@ public struct FolderSettingsView: View {
 
     // MARK: - 2. Find Track Tags Button (Opens Unified Tag Finder Sheet)
     private var findTrackTagsButtonSection: some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("FIND TRACK TAGS")
-                    .font(.system(size: 14, weight: .black, design: .monospaced))
-                    .foregroundStyle(Color.black)
+        Button {
+            HapticFeedback.notificationSuccess()
+            showingTagFinderSheet = true
+        } label: {
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("FIND TRACK TAGS")
+                        .font(.system(size: 14, weight: .black, design: .monospaced))
+                        .foregroundStyle(Color.black)
 
-                if libraryStore.isBackgroundCheckingMetadata {
-                    let total = libraryStore.backgroundCheckTotalCount > 0 ? libraryStore.backgroundCheckTotalCount : max(libraryStore.tracks.count, 1)
-                    Text("\(libraryStore.backgroundCheckScannedCount)/\(total)")
-                        .font(.system(size: 10.5, weight: .bold, design: .monospaced))
-                        .foregroundStyle(Color.black.opacity(0.65))
-                } else if libraryStore.isEnrichingMetadata {
-                    let total = libraryStore.enrichTotalCount > 0 ? libraryStore.enrichTotalCount : max(libraryStore.enrichmentDiffs.count, 1)
-                    Text("\(libraryStore.enrichProcessedCount)/\(total)")
-                        .font(.system(size: 10.5, weight: .bold, design: .monospaced))
-                        .foregroundStyle(Color.black.opacity(0.65))
-                } else {
-                    Text("\(libraryStore.visibleEnrichmentDiffs.count) FOUND • \(libraryStore.visibleVerifiedGoodCount) GOOD • \(libraryStore.unmatchedTracksCount) LOST • \(libraryStore.visibleDuplicateGroups.count) DUPES")
-                        .font(.system(size: 10.5, weight: .bold, design: .monospaced))
-                        .foregroundStyle(Color.black.opacity(0.65))
+                    if libraryStore.isBackgroundCheckingMetadata {
+                        let total = libraryStore.backgroundCheckTotalCount > 0 ? libraryStore.backgroundCheckTotalCount : max(libraryStore.tracks.count, 1)
+                        Text("\(libraryStore.backgroundCheckScannedCount)/\(total)")
+                            .font(.system(size: 10.5, weight: .bold, design: .monospaced))
+                            .foregroundStyle(Color.black.opacity(0.65))
+                    } else if libraryStore.isEnrichingMetadata {
+                        let total = libraryStore.enrichTotalCount > 0 ? libraryStore.enrichTotalCount : max(libraryStore.enrichmentDiffs.count, 1)
+                        Text("\(libraryStore.enrichProcessedCount)/\(total)")
+                            .font(.system(size: 10.5, weight: .bold, design: .monospaced))
+                            .foregroundStyle(Color.black.opacity(0.65))
+                    } else {
+                        Text("\(libraryStore.visibleEnrichmentDiffs.count) FOUND • \(libraryStore.visibleVerifiedGoodCount) GOOD • \(libraryStore.unmatchedTracksCount) LOST • \(libraryStore.visibleDuplicateGroups.count) DUPES")
+                            .font(.system(size: 10.5, weight: .bold, design: .monospaced))
+                            .foregroundStyle(Color.black.opacity(0.65))
+                    }
                 }
+
+                Spacer()
+
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundStyle(Color.black.opacity(0.5))
             }
-
-            Spacer()
-
-            Image(systemName: "chevron.right")
-                .font(.system(size: 13, weight: .bold))
-                .foregroundStyle(Color.black.opacity(0.5))
+            .padding(.horizontal, 16)
+            .padding(.vertical, 14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.white)
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .contentShape(Rectangle())
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 14)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.white)
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .contentShape(Rectangle())
-        .gesture(
-            LongPressGesture(minimumDuration: 0.45)
-                .onEnded { _ in
-                    HapticFeedback.notificationSuccess()
-                    activeDetail = SettingOptionCatalog.findTrackTags
-                }
-                .exclusively(before: TapGesture().onEnded {
-                    HapticFeedback.notificationSuccess()
-                    showingTagFinderSheet = true
-                })
-        )
+        .buttonStyle(.plain)
         .contextMenu {
             Button("Option Info") {
                 activeDetail = SettingOptionCatalog.findTrackTags

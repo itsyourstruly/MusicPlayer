@@ -510,6 +510,9 @@ public final class AudioPlayerService {
         let clamped = Float(min(2.0, max(0.25, speed)))
         if let player = player {
             player.defaultRate = clamped
+            if let currentItem = player.currentItem, let currentURL = currentTrack?.url {
+                currentItem.audioTimePitchAlgorithm = appropriateTimePitchAlgorithm(for: currentURL)
+            }
             if playbackStatus == .playing || player.timeControlStatus == .playing {
                 player.rate = clamped
             }
@@ -1195,9 +1198,8 @@ public final class AudioPlayerService {
             await AudioSessionManager.shared.activateSessionIfNeeded()
         }
         
-        // 2. Ensure root folder bookmark is actively accessed and resolve accessible file URL
-        _ = SecurityScopedBookmark.shared.resolveAndAccessBookmark()
-        let resolvedURL = SecurityScopedBookmark.shared.resolveAccessibleURL(for: track.url)
+        // 2. Ensure security-scoped folder access is active and resolve accessible file URL
+        let resolvedURL = SecurityScopedBookmark.shared.ensureAccess(for: track.url, folderID: track.folderID)
         
         // Retain security-scoped access for individual file if applicable
         if activeTrackSecurityScopeURL?.path != resolvedURL.path {
@@ -1206,6 +1208,9 @@ public final class AudioPlayerService {
             if resolvedURL.startAccessingSecurityScopedResource() {
                 activeTrackSecurityScopeURL = resolvedURL
             }
+        }
+        if let fID = track.folderID, let folderURL = SecurityScopedBookmark.shared.url(for: fID) {
+            _ = folderURL.startAccessingSecurityScopedResource()
         }
         
         // Teardown item-specific observers (keeps player-level time observer intact)
@@ -1220,7 +1225,7 @@ public final class AudioPlayerService {
             }
         }
         
-        // Use pre-warmed item if available, otherwise instantiate with studio-grade spectral algorithm for pristine music fidelity
+        // Use pre-warmed item if available, otherwise instantiate with pristine audio algorithm
         let playerItem: AVPlayerItem
         if prewarmedTrackID == track.id, let prewarmed = prewarmedPlayerItem {
             playerItem = prewarmed
@@ -1229,7 +1234,7 @@ public final class AudioPlayerService {
         } else {
             let asset = AVURLAsset(url: resolvedURL, options: [AVURLAssetPreferPreciseDurationAndTimingKey: false])
             playerItem = AVPlayerItem(asset: asset)
-            playerItem.audioTimePitchAlgorithm = .spectral
+            playerItem.audioTimePitchAlgorithm = appropriateTimePitchAlgorithm(for: resolvedURL)
             attachAudioMix(to: playerItem)
         }
         if playerItem.audioMix == nil {
@@ -1308,6 +1313,22 @@ public final class AudioPlayerService {
         
         AppLogger.audio.info("Now playing: \(track.title) by \(track.artist) at \(resolvedURL.path) (rate: \(currentSpeed)x, resumed at: \(resumePosition)s)")
     }
+
+    /// Selects the optimal audio time-pitch algorithm. Uncompressed PCM/WAV audio and standard 1.0x playback
+    /// use timeDomain to prevent silent stalls in AVFoundation, while non-PCM speeds use spectral.
+    public nonisolated static func determineTimePitchAlgorithm(for url: URL, speed: Double) -> AVAudioTimePitchAlgorithm {
+        let ext = url.pathExtension.lowercased()
+        let isPCM = ext == "wav" || ext == "wave" || ext == "aif" || ext == "aiff" || ext == "caf"
+        if isPCM || abs(speed - 1.0) < 0.001 {
+            return .timeDomain
+        } else {
+            return .spectral
+        }
+    }
+
+    private func appropriateTimePitchAlgorithm(for url: URL) -> AVAudioTimePitchAlgorithm {
+        Self.determineTimePitchAlgorithm(for: url, speed: EqualizerManager.shared.playbackSpeed)
+    }
     
     // Attach audio mix DSP tap (10-Band Equalizer & Volume Booster)
     private func attachAudioMix(to playerItem: AVPlayerItem) {
@@ -1381,11 +1402,12 @@ public final class AudioPlayerService {
         }
         
         prewarmTask?.cancel()
+        let speed = EqualizerManager.shared.playbackSpeed
         prewarmTask = Task.detached(priority: .utility) { [weak self] in
-            let resolvedURL = await SecurityScopedBookmark.shared.resolveAccessibleURL(for: next.url)
+            let resolvedURL = SecurityScopedBookmark.shared.ensureAccess(for: next.url, folderID: next.folderID)
             let asset = AVURLAsset(url: resolvedURL, options: [AVURLAssetPreferPreciseDurationAndTimingKey: false])
             let item = AVPlayerItem(asset: asset)
-            item.audioTimePitchAlgorithm = .spectral
+            item.audioTimePitchAlgorithm = AudioPlayerService.determineTimePitchAlgorithm(for: resolvedURL, speed: speed)
             item.preferredForwardBufferDuration = 0.0
             
             // Also prewarm waveform amplitude peaks in background for zero-latency dial rendering
@@ -1694,14 +1716,17 @@ public final class AudioPlayerService {
         crossfadeTask?.cancel()
         
         // File system location for resolved next url
-        let resolvedNextURL = SecurityScopedBookmark.shared.resolveAccessibleURL(for: nextTrack.url)
+        let resolvedNextURL = SecurityScopedBookmark.shared.ensureAccess(for: nextTrack.url, folderID: nextTrack.folderID)
         _ = resolvedNextURL.startAccessingSecurityScopedResource()
+        if let fID = nextTrack.folderID, let fURL = SecurityScopedBookmark.shared.url(for: fID) {
+            _ = fURL.startAccessingSecurityScopedResource()
+        }
         
         // Next asset
         let nextAsset = AVURLAsset(url: resolvedNextURL, options: [AVURLAssetPreferPreciseDurationAndTimingKey: false])
         // Next item
         let nextItem = AVPlayerItem(asset: nextAsset)
-        nextItem.audioTimePitchAlgorithm = .spectral
+        nextItem.audioTimePitchAlgorithm = appropriateTimePitchAlgorithm(for: resolvedNextURL)
         nextItem.preferredForwardBufferDuration = 0.0
         attachAudioMix(to: nextItem)
         
@@ -1878,9 +1903,11 @@ public final class AudioPlayerService {
         teardownItemObservers()
         
         // 3. Resolve accessible URL and prepare incoming player item
-        _ = SecurityScopedBookmark.shared.resolveAndAccessBookmark()
-        let resolvedURL = SecurityScopedBookmark.shared.resolveAccessibleURL(for: nextTrack.url)
+        let resolvedURL = SecurityScopedBookmark.shared.ensureAccess(for: nextTrack.url, folderID: nextTrack.folderID)
         _ = resolvedURL.startAccessingSecurityScopedResource()
+        if let fID = nextTrack.folderID, let fURL = SecurityScopedBookmark.shared.url(for: fID) {
+            _ = fURL.startAccessingSecurityScopedResource()
+        }
         
         let playerItem: AVPlayerItem
         if prewarmedTrackID == nextTrack.id, let prewarmed = prewarmedPlayerItem {
@@ -1890,7 +1917,7 @@ public final class AudioPlayerService {
         } else {
             let asset = AVURLAsset(url: resolvedURL, options: [AVURLAssetPreferPreciseDurationAndTimingKey: false])
             playerItem = AVPlayerItem(asset: asset)
-            playerItem.audioTimePitchAlgorithm = .spectral
+            playerItem.audioTimePitchAlgorithm = appropriateTimePitchAlgorithm(for: resolvedURL)
             attachAudioMix(to: playerItem)
         }
         playerItem.preferredForwardBufferDuration = 0.0
