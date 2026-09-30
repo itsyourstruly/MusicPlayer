@@ -158,8 +158,13 @@ public final class AudioPlayerService {
     @ObservationIgnored private var crossfadeTask: Task<Void, Never>?
     
     @ObservationIgnored private var smoothSkipTask: Task<Void, Never>?
-    @ObservationIgnored private var skipOutgoingPlayer: AVPlayer?
     @ObservationIgnored private var isSmoothSkipping: Bool = false
+    @ObservationIgnored private var pendingSmoothSkipAction: (() -> Void)?
+    
+    @ObservationIgnored private var skipOutgoingPlayer: AVPlayer?
+    @ObservationIgnored private var skipIncomingPlayer: AVPlayer?
+    @ObservationIgnored private var skipTransitionTask: Task<Void, Never>?
+    @ObservationIgnored private var isStaggeredTransitioning: Bool = false
     
     @ObservationIgnored private var playPauseFadeTask: Task<Void, Never>?
     @ObservationIgnored private var isFadingOutPause: Bool = false
@@ -172,7 +177,6 @@ public final class AudioPlayerService {
     @ObservationIgnored private var prewarmedTrackID: UUID?
     @ObservationIgnored private var prewarmedPlayerItem: AVPlayerItem?
     @ObservationIgnored private var prewarmTask: Task<Void, Never>?
-    @ObservationIgnored private var lastSkipTimestamp: TimeInterval = 0
     
     // MARK: - Playback Position Helpers
     
@@ -313,6 +317,11 @@ public final class AudioPlayerService {
     deinit {
         crossfadeTask?.cancel()
         smoothSkipTask?.cancel()
+        skipTransitionTask?.cancel()
+        skipOutgoingPlayer?.pause()
+        skipOutgoingPlayer = nil
+        skipIncomingPlayer?.pause()
+        skipIncomingPlayer = nil
         playPauseFadeTask?.cancel()
         prewarmTask?.cancel()
         sleepTimerTask?.cancel()
@@ -404,8 +413,19 @@ public final class AudioPlayerService {
     /// Plays a track within the active queue: inserts immediately after the current song and starts playback.
     public func playInCurrentQueue(track: Track) {
         if smoothSkippingEnabled && playbackStatus == .playing && currentTrack?.id != track.id {
-            smoothSkip {
-                self.performPlayInCurrentQueue(track: track)
+            guard !queue.isEmpty, let idx = currentIndex else {
+                performPlayInCurrentQueue(track: track)
+                return
+            }
+            let insertIndex = idx + 1
+            startStaggeredSkipTransition(to: track, nextIndex: insertIndex) { [weak self] in
+                guard let self = self else { return }
+                if insertIndex <= self.queue.count {
+                    self.queue.insert(track, at: insertIndex)
+                } else {
+                    self.queue.append(track)
+                }
+                self.currentIndex = insertIndex
             }
             return
         }
@@ -414,6 +434,7 @@ public final class AudioPlayerService {
 
     private func performPlayInCurrentQueue(track: Track) {
         cancelCrossfade()
+        cancelStaggeredTransition()
         // Ensure preconditions are met before proceeding
         guard !queue.isEmpty, let idx = currentIndex else {
             performPlay(track: track, inQueue: [], startIndex: nil)
@@ -437,8 +458,14 @@ public final class AudioPlayerService {
             return
         }
         if smoothSkippingEnabled && playbackStatus == .playing && currentTrack?.id != track.id {
-            smoothSkip {
-                self.performPlay(track: track, inQueue: newQueue, startIndex: startIndex)
+            let targetIdx = startIndex ?? newQueue.firstIndex(where: { $0.id == track.id })
+            startStaggeredSkipTransition(to: track, nextIndex: targetIdx) { [weak self] in
+                guard let self = self else { return }
+                if !newQueue.isEmpty {
+                    self.originalQueue = newQueue
+                    self.queue = newQueue
+                    self.currentIndex = targetIdx
+                }
             }
             return
         }
@@ -526,16 +553,16 @@ public final class AudioPlayerService {
         let masterVol = volume
         if smoothSkippingEnabled && masterVol > 0 && !isMuted {
             isFadingInPlay = true
-            // If reversing an in-flight pause fade, resume from current attenuated volume; otherwise start from complete silence (0.0)
-            let startVol = wasFadingOut ? min(player.volume, masterVol) : 0.0
+            // If reversing an in-flight pause fade, resume from current attenuated volume; otherwise start from a subtle audible level (20%) so sound is heard immediately
+            let startVol = wasFadingOut ? min(player.volume, masterVol) : (masterVol * 0.20)
             player.volume = startVol
             player.play()
             playbackStatus = .playing
             updateNowPlayingPlaybackState()
 
             playPauseFadeTask = Task { @MainActor in
-                let steps = 45
-                let stepDuration: UInt64 = 20_000_000 // 20ms per step -> 900ms total smooth fade-in duration
+                let steps = 8
+                let stepDuration: UInt64 = 15_000_000 // 15ms per step -> 120ms total snappy micro-fade
 
                 for step in 1...steps {
                     if Task.isCancelled { break }
@@ -543,9 +570,7 @@ public final class AudioPlayerService {
                     if Task.isCancelled { break }
 
                     let progress = Float(step) / Float(steps)
-                    // Slower, smoother ramp (smoothstep): starts gently from silence, ramps up smoothly, then seamlessly flattens to master volume
-                    let factor = progress * progress * (3.0 - 2.0 * progress)
-                    let currentVol = startVol + (masterVol - startVol) * factor
+                    let currentVol = startVol + (masterVol - startVol) * progress
                     player.volume = min(masterVol, max(0.0, currentVol))
                 }
 
@@ -570,13 +595,11 @@ public final class AudioPlayerService {
         isTransitioningTrack = false
         transitionTimeoutTask?.cancel()
         cancelCrossfade()
+        cancelStaggeredTransition()
         smoothSkipTask?.cancel()
         smoothSkipTask = nil
-        if let outgoing = skipOutgoingPlayer {
-            outgoing.pause()
-            outgoing.volume = 0
-            skipOutgoingPlayer = nil
-        }
+        isSmoothSkipping = false
+        pendingSmoothSkipAction = nil
 
         playPauseFadeTask?.cancel()
         playPauseFadeTask = nil
@@ -590,19 +613,14 @@ public final class AudioPlayerService {
 
         playbackStatus = .paused
         updateNowPlayingPlaybackState()
-
-        Task.detached(priority: .utility) { [weak self] in
-            await MainActor.run {
-                self?.saveCurrentPlaybackPositionIfNeeded()
-            }
-        }
+        saveCurrentPlaybackPositionIfNeeded()
 
         let startVol = player.volume
         if smooth && smoothSkippingEnabled && startVol > 0 && !isMuted {
             isFadingOutPause = true
             playPauseFadeTask = Task { @MainActor in
-                let steps = 18
-                let stepDuration: UInt64 = 20_000_000 // 20ms per step -> 360ms total fade duration (slightly faster)
+                let steps = 6
+                let stepDuration: UInt64 = 15_000_000 // 15ms per step -> 90ms total snappy fade duration
 
                 for step in 1...steps {
                     if Task.isCancelled { break }
@@ -610,16 +628,15 @@ public final class AudioPlayerService {
                     if Task.isCancelled { break }
 
                     let progress = Float(step) / Float(steps)
-                    // Drops faster at first, then flattens out smoothly at zero
                     let factor = (1.0 - progress) * (1.0 - progress)
                     player.volume = min(self.volume, max(0.0, startVol * factor))
                 }
 
                 guard !Task.isCancelled else { return }
                 player.pause()
-                player.volume = 0.0 // Keep player at 0.0 while paused so subsequent resume never starts with a sudden burst
+                player.volume = 0.0
                 self.isFadingOutPause = false
-                AppLogger.audio.info("Playback smoothly paused with fast-start ease-out fade.")
+                AppLogger.audio.info("Playback smoothly paused.")
             }
         } else {
             isFadingOutPause = false
@@ -630,24 +647,48 @@ public final class AudioPlayerService {
     }
     
     /// Advances to the next track in the queue, prioritizing Play Next before regular upcoming items.
-    /// When smooth skipping is enabled, fades out the current track before loading and fading in the next.
     public func next() {
         if smoothSkippingEnabled && playbackStatus == .playing {
-            smoothSkip {
-                self.performNext()
+            if let (nextSong, nextIdx, commit) = getNextTrackInfo() {
+                startStaggeredSkipTransition(to: nextSong, nextIndex: nextIdx, commitQueueAction: commit)
+                return
             }
-            return
         }
         performNext()
     }
     
+    private func getNextTrackInfo() -> (track: Track, index: Int?, commit: () -> Void)? {
+        // 1. Dedicated Play Next queue
+        if !playNextQueue.isEmpty {
+            let nextSong = playNextQueue[0]
+            return (nextSong, currentIndex, { [weak self] in
+                guard let self = self, !self.playNextQueue.isEmpty else { return }
+                self.playNextQueue.removeFirst()
+            })
+        }
+        
+        // 2. Standard queue
+        guard !queue.isEmpty, let idx = currentIndex else { return nil }
+        let nextIdx = idx + 1
+        if nextIdx < queue.count {
+            return (queue[nextIdx], nextIdx, { [weak self] in
+                self?.currentIndex = nextIdx
+            })
+        } else if repeatMode == .all {
+            return (queue[0], 0, { [weak self] in
+                self?.currentIndex = 0
+            })
+        }
+        return nil
+    }
+
     // Perform next
     private func performNext() {
         cancelCrossfade()
+        cancelStaggeredTransition()
         
         // 1. Play from dedicated Play Next queue if available
         if !playNextQueue.isEmpty {
-            // Next song
             let nextSong = playNextQueue.removeFirst()
             loadAndPlay(track: nextSong)
             return
@@ -656,7 +697,6 @@ public final class AudioPlayerService {
         // 2. Otherwise advance in standard queue
         guard !queue.isEmpty, let idx = currentIndex else { return }
         
-        // Next idx
         let nextIdx = idx + 1
         if nextIdx < queue.count {
             currentIndex = nextIdx
@@ -665,8 +705,7 @@ public final class AudioPlayerService {
             currentIndex = 0
             loadAndPlay(track: queue[0])
         } else {
-            // Reached end of queue without repeat all
-            pause()
+            pause(smooth: false)
             seek(to: 0)
             playbackStatus = .stopped
             AppLogger.audio.info("Reached end of queue.")
@@ -674,20 +713,9 @@ public final class AudioPlayerService {
     }
     
     /// Moves to the previous track or restarts the current track.
-    /// When smooth skipping is enabled, fades out before switching.
     public func previous() {
-        if smoothSkippingEnabled && playbackStatus == .playing {
-            smoothSkip {
-                self.performPrevious()
-            }
-            return
-        }
-        performPrevious()
-    }
-    
-    // Perform previous
-    private func performPrevious() {
         cancelCrossfade()
+        cancelStaggeredTransition()
         let speed = Float(EqualizerManager.shared.playbackSpeed)
         // If track has been playing for more than 3 seconds, restart and play it
         if currentTime > 3.0 {
@@ -698,16 +726,48 @@ public final class AudioPlayerService {
             return
         }
         
-        // Ensure preconditions are met before proceeding
+        if smoothSkippingEnabled && playbackStatus == .playing {
+            if let (prevSong, prevIdx, commit) = getPreviousTrackInfo() {
+                startStaggeredSkipTransition(to: prevSong, nextIndex: prevIdx, commitQueueAction: commit)
+                return
+            }
+        }
+        performPrevious()
+    }
+    
+    private func getPreviousTrackInfo() -> (track: Track, index: Int?, commit: () -> Void)? {
+        guard !queue.isEmpty, let idx = currentIndex else { return nil }
+        let prevIdx = idx - 1
+        if prevIdx >= 0 {
+            return (queue[prevIdx], prevIdx, { [weak self] in
+                self?.currentIndex = prevIdx
+            })
+        } else if repeatMode == .all {
+            let lastIdx = queue.count - 1
+            return (queue[lastIdx], lastIdx, { [weak self] in
+                self?.currentIndex = lastIdx
+            })
+        }
+        return nil
+    }
+
+    // Perform previous
+    private func performPrevious() {
+        cancelCrossfade()
+        cancelStaggeredTransition()
         guard !queue.isEmpty, let idx = currentIndex else { return }
         
-        // Prev idx
         let prevIdx = idx - 1
         if prevIdx >= 0 {
             currentIndex = prevIdx
             loadAndPlay(track: queue[prevIdx])
+        } else if repeatMode == .all {
+            let lastIdx = queue.count - 1
+            currentIndex = lastIdx
+            loadAndPlay(track: queue[lastIdx])
         } else {
             seek(to: 0)
+            let speed = Float(EqualizerManager.shared.playbackSpeed)
             player?.defaultRate = speed
             player?.play()
             playbackStatus = .playing
@@ -731,7 +791,7 @@ public final class AudioPlayerService {
         AppLogger.audio.debug("Seeking to \(String(format: "%.2f", clampedTime))s (duration: \(String(format: "%.2f", self.duration))s)")
         
         // Dynamically match the track asset's native timescale (e.g. 48000 for 48k car audio, 44100, etc.)
-        let timescale = player.currentItem?.asset.duration.timescale ?? 600
+        let timescale = player.currentItem?.duration.timescale ?? 600
         let targetCMTime = CMTime(seconds: clampedTime, preferredTimescale: timescale)
         
         // If not actively playing (e.g. paused or stopped), seek directly without volume micro-fading
@@ -741,11 +801,11 @@ public final class AudioPlayerService {
             isSmoothSeeking = false
             
             player.seek(to: targetCMTime, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
-                guard let self = self else {
-                    completion?()
-                    return
-                }
-                Task { @MainActor in
+                Task { @MainActor [weak self] in
+                    guard let self = self else {
+                        completion?()
+                        return
+                    }
                     self.isSeeking = false
                     self.updateNowPlayingElapsedTime()
                     AppLogger.audio.debug("Paused seek finished at \(String(format: "%.2f", self.currentTime))s")
@@ -763,11 +823,11 @@ public final class AudioPlayerService {
             isSmoothSeeking = false
             let tolerance = CMTime(seconds: 0.03, preferredTimescale: timescale)
             player.seek(to: targetCMTime, toleranceBefore: tolerance, toleranceAfter: tolerance) { [weak self] _ in
-                guard let self = self else {
-                    completion?()
-                    return
-                }
-                Task { @MainActor in
+                Task { @MainActor [weak self] in
+                    guard let self = self else {
+                        completion?()
+                        return
+                    }
                     self.isSeeking = false
                     self.updateNowPlayingElapsedTime()
                     completion?()
@@ -790,7 +850,7 @@ public final class AudioPlayerService {
             // Phase 2: Dispatch seek immediately with high-performance tolerance
             let tolerance = CMTime(seconds: 0.03, preferredTimescale: timescale)
             activePlayer.seek(to: targetCMTime, toleranceBefore: tolerance, toleranceAfter: tolerance) { [weak self] _ in
-                Task { @MainActor in
+                Task { @MainActor [weak self] in
                     guard let self = self else { return }
                     self.isSmoothSeeking = false
                     self.isSeeking = false
@@ -976,15 +1036,16 @@ public final class AudioPlayerService {
     public func playFromPlayNext(at index: Int) {
         // Ensure preconditions are met before proceeding
         guard playNextQueue.indices.contains(index) else { return }
-        // Track
-        let track = playNextQueue.remove(at: index)
+        let track = playNextQueue[index]
         if smoothSkippingEnabled && playbackStatus == .playing && currentTrack?.id != track.id {
-            smoothSkip {
-                self.loadAndPlay(track: track)
+            startStaggeredSkipTransition(to: track, nextIndex: currentIndex) { [weak self] in
+                guard let self = self, self.playNextQueue.indices.contains(index) else { return }
+                self.playNextQueue.remove(at: index)
             }
             return
         }
-        loadAndPlay(track: track)
+        let removed = playNextQueue.remove(at: index)
+        loadAndPlay(track: removed)
     }
     
     /// Appends a track to the end of the current queue.
@@ -1023,17 +1084,15 @@ public final class AudioPlayerService {
     public func stopAndClear() {
         saveCurrentPlaybackPositionIfNeeded()
         cancelCrossfade()
+        cancelStaggeredTransition()
         smoothSkipTask?.cancel()
         smoothSkipTask = nil
+        isSmoothSkipping = false
+        pendingSmoothSkipAction = nil
         playPauseFadeTask?.cancel()
         playPauseFadeTask = nil
         isFadingOutPause = false
         isFadingInPlay = false
-        if let outgoing = skipOutgoingPlayer {
-            outgoing.pause()
-            outgoing.volume = 0
-            skipOutgoingPlayer = nil
-        }
         prewarmTask?.cancel()
         prewarmTask = nil
         prewarmedTrackID = nil
@@ -1094,9 +1153,8 @@ public final class AudioPlayerService {
         guard queue.indices.contains(index) else { return }
         let track = queue[index]
         if smoothSkippingEnabled && playbackStatus == .playing && currentTrack?.id != track.id {
-            smoothSkip {
-                self.currentIndex = index
-                self.loadAndPlay(track: track)
+            startStaggeredSkipTransition(to: track, nextIndex: index) { [weak self] in
+                self?.currentIndex = index
             }
             return
         }
@@ -1177,6 +1235,7 @@ public final class AudioPlayerService {
         if playerItem.audioMix == nil {
             attachAudioMix(to: playerItem)
         }
+        playerItem.preferredForwardBufferDuration = 0.0
         
         if resumePosition > 0 {
             let initialCMTime = CMTime(seconds: resumePosition, preferredTimescale: 600)
@@ -1215,21 +1274,21 @@ public final class AudioPlayerService {
 
         if smoothSkippingEnabled && !isSmoothSkipping && volume > 0 && !isMuted {
             isFadingInPlay = true
-            player?.volume = 0.0
-            player?.play()
             let masterVol = self.volume
+            let initialVol = masterVol * 0.20
+            player?.volume = initialVol
+            player?.play()
             playPauseFadeTask?.cancel()
             playPauseFadeTask = Task { @MainActor in
-                let steps = 45
-                let stepDuration: UInt64 = 20_000_000 // 20ms per step -> 900ms total smooth fade-in duration
+                let steps = 6
+                let stepDuration: UInt64 = 12_000_000 // 12ms per step -> 72ms total snappy micro-fade
                 for step in 1...steps {
                     if Task.isCancelled { break }
                     try? await Task.sleep(nanoseconds: stepDuration)
                     if Task.isCancelled { break }
                     let progress = Float(step) / Float(steps)
-                    // Slower, smoother ramp (smoothstep): starts gently from silence, ramps up smoothly, then seamlessly flattens to master volume
-                    let factor = progress * progress * (3.0 - 2.0 * progress)
-                    self.player?.volume = min(masterVol, max(0.0, masterVol * factor))
+                    let currentVol = initialVol + (masterVol - initialVol) * progress
+                    self.player?.volume = min(masterVol, max(0.0, currentVol))
                 }
                 guard !Task.isCancelled else { return }
                 self.player?.volume = masterVol
@@ -1267,7 +1326,7 @@ public final class AudioPlayerService {
         if playerItem.audioMix != nil { return }
 
         // Match audio processing tap to valid audio tracks
-        let audioTracks = playerItem.asset.tracks(withMediaType: .audio)
+        let audioTracks = playerItem.tracks.compactMap { $0.assetTrack }.filter { $0.mediaType == .audio }
         guard !audioTracks.isEmpty else {
             // Tracks not ready yet; will be attached when item transitions to readyToPlay
             return
@@ -1323,10 +1382,11 @@ public final class AudioPlayerService {
         
         prewarmTask?.cancel()
         prewarmTask = Task.detached(priority: .utility) { [weak self] in
-            let resolvedURL = SecurityScopedBookmark.shared.resolveAccessibleURL(for: next.url)
+            let resolvedURL = await SecurityScopedBookmark.shared.resolveAccessibleURL(for: next.url)
             let asset = AVURLAsset(url: resolvedURL, options: [AVURLAssetPreferPreciseDurationAndTimingKey: false])
             let item = AVPlayerItem(asset: asset)
             item.audioTimePitchAlgorithm = .spectral
+            item.preferredForwardBufferDuration = 0.0
             
             // Also prewarm waveform amplitude peaks in background for zero-latency dial rendering
             _ = await AudioWaveformSpectrogramGenerator.shared.fetchSubSecondWaveformPeaks(
@@ -1373,7 +1433,7 @@ public final class AudioPlayerService {
     private func setupPlayerObservers(for player: AVPlayer) {
         playerTimeControlObserver?.invalidate()
         playerTimeControlObserver = player.observe(\.timeControlStatus, options: [.new]) { [weak self] p, _ in
-            Task { @MainActor in
+            Task { @MainActor [weak self] in
                 guard let self = self else { return }
                 switch p.timeControlStatus {
                 case .playing:
@@ -1383,8 +1443,8 @@ public final class AudioPlayerService {
                     self.playbackStatus = .playing
                     self.updateNowPlayingPlaybackState()
                 case .paused:
-                    // If currently loading / replacing a track item, seeking, switching routes, or smoothly fading out, do not let the transient state trigger an unexpected pause
-                    if self.isTransitioningTrack || self.isSeeking || self.isRoutingChanging || self.isFadingOutPause {
+                    // If currently loading / replacing a track item, seeking, switching routes, smoothly fading out, or transitioning tracks, do not let the transient state trigger an unexpected pause
+                    if self.isTransitioningTrack || self.isSeeking || self.isRoutingChanging || self.isFadingOutPause || self.isSmoothSkipping || self.isStaggeredTransitioning {
                         // Safety: if playback status is .playing but the player is actually paused,
                         // schedule a recovery attempt after a delay to prevent permanent stall
                         if self.playbackStatus == .playing {
@@ -1430,7 +1490,7 @@ public final class AudioPlayerService {
     private func setupPlayerItemObservers(for playerItem: AVPlayerItem, track: Track) {
         // 1. Observe playerItem.status
         itemStatusObserver = playerItem.observe(\.status, options: [.new, .initial]) { [weak self] item, _ in
-            Task { @MainActor in
+            Task { @MainActor [weak self] in
                 guard let self = self else { return }
                 switch item.status {
                 case .readyToPlay:
@@ -1475,7 +1535,7 @@ public final class AudioPlayerService {
             object: playerItem,
             queue: .main
         ) { [weak self] _ in
-            Task { @MainActor in
+            Task { @MainActor [weak self] in
                 self?.handleTrackEnded()
             }
         }
@@ -1486,9 +1546,10 @@ public final class AudioPlayerService {
             object: playerItem,
             queue: .main
         ) { [weak self] notification in
-            Task { @MainActor in
-                let error = notification.userInfo?[AVPlayerItemFailedToPlayToEndTimeErrorKey] as? Error
-                AppLogger.audio.warning("AVPlayerItem playback error: \(error?.localizedDescription ?? "unknown error")")
+            let error = notification.userInfo?[AVPlayerItemFailedToPlayToEndTimeErrorKey] as? Error
+            let errorDesc = error?.localizedDescription ?? "unknown error"
+            Task { @MainActor [weak self] in
+                AppLogger.audio.warning("AVPlayerItem playback error: \(errorDesc)")
                 guard let self = self else { return }
 
                 // If playback failed while audio processing tap was attached, the connected output route
@@ -1641,11 +1702,12 @@ public final class AudioPlayerService {
         // Next item
         let nextItem = AVPlayerItem(asset: nextAsset)
         nextItem.audioTimePitchAlgorithm = .spectral
+        nextItem.preferredForwardBufferDuration = 0.0
         attachAudioMix(to: nextItem)
         
         // Incoming player
         let incomingPlayer = AVPlayer(playerItem: nextItem)
-        incomingPlayer.automaticallyWaitsToMinimizeStalling = false
+        incomingPlayer.automaticallyWaitsToMinimizeStalling = true
         incomingPlayer.allowsExternalPlayback = true
         #if os(iOS)
         incomingPlayer.usesExternalPlaybackWhileExternalScreenIsActive = true
@@ -1744,105 +1806,217 @@ public final class AudioPlayerService {
         }
     }
     
-    /// Transitions in the next track first, then fades out the current playing track.
-    /// Dual players play concurrently so the transition is fluid, uninterrupted, and pop-free.
-    private func smoothSkip(then action: @escaping () -> Void) {
-        smoothSkipTask?.cancel()
-        smoothSkipTask = nil
+    /// Transitions cleanly between tracks when smooth skipping is enabled using a 2-phase staggered envelope:
+    /// Phase 1: Incoming track begins playback at 0.0 volume and smoothly fades in first to master volume while current track continues playing.
+    /// Phase 2: Once the incoming track is at full volume, current track fades out second to 0.0, pauses, unloads, and completes handoff.
+    private func startStaggeredSkipTransition(
+        to nextTrack: Track,
+        nextIndex: Int?,
+        commitQueueAction: @escaping () -> Void
+    ) {
+        cancelCrossfade()
         
-        let now = ProcessInfo.processInfo.systemUptime
-        let isRapidSpam = (now - lastSkipTimestamp) < 0.38
-        lastSkipTimestamp = now
-        
-        // Immediately pause and clean up any prior outgoing player from a rapid previous skip
-        if let prevOutgoing = skipOutgoingPlayer {
-            prevOutgoing.pause()
-            prevOutgoing.volume = 0
-            skipOutgoingPlayer = nil
-        }
-        
-        // If rapidly spamming skips, execute action immediately with master volume
-        // to keep playback uninterrupted
-        if isRapidSpam {
-            self.isSmoothSkipping = false
-            action()
-            self.player?.volume = self.volume
-            return
+        // 1. Rapid skip cleanup: if a transition is already in flight, cleanly terminate it without pop
+        if isStaggeredTransitioning {
+            skipTransitionTask?.cancel()
+            skipTransitionTask = nil
+            
+            if let outgoing = skipOutgoingPlayer {
+                outgoing.volume = 0.0
+                outgoing.pause()
+                outgoing.replaceCurrentItem(with: nil)
+                self.skipOutgoingPlayer = nil
+            }
+            
+            if let incoming = skipIncomingPlayer {
+                incoming.volume = 0.0
+                incoming.pause()
+                incoming.replaceCurrentItem(with: nil)
+                self.skipIncomingPlayer = nil
+            }
+            
+            if let token = fadeTimeObserverToken {
+                player?.removeTimeObserver(token)
+                fadeTimeObserverToken = nil
+            }
         }
         
         guard let outgoingPlayer = self.player, playbackStatus == .playing else {
-            action()
+            commitQueueAction()
+            loadAndPlay(track: nextTrack)
             return
         }
         
-        // Retain outgoing player so it continues playing through the transition
-        self.skipOutgoingPlayer = outgoingPlayer
-        let masterVolume = self.volume
+        // 2. Commit queue updates synchronously and update UI immediately (0ms delay)
+        commitQueueAction()
+        self.isStaggeredTransitioning = true
+        self.isTransitioningTrack = true
+        self.transitionTimeoutTask?.cancel()
+        self.transitionTimeoutTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            self?.isTransitioningTrack = false
+            self?.isStaggeredTransitioning = false
+        }
         
-        // Detach observers from outgoing player before switching
-        if let token = timeObserverToken {
+        self.currentTrack = nextTrack
+        self.duration = nextTrack.duration
+        self.currentTime = 0.0
+        self.playbackStatus = .playing
+        self.hasCountedCurrentPlay = false
+        self.playbackAccumulatedTime = 0
+        self.setupNowPlayingInfo(for: nextTrack)
+        
+        // Retain outgoing player
+        self.skipOutgoingPlayer = outgoingPlayer
+        let masterVol = self.volume
+        
+        // Remove time observer from outgoing player so UI tracks incoming track from 0:00
+        if let token = self.timeObserverToken {
             outgoingPlayer.removeTimeObserver(token)
-            timeObserverToken = nil
+            self.timeObserverToken = nil
         }
         teardownItemObservers()
         
-        // Temporarily nil self.player and mark isSmoothSkipping so loadAndPlay creates
-        // a fresh AVPlayer with volume = 0, avoiding any initial audio pop/blast
-        self.player = nil
-        self.isSmoothSkipping = true
+        // 3. Resolve accessible URL and prepare incoming player item
+        _ = SecurityScopedBookmark.shared.resolveAndAccessBookmark()
+        let resolvedURL = SecurityScopedBookmark.shared.resolveAccessibleURL(for: nextTrack.url)
+        _ = resolvedURL.startAccessingSecurityScopedResource()
         
-        // Load the next track (triggers loadAndPlay)
-        action()
+        let playerItem: AVPlayerItem
+        if prewarmedTrackID == nextTrack.id, let prewarmed = prewarmedPlayerItem {
+            playerItem = prewarmed
+            prewarmedTrackID = nil
+            prewarmedPlayerItem = nil
+        } else {
+            let asset = AVURLAsset(url: resolvedURL, options: [AVURLAssetPreferPreciseDurationAndTimingKey: false])
+            playerItem = AVPlayerItem(asset: asset)
+            playerItem.audioTimePitchAlgorithm = .spectral
+            attachAudioMix(to: playerItem)
+        }
+        playerItem.preferredForwardBufferDuration = 0.0
         
-        self.isSmoothSkipping = false
+        // 4. Instantiate incoming player with 0 volume and immediate buffering
+        let incoming = AVPlayer(playerItem: playerItem)
+        incoming.automaticallyWaitsToMinimizeStalling = false
+        incoming.allowsExternalPlayback = true
+        #if os(iOS)
+        incoming.usesExternalPlaybackWhileExternalScreenIsActive = true
+        #endif
+        incoming.volume = 0.0
+        incoming.isMuted = isMuted
+        let speed = Float(EqualizerManager.shared.playbackSpeed)
+        incoming.defaultRate = speed
+        self.skipIncomingPlayer = incoming
         
-        guard let incomingPlayer = self.player else {
-            outgoingPlayer.pause()
-            outgoingPlayer.volume = 0
-            skipOutgoingPlayer = nil
-            return
+        // Attach time observer to incoming player so dial and progress bar track smoothly
+        let interval = CMTime(seconds: 0.08, preferredTimescale: 600)
+        self.fadeTimeObserverToken = incoming.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self] time in
+            Task { @MainActor [weak self] in
+                guard let self = self, !self.isSeeking else { return }
+                let seconds = CMTimeGetSeconds(time)
+                if !seconds.isNaN && !seconds.isInfinite {
+                    self.currentTime = seconds
+                }
+            }
         }
         
-        // 2-Phase Smooth Transition:
-        // Phase 1: Incoming track fades in from 0 to masterVolume while current track plays at full volume
-        // Phase 2: Once incoming track is fully faded in, current playing track fades out to 0 and pauses
-        smoothSkipTask = Task { @MainActor in
-            let steps = 16
-            let stepDuration: UInt64 = 25_000_000 // 25ms per step -> 400ms per phase (800ms total smooth transition)
+        // Start incoming track immediately at volume 0.0
+        incoming.play()
+        
+        // 5. Run 2-Phase Staggered Envelope:
+        // Phase 1: Incoming track fades in from 0.0 to masterVol while current track plays at full volume
+        // Phase 2: Once incoming track is fully faded in, outgoing track fades out to 0.0, pauses, and unloads
+        skipTransitionTask = Task { @MainActor [weak self] in
+            guard let self = self else { return }
             
-            // Phase 1: Next track transitions in from 0 to masterVolume while current track plays (starts slower, ramps up, flattens out)
-            for step in 1...steps {
+            // --- Phase 1: Next track fades in first while current track plays at full volume (120ms: 8 steps * 15ms) ---
+            let fadeInSteps = 8
+            let fadeInDuration: UInt64 = 15_000_000
+            for step in 1...fadeInSteps {
                 if Task.isCancelled { break }
-                try? await Task.sleep(nanoseconds: stepDuration)
+                try? await Task.sleep(nanoseconds: fadeInDuration)
                 if Task.isCancelled { break }
-                let progress = Float(step) / Float(steps)
-                let factor = progress * progress * (3.0 - 2.0 * progress)
-                incomingPlayer.volume = factor * masterVolume
-                outgoingPlayer.volume = masterVolume
+                let progress = Float(step) / Float(fadeInSteps)
+                incoming.volume = min(masterVol, max(0.0, masterVol * progress))
+                outgoingPlayer.volume = masterVol
             }
             
             guard !Task.isCancelled else { return }
-            incomingPlayer.volume = masterVolume
+            incoming.volume = masterVol
+            outgoingPlayer.volume = masterVol
             
-            // Phase 2: Current playing track fades out to 0 while next track plays at full volume (starts slower, ramps down, flattens out into silence)
-            for step in 1...steps {
+            // --- Phase 2: Current track fades out second while next track plays at full volume (105ms: 7 steps * 15ms) ---
+            let fadeOutSteps = 7
+            let fadeOutDuration: UInt64 = 15_000_000
+            for step in 1...fadeOutSteps {
                 if Task.isCancelled { break }
-                try? await Task.sleep(nanoseconds: stepDuration)
+                try? await Task.sleep(nanoseconds: fadeOutDuration)
                 if Task.isCancelled { break }
-                let progress = Float(step) / Float(steps)
-                let factor = 1.0 - (progress * progress * (3.0 - 2.0 * progress))
-                outgoingPlayer.volume = factor * masterVolume
-                incomingPlayer.volume = masterVolume
+                let progress = Float(step) / Float(fadeOutSteps)
+                outgoingPlayer.volume = max(0.0, masterVol * (1.0 - progress))
+                incoming.volume = masterVol
             }
             
             guard !Task.isCancelled else { return }
             
-            // Finalize: incoming is at full volume, outgoing is silenced and paused
-            incomingPlayer.volume = masterVolume
-            outgoingPlayer.pause()
+            // Finalize Handoff
             outgoingPlayer.volume = 0.0
+            outgoingPlayer.pause()
+            outgoingPlayer.replaceCurrentItem(with: nil)
+            
+            if let token = self.fadeTimeObserverToken {
+                incoming.removeTimeObserver(token)
+                self.fadeTimeObserverToken = nil
+            }
+            
+            self.teardownPlayerObservers()
+            self.player = incoming
+            self.player?.volume = masterVol
+            self.player?.isMuted = self.isMuted
             self.skipOutgoingPlayer = nil
+            self.skipIncomingPlayer = nil
+            self.isStaggeredTransitioning = false
+            self.isTransitioningTrack = false
+            self.transitionTimeoutTask?.cancel()
+            
+            let currentSec = CMTimeGetSeconds(incoming.currentTime())
+            if !currentSec.isNaN && !currentSec.isInfinite {
+                self.currentTime = currentSec
+            }
+            self.updateNowPlayingElapsedTime()
+            
+            EqualizerManager.shared.trackWillPlay(track: nextTrack)
+            self.setupPlayerItemObservers(for: playerItem, track: nextTrack)
+            self.setupPeriodicTimeObserver()
+            self.setupPlayerObservers(for: incoming)
+            self.prewarmNextTrackIfNeeded()
         }
+    }
+    
+    private func cancelStaggeredTransition() {
+        skipTransitionTask?.cancel()
+        skipTransitionTask = nil
+        
+        if let outgoing = skipOutgoingPlayer {
+            outgoing.volume = 0.0
+            outgoing.pause()
+            outgoing.replaceCurrentItem(with: nil)
+            skipOutgoingPlayer = nil
+        }
+        if let incoming = skipIncomingPlayer {
+            if player !== incoming {
+                incoming.volume = 0.0
+                incoming.pause()
+                incoming.replaceCurrentItem(with: nil)
+            }
+            skipIncomingPlayer = nil
+        }
+        if let token = fadeTimeObserverToken {
+            skipIncomingPlayer?.removeTimeObserver(token)
+            fadePlayer?.removeTimeObserver(token)
+            fadeTimeObserverToken = nil
+        }
+        isStaggeredTransitioning = false
     }
     
     // Cancel crossfade
@@ -1850,12 +2024,8 @@ public final class AudioPlayerService {
         seekTask?.cancel()
         seekTask = nil
         isSmoothSeeking = false
+        cancelStaggeredTransition()
         
-        if !isSmoothSkipping, let outgoing = skipOutgoingPlayer {
-            outgoing.pause()
-            outgoing.volume = 0
-            skipOutgoingPlayer = nil
-        }
         if isCrossfading {
             crossfadeTask?.cancel()
             crossfadeTask = nil
@@ -2066,39 +2236,43 @@ public final class AudioPlayerService {
             object: nil,
             queue: .main
         ) { [weak self] notification in
-            guard let self = self else { return }
-            self.updateCurrentAudioRoute()
-            self.scheduleDelayedRouteUpdates()
+            let userInfo = notification.userInfo
+            let reasonValue = userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt
+            let previousRoute = userInfo?[AVAudioSessionRouteChangePreviousRouteKey] as? AVAudioSessionRouteDescription
+            Task { @MainActor [weak self] in
+                guard let self = self else { return }
+                self.updateCurrentAudioRoute()
+                self.scheduleDelayedRouteUpdates()
 
-            guard let userInfo = notification.userInfo,
-                  let reasonValue = userInfo[AVAudioSessionRouteChangeReasonKey] as? UInt,
-                  let reason = AVAudioSession.RouteChangeReason(rawValue: reasonValue) else {
-                return
-            }
-
-            switch reason {
-            case .oldDeviceUnavailable:
-                // Check if switching back from AirPlay to built-in speaker in the AirPlay picker
-                if let previousRoute = userInfo[AVAudioSessionRouteChangePreviousRouteKey] as? AVAudioSessionRouteDescription {
-                    let wasAirPlay = previousRoute.outputs.contains { $0.portType == .airPlay }
-                    let currentOutputs = AVAudioSession.sharedInstance().currentRoute.outputs
-                    let isNowBuiltIn = currentOutputs.contains { $0.portType == .builtInSpeaker || $0.portType == .builtInReceiver }
-                    if wasAirPlay && isNowBuiltIn {
-                        // Switching back from AirPlay to this device: smoothly maintain playback without pausing
-                        return
-                    }
+                guard let reasonValue = reasonValue,
+                      let reason = AVAudioSession.RouteChangeReason(rawValue: reasonValue) else {
+                    return
                 }
-                // Safely pause audio immediately when physical headphones/AirPods/Bluetooth disconnect
-                self.pause(smooth: false)
 
-            case .newDeviceAvailable, .routeConfigurationChange, .override, .categoryChange, .wakeFromSleep:
-                // Hardware route changed or settled. AVPlayer natively handles audio routing to the new destination.
-                // Do not force-reactivate the audio session or hammer player.play(), allowing Bluetooth A2DP
-                // and vehicle head unit DAC clock handshakes to complete cleanly.
-                break
+                switch reason {
+                case .oldDeviceUnavailable:
+                    // Check if switching back from AirPlay to built-in speaker in the AirPlay picker
+                    if let previousRoute = previousRoute {
+                        let wasAirPlay = previousRoute.outputs.contains { $0.portType == .airPlay }
+                        let currentOutputs = AVAudioSession.sharedInstance().currentRoute.outputs
+                        let isNowBuiltIn = currentOutputs.contains { $0.portType == .builtInSpeaker || $0.portType == .builtInReceiver }
+                        if wasAirPlay && isNowBuiltIn {
+                            // Switching back from AirPlay to this device: smoothly maintain playback without pausing
+                            return
+                        }
+                    }
+                    // Safely pause audio immediately when physical headphones/AirPods/Bluetooth disconnect
+                    self.pause(smooth: false)
 
-            default:
-                break
+                case .newDeviceAvailable, .routeConfigurationChange, .override, .categoryChange, .wakeFromSleep:
+                    // Hardware route changed or settled. AVPlayer natively handles audio routing to the new destination.
+                    // Do not force-reactivate the audio session or hammer player.play(), allowing Bluetooth A2DP
+                    // and vehicle head unit DAC clock handshakes to complete cleanly.
+                    break
+
+                default:
+                    break
+                }
             }
         }
         
@@ -2108,7 +2282,7 @@ public final class AudioPlayerService {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            Task { @MainActor in
+            Task { @MainActor [weak self] in
                 AudioSessionManager.shared.notifyMediaServicesWereReset()
                 await AudioSessionManager.shared.activateSessionIfNeeded(force: true)
                 self?.updateCurrentAudioRoute()
@@ -2128,7 +2302,7 @@ public final class AudioPlayerService {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            Task { @MainActor in
+            Task { @MainActor [weak self] in
                 guard let self = self else { return }
                 if self.playbackStatus == .playing {
                     // Begin background assertion to prevent suspension during car stereo playback
@@ -2144,7 +2318,7 @@ public final class AudioPlayerService {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            Task { @MainActor in
+            Task { @MainActor [weak self] in
                 self?.refreshAudioSessionAndRoute()
             }
         }
@@ -2155,7 +2329,7 @@ public final class AudioPlayerService {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            Task { @MainActor in
+            Task { @MainActor [weak self] in
                 self?.refreshAudioSessionAndRoute()
             }
         }
@@ -2166,7 +2340,7 @@ public final class AudioPlayerService {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            Task { @MainActor in
+            Task { @MainActor [weak self] in
                 guard let self = self else { return }
                 // Keep Now Playing info current so car stereo displays correct metadata
                 if self.playbackStatus == .playing {
@@ -2217,7 +2391,7 @@ public final class AudioPlayerService {
         // Play Command
         commandCenter.playCommand.isEnabled = true
         commandCenter.playCommand.addTarget { [weak self] _ in
-            Task { @MainActor in
+            Task { @MainActor [weak self] in
                 self?.play()
             }
             return .success
@@ -2226,7 +2400,7 @@ public final class AudioPlayerService {
         // Pause Command
         commandCenter.pauseCommand.isEnabled = true
         commandCenter.pauseCommand.addTarget { [weak self] _ in
-            Task { @MainActor in
+            Task { @MainActor [weak self] in
                 self?.pause()
             }
             return .success
@@ -2235,7 +2409,7 @@ public final class AudioPlayerService {
         // Toggle Play/Pause Command
         commandCenter.togglePlayPauseCommand.isEnabled = true
         commandCenter.togglePlayPauseCommand.addTarget { [weak self] _ in
-            Task { @MainActor in
+            Task { @MainActor [weak self] in
                 self?.togglePlayPause()
             }
             return .success
@@ -2244,7 +2418,7 @@ public final class AudioPlayerService {
         // Next Track Command (Standard next button)
         commandCenter.nextTrackCommand.isEnabled = true
         commandCenter.nextTrackCommand.addTarget { [weak self] _ in
-            Task { @MainActor in
+            Task { @MainActor [weak self] in
                 self?.next()
             }
             return .success
@@ -2253,7 +2427,7 @@ public final class AudioPlayerService {
         // Previous Track Command (Standard previous button)
         commandCenter.previousTrackCommand.isEnabled = true
         commandCenter.previousTrackCommand.addTarget { [weak self] _ in
-            Task { @MainActor in
+            Task { @MainActor [weak self] in
                 self?.previous()
             }
             return .success
@@ -2262,14 +2436,12 @@ public final class AudioPlayerService {
         // Change Playback Position (Scrubber on Lock Screen & Control Center)
         commandCenter.changePlaybackPositionCommand.isEnabled = true
         commandCenter.changePlaybackPositionCommand.addTarget { [weak self] event in
-            // Ensure preconditions are met before proceeding
-            guard let self = self,
-                  // Position event
-                  let positionEvent = event as? MPChangePlaybackPositionCommandEvent else {
+            guard let positionEvent = event as? MPChangePlaybackPositionCommandEvent else {
                 return .commandFailed
             }
-            Task { @MainActor in
-                self.seek(to: positionEvent.positionTime)
+            let positionTime = positionEvent.positionTime
+            Task { @MainActor [weak self] in
+                self?.seek(to: positionTime)
             }
             return .success
         }
@@ -2277,22 +2449,22 @@ public final class AudioPlayerService {
         // Seek Forward / Backward Commands (Vehicle steering wheel hold-to-seek buttons)
         commandCenter.seekForwardCommand.isEnabled = true
         commandCenter.seekForwardCommand.addTarget { [weak self] event in
-            guard let self = self, let seekEvent = event as? MPSeekCommandEvent else { return .commandFailed }
-            Task { @MainActor in
-                if seekEvent.type == .beginSeeking {
-                    self.seek(to: min(self.duration, self.currentTime + 10))
-                }
+            guard let seekEvent = event as? MPSeekCommandEvent else { return .commandFailed }
+            let isBegin = seekEvent.type == .beginSeeking
+            Task { @MainActor [weak self] in
+                guard let self = self, isBegin else { return }
+                self.seek(to: min(self.duration, self.currentTime + 10))
             }
             return .success
         }
         
         commandCenter.seekBackwardCommand.isEnabled = true
         commandCenter.seekBackwardCommand.addTarget { [weak self] event in
-            guard let self = self, let seekEvent = event as? MPSeekCommandEvent else { return .commandFailed }
-            Task { @MainActor in
-                if seekEvent.type == .beginSeeking {
-                    self.seek(to: max(0, self.currentTime - 10))
-                }
+            guard let seekEvent = event as? MPSeekCommandEvent else { return .commandFailed }
+            let isBegin = seekEvent.type == .beginSeeking
+            Task { @MainActor [weak self] in
+                guard let self = self, isBegin else { return }
+                self.seek(to: max(0, self.currentTime - 10))
             }
             return .success
         }
@@ -2304,7 +2476,7 @@ public final class AudioPlayerService {
         // Stop Command (Car stereos send stop on engine shutoff or source switch)
         commandCenter.stopCommand.isEnabled = true
         commandCenter.stopCommand.addTarget { [weak self] _ in
-            Task { @MainActor in
+            Task { @MainActor [weak self] in
                 self?.pause()
             }
             return .success
@@ -2313,10 +2485,11 @@ public final class AudioPlayerService {
         // Shuffle & Repeat Commands
         commandCenter.changeShuffleModeCommand.isEnabled = true
         commandCenter.changeShuffleModeCommand.addTarget { [weak self] event in
-            guard let self = self else { return .commandFailed }
-            Task { @MainActor in
-                if let shuffleEvent = event as? MPChangeShuffleModeCommandEvent {
-                    switch shuffleEvent.shuffleType {
+            let shuffleType = (event as? MPChangeShuffleModeCommandEvent)?.shuffleType
+            Task { @MainActor [weak self] in
+                guard let self = self else { return }
+                if let shuffleType = shuffleType {
+                    switch shuffleType {
                     case .off:
                         if self.shuffleMode == .on { self.toggleShuffle() }
                     case .collections, .items:
@@ -2333,10 +2506,11 @@ public final class AudioPlayerService {
         
         commandCenter.changeRepeatModeCommand.isEnabled = true
         commandCenter.changeRepeatModeCommand.addTarget { [weak self] event in
-            guard let self = self else { return .commandFailed }
-            Task { @MainActor in
-                if let repeatEvent = event as? MPChangeRepeatModeCommandEvent {
-                    switch repeatEvent.repeatType {
+            let repeatType = (event as? MPChangeRepeatModeCommandEvent)?.repeatType
+            Task { @MainActor [weak self] in
+                guard let self = self else { return }
+                if let repeatType = repeatType {
+                    switch repeatType {
                     case .off:
                         self.repeatMode = .off
                     case .one:
@@ -2560,7 +2734,7 @@ public final class AudioPlayerService {
                     dict["item_errorLogCount"] = "\(errorLog.events.count)"
                     if let evt = errorLog.events.last {
                         dict["item_lastErrorCode"] = "\(evt.errorStatusCode)"
-                        dict["item_lastErrorDomain"] = evt.errorDomain ?? "Unknown"
+                        dict["item_lastErrorDomain"] = evt.errorDomain
                         dict["item_lastErrorComment"] = evt.errorComment ?? "None"
                     }
                 }

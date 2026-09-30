@@ -214,6 +214,34 @@ public enum LibraryScanMethod: String, CaseIterable, Identifiable, Codable, Send
     }
 }
 
+// MARK: - LinkedFolder
+
+/// Represents an external music directory linked by the user.
+public struct LinkedFolder: Identifiable, Codable, Equatable, Sendable {
+    public let id: UUID
+    public var name: String
+    public var path: String?
+    public var bookmarkData: Data?
+    public var isExcludedFromTagEnrichment: Bool
+    public var dateAdded: Date
+
+    public nonisolated init(
+        id: UUID = UUID(),
+        name: String,
+        path: String? = nil,
+        bookmarkData: Data? = nil,
+        isExcludedFromTagEnrichment: Bool = false,
+        dateAdded: Date = Date()
+    ) {
+        self.id = id
+        self.name = name
+        self.path = path
+        self.bookmarkData = bookmarkData
+        self.isExcludedFromTagEnrichment = isExcludedFromTagEnrichment
+        self.dateAdded = dateAdded
+    }
+}
+
 // MARK: - AppSettings
 
 /// User preferences and persistent application configuration.
@@ -235,6 +263,7 @@ public struct AppSettings: Codable, Sendable {
     public var crossfadeDuration: Double
     public var lastScanDate: Date?
     public var linkedFolderName: String?
+    public var linkedFolders: [LinkedFolder]
     public var totalScannedFiles: Int
 
     public var autoHideDuplicates: Bool
@@ -265,7 +294,7 @@ public struct AppSettings: Codable, Sendable {
     }
 
     // Initialize with configured properties
-    public init(
+    public nonisolated init(
         appTheme: AppTheme = .dark,
         defaultLibraryCategory: LibraryCategory = .artists,
         playerBackgroundStyle: PlayerBackgroundStyle = .albumColor,
@@ -279,6 +308,7 @@ public struct AppSettings: Codable, Sendable {
         crossfadeDuration: Double = 4.0,
         lastScanDate: Date? = nil,
         linkedFolderName: String? = nil,
+        linkedFolders: [LinkedFolder] = [],
         totalScannedFiles: Int = 0,
         autoHideDuplicates: Bool = true,
         autoEnrichMissingArtwork: Bool = true,
@@ -306,7 +336,8 @@ public struct AppSettings: Codable, Sendable {
         self.isCrossfadeEnabled = isCrossfadeEnabled
         self.crossfadeDuration = crossfadeDuration
         self.lastScanDate = lastScanDate
-        self.linkedFolderName = linkedFolderName
+        self.linkedFolders = linkedFolders
+        self.linkedFolderName = linkedFolders.first?.name ?? linkedFolderName
         self.totalScannedFiles = totalScannedFiles
         self.autoHideDuplicates = autoHideDuplicates
         self.autoEnrichMissingArtwork = autoEnrichMissingArtwork
@@ -353,6 +384,8 @@ public struct AppSettings: Codable, Sendable {
         case lastScanDate
         // Linked folder name option
         case linkedFolderName
+        // Linked folders array option
+        case linkedFolders
         // Total scanned files option
         case totalScannedFiles
         // Auto hide duplicates option
@@ -383,7 +416,7 @@ public struct AppSettings: Codable, Sendable {
     }
 
     // Initialize with configured properties
-    public init(from decoder: Decoder) throws {
+    public nonisolated init(from decoder: Decoder) throws {
         // Container
         let container = try decoder.container(keyedBy: CodingKeys.self)
 
@@ -414,7 +447,23 @@ public struct AppSettings: Codable, Sendable {
         self.isCrossfadeEnabled = try container.decodeIfPresent(Bool.self, forKey: .isCrossfadeEnabled) ?? false
         self.crossfadeDuration = try container.decodeIfPresent(Double.self, forKey: .crossfadeDuration) ?? 4.0
         self.lastScanDate = try container.decodeIfPresent(Date.self, forKey: .lastScanDate)
-        self.linkedFolderName = try container.decodeIfPresent(String.self, forKey: .linkedFolderName)
+
+        var decodedFolders = try container.decodeIfPresent([LinkedFolder].self, forKey: .linkedFolders) ?? []
+        let legacyFolderName = try container.decodeIfPresent(String.self, forKey: .linkedFolderName)
+        if decodedFolders.isEmpty, let legacy = legacyFolderName, !legacy.isEmpty {
+            let legacyBookmark = UserDefaults.standard.data(forKey: "linkedMusicDirectoryBookmark")
+            decodedFolders = [
+                LinkedFolder(
+                    name: legacy,
+                    bookmarkData: legacyBookmark,
+                    isExcludedFromTagEnrichment: false,
+                    dateAdded: self.lastScanDate ?? Date()
+                )
+            ]
+        }
+        self.linkedFolders = decodedFolders
+        self.linkedFolderName = decodedFolders.first?.name ?? legacyFolderName
+
         self.totalScannedFiles = try container.decodeIfPresent(Int.self, forKey: .totalScannedFiles) ?? 0
         self.autoHideDuplicates = try container.decodeIfPresent(Bool.self, forKey: .autoHideDuplicates) ?? true
         self.autoEnrichMissingArtwork = try container.decodeIfPresent(Bool.self, forKey: .autoEnrichMissingArtwork) ?? true
@@ -432,7 +481,7 @@ public struct AppSettings: Codable, Sendable {
     }
 
     // Encode
-    public func encode(to encoder: Encoder) throws {
+    public nonisolated func encode(to encoder: Encoder) throws {
         // Container
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(appTheme, forKey: .appTheme)
@@ -447,7 +496,8 @@ public struct AppSettings: Codable, Sendable {
         try container.encode(isCrossfadeEnabled, forKey: .isCrossfadeEnabled)
         try container.encode(crossfadeDuration, forKey: .crossfadeDuration)
         try container.encodeIfPresent(lastScanDate, forKey: .lastScanDate)
-        try container.encodeIfPresent(linkedFolderName, forKey: .linkedFolderName)
+        try container.encode(linkedFolders, forKey: .linkedFolders)
+        try container.encodeIfPresent(linkedFolders.first?.name ?? linkedFolderName, forKey: .linkedFolderName)
         try container.encode(totalScannedFiles, forKey: .totalScannedFiles)
         try container.encode(autoHideDuplicates, forKey: .autoHideDuplicates)
         try container.encode(autoEnrichMissingArtwork, forKey: .autoEnrichMissingArtwork)

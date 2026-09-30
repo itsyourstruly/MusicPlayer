@@ -114,6 +114,7 @@ public struct PlaylistsListView: View {
                 .padding(.horizontal, 16)
             }
         }
+        .padding(.top, 4)
         // Modal presentation sheet
         .sheet(isPresented: $showingCreateSheet) {
             CreatePlaylistSheet(libraryStore: libraryStore)

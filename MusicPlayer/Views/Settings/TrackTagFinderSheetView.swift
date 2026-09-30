@@ -53,7 +53,7 @@ public struct TrackTagFinderSheetView: View {
 
     private var filteredEnrichmentDiffs: [MetadataDiff] {
         let query = FuzzyMatcher.normalize(searchText)
-        let list = libraryStore.enrichmentDiffs
+        let list = libraryStore.visibleEnrichmentDiffs
         if query.isEmpty { return list }
         return list.filter { diff in
             diff.localTrack.searchTokens.contains(query) ||
@@ -65,7 +65,7 @@ public struct TrackTagFinderSheetView: View {
 
     private var filteredVerifiedGoodDiffs: [MetadataDiff] {
         let query = FuzzyMatcher.normalize(searchText)
-        let list = libraryStore.verifiedGoodDiffs
+        let list = libraryStore.visibleVerifiedGoodDiffs
         if query.isEmpty { return list }
         return list.filter { diff in
             diff.localTrack.searchTokens.contains(query) ||
@@ -86,7 +86,7 @@ public struct TrackTagFinderSheetView: View {
 
     private var filteredDuplicateGroups: [DuplicateGroup] {
         let query = FuzzyMatcher.normalize(searchText)
-        let list = libraryStore.duplicateGroups
+        let list = libraryStore.visibleDuplicateGroups
         if query.isEmpty { return list }
         return list.filter { group in
             FuzzyMatcher.normalize(group.displayTitle).contains(query) ||
@@ -242,9 +242,9 @@ public struct TrackTagFinderSheetView: View {
                 case .lost:
                     Text("\(libraryStore.unmatchedTracksCount) LOST")
                 case .found:
-                    Text("\(libraryStore.enrichmentDiffs.count) FOUND")
+                    Text("\(libraryStore.visibleEnrichmentDiffs.count) FOUND")
                 case .good:
-                    Text("\(libraryStore.verifiedGoodCount) GOOD")
+                    Text("\(libraryStore.visibleVerifiedGoodCount) GOOD")
                 case .duplicates:
                     Text("FOUND \(libraryStore.totalDuplicateTracksCount) DUPLICATES")
                 }
@@ -300,7 +300,7 @@ public struct TrackTagFinderSheetView: View {
 
             case .duplicates:
                 HStack {
-                    Text("\(libraryStore.duplicateGroups.count) CLUSTERS • \(ByteFormatting.formatFileSize(bytes: libraryStore.totalDuplicateSavingsBytes)) SAVINGS")
+                    Text("\(libraryStore.visibleDuplicateGroups.count) CLUSTERS • \(ByteFormatting.formatFileSize(bytes: libraryStore.totalDuplicateSavingsBytes)) SAVINGS")
                         .font(.system(size: 11, weight: .bold, design: .monospaced))
                         .foregroundStyle(.secondary)
                     Spacer()
@@ -315,14 +315,14 @@ public struct TrackTagFinderSheetView: View {
     private var actionButtonsSection: some View {
         VStack(spacing: 10) {
             // White Button: "ENRICH ALL [amount] TRACKS" (Only shown when FOUND tab has results, or while actively enriching)
-            if selectedTab == .found && (!libraryStore.enrichmentDiffs.isEmpty || isEnrichingAll || libraryStore.isEnrichingMetadata) {
+            if selectedTab == .found && (!libraryStore.visibleEnrichmentDiffs.isEmpty || isEnrichingAll || libraryStore.isEnrichingMetadata) {
                 let isBusy = isEnrichingAll || libraryStore.isEnrichingMetadata
                 Button(action: {
                     enrichAllDiffs()
                 }) {
                     let current = enrichProcessedCount > 0 ? enrichProcessedCount : libraryStore.enrichProcessedCount
-                    let total = enrichTotalCount > 0 ? enrichTotalCount : (libraryStore.enrichTotalCount > 0 ? libraryStore.enrichTotalCount : libraryStore.enrichmentDiffs.count)
-                    Text(isBusy ? "\(current)/\(total)" : "ENRICH ALL \(libraryStore.enrichmentDiffs.count) TRACKS")
+                    let total = enrichTotalCount > 0 ? enrichTotalCount : (libraryStore.enrichTotalCount > 0 ? libraryStore.enrichTotalCount : libraryStore.visibleEnrichmentDiffs.count)
+                    Text(isBusy ? "\(current)/\(total)" : "ENRICH ALL \(libraryStore.visibleEnrichmentDiffs.count) TRACKS")
                         .font(.system(size: 13, weight: .bold, design: .monospaced))
                         .foregroundStyle(Color.black)
                         .frame(maxWidth: .infinity)
@@ -331,7 +331,7 @@ public struct TrackTagFinderSheetView: View {
                         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                 }
                 .buttonStyle(.plain)
-                .disabled(isBusy || libraryStore.enrichmentDiffs.isEmpty)
+                .disabled(isBusy || libraryStore.visibleEnrichmentDiffs.isEmpty)
             }
 
             if selectedTab == .duplicates {
@@ -400,8 +400,8 @@ public struct TrackTagFinderSheetView: View {
                         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                 }
                 .buttonStyle(.plain)
-                .disabled(libraryStore.duplicateGroups.isEmpty || isScanningDuplicates || isProcessingDeletion)
-                .opacity(libraryStore.duplicateGroups.isEmpty ? 0.4 : 1.0)
+                .disabled(libraryStore.visibleDuplicateGroups.isEmpty || isScanningDuplicates || isProcessingDeletion)
+                .opacity(libraryStore.visibleDuplicateGroups.isEmpty ? 0.4 : 1.0)
 
                 // DELETE DUPLICATES Button
                 Button(action: {
@@ -425,8 +425,8 @@ public struct TrackTagFinderSheetView: View {
                     .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                 }
                 .buttonStyle(.plain)
-                .disabled(libraryStore.duplicateGroups.isEmpty || libraryStore.totalDuplicateTracksCount == 0 || isScanningDuplicates || isProcessingDeletion)
-                .opacity((libraryStore.duplicateGroups.isEmpty || libraryStore.totalDuplicateTracksCount == 0) ? 0.4 : 1.0)
+                .disabled(libraryStore.visibleDuplicateGroups.isEmpty || libraryStore.totalDuplicateTracksCount == 0 || isScanningDuplicates || isProcessingDeletion)
+                .opacity((libraryStore.visibleDuplicateGroups.isEmpty || libraryStore.totalDuplicateTracksCount == 0) ? 0.4 : 1.0)
             }
         }
     }
@@ -754,7 +754,7 @@ public struct TrackTagFinderSheetView: View {
     }
 
     private func enrichAllDiffs() {
-        let diffsToEnrich = libraryStore.enrichmentDiffs
+        let diffsToEnrich = libraryStore.visibleEnrichmentDiffs
         guard !diffsToEnrich.isEmpty else { return }
 
         if libraryStore.settings.writeMetadataToAudioFiles {
@@ -851,7 +851,7 @@ public struct TrackTagFinderSheetView: View {
     }
 
     private func deleteAllSecondaryDuplicates() {
-        let tracksToDelete = libraryStore.duplicateGroups.flatMap { $0.duplicateCandidates.map { $0.track } }
+        let tracksToDelete = libraryStore.visibleDuplicateGroups.flatMap { $0.duplicateCandidates.map { $0.track } }
         guard !tracksToDelete.isEmpty else { return }
 
         isProcessingDeletion = true

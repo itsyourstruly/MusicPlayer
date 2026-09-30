@@ -18,7 +18,7 @@ public struct ArtistSegment: Identifiable, Hashable, Sendable {
 
 /// Robust, intelligent parser for multi-artist metadata strings (supporting commas, ampersands, feat./ft., slashes, etc.)
 /// with placeholder masking for compound artist names (e.g. "Tyler, The Creator", "Earth, Wind & Fire", "Simon & Garfunkel").
-public enum ArtistParser {
+public enum ArtistParser: Sendable {
     // Known compound artist / band names that contain internal commas, ampersands, pluses, or slashes
     // Sorted longest first so longer multi-word names match before shorter substrings
     private static let protectedArtists: [String] = [
@@ -89,7 +89,7 @@ public enum ArtistParser {
 
     private static let singleArtistExceptions: Set<String> = Set(protectedArtists.map { $0.lowercased() })
 
-    private struct PrecompiledProtectedArtist: Sendable {
+    private struct PrecompiledProtectedArtist: @unchecked Sendable {
         let name: String
         let lowercaseName: String
         let regex: NSRegularExpression

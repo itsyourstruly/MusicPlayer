@@ -52,7 +52,8 @@ public final class ArtworkColorExtractor: @unchecked Sendable {
     /// Asynchronously extracts the primary dominant color from image data with memory caching.
     ///
     /// Falls back to `fallback` when the key is nil/empty or artwork data cannot be loaded.
-    public func extractPrimaryColor(for key: String?, fallback: Color = Color.appSecondaryBackground) async -> ColorPalette {
+    public nonisolated func extractPrimaryColor(for key: String?, fallback: Color? = nil) async -> ColorPalette {
+        let effectiveFallback = fallback ?? Color.gray.opacity(0.15)
         if let key = key, !key.isEmpty {
             // Check cache before doing any async work
             if let cached = cache.object(forKey: key as NSString) {
@@ -65,19 +66,19 @@ public final class ArtworkColorExtractor: @unchecked Sendable {
                     #if canImport(UIKit)
                     // Ensure preconditions are met before proceeding
                     guard let uiImage = UIImage(data: data), let cgImage = uiImage.cgImage else {
-                        return ColorPalette(primaryColor: fallback, isDark: true)
+                        return ColorPalette(primaryColor: effectiveFallback, isDark: true)
                     }
-                    return Self.analyze(cgImage: cgImage, fallback: fallback)
+                    return Self.analyze(cgImage: cgImage, fallback: effectiveFallback)
                     #elseif canImport(AppKit)
                     // Ensure preconditions are met before proceeding
                     guard let nsImage = NSImage(data: data),
                           // Cg image
                           let cgImage = nsImage.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
-                        return ColorPalette(primaryColor: fallback, isDark: true)
+                        return ColorPalette(primaryColor: effectiveFallback, isDark: true)
                     }
-                    return Self.analyze(cgImage: cgImage, fallback: fallback)
+                    return Self.analyze(cgImage: cgImage, fallback: effectiveFallback)
                     #else
-                    return ColorPalette(primaryColor: fallback, isDark: true)
+                    return ColorPalette(primaryColor: effectiveFallback, isDark: true)
                     #endif
                 }.value
 
@@ -95,15 +96,15 @@ public final class ArtworkColorExtractor: @unchecked Sendable {
         let defaultPalette = await Task.detached(priority: .userInitiated) { () -> ColorPalette in
             #if canImport(UIKit)
             if let defaultImg = UIImage(named: "art"), let cgImage = defaultImg.cgImage {
-                return Self.analyze(cgImage: cgImage, fallback: fallback)
+                return Self.analyze(cgImage: cgImage, fallback: effectiveFallback)
             }
             #elseif canImport(AppKit)
             if let defaultImg = NSImage(named: "art"),
                let cgImage = defaultImg.cgImage(forProposedRect: nil, context: nil, hints: nil) {
-                return Self.analyze(cgImage: cgImage, fallback: fallback)
+                return Self.analyze(cgImage: cgImage, fallback: effectiveFallback)
             }
             #endif
-            return ColorPalette(primaryColor: fallback, isDark: true)
+            return ColorPalette(primaryColor: effectiveFallback, isDark: true)
         }.value
 
         cache.setObject(WrappedPalette(defaultPalette), forKey: defaultArtCacheKey)
@@ -113,7 +114,7 @@ public final class ArtworkColorExtractor: @unchecked Sendable {
     // MARK: - Analysis
 
     /// Downsamples the image to 16×16 and averages non-transparent pixels to find the dominant color.
-    private static func analyze(cgImage: CGImage, fallback: Color) -> ColorPalette {
+    private nonisolated static func analyze(cgImage: CGImage, fallback: Color) -> ColorPalette {
         // 16×16 is the minimum size that gives a stable color average while keeping render cost trivial
         let width = 16
         // Height

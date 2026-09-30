@@ -16,23 +16,10 @@ public struct AudioFileMetadataWriter: Sendable {
     // Initialize with configured properties
     public init() {}
 
-    /// Downsamples and optimizes image data (max 1000x1000, 85% JPEG compression) to prevent audio file container bloat.
+    /// Preserves image data in full native quality without compression or downsampling.
     public static func optimizeArtworkForEmbedding(data: Data, maxDimension: CGFloat = 1000.0) -> Data {
-        guard let imageSource = CGImageSourceCreateWithData(data as CFData, nil) else { return data }
-        let options: [CFString: Any] = [
-            kCGImageSourceThumbnailMaxPixelSize: maxDimension,
-            kCGImageSourceCreateThumbnailFromImageAlways: true,
-            kCGImageSourceCreateThumbnailWithTransform: true
-        ]
-        guard let thumbnail = CGImageSourceCreateThumbnailAtIndex(imageSource, 0, options as CFDictionary) else { return data }
-        let mutableData = NSMutableData()
-        guard let destination = CGImageDestinationCreateWithData(mutableData as CFMutableData, "public.jpeg" as CFString, 1, nil) else { return data }
-        let compressionOptions: [CFString: Any] = [
-            kCGImageDestinationLossyCompressionQuality: 0.85
-        ]
-        CGImageDestinationAddImage(destination, thumbnail, compressionOptions as CFDictionary)
-        guard CGImageDestinationFinalize(destination) else { return data }
-        return mutableData as Data
+        // Return raw uncompressed artwork data to preserve full native quality
+        return data
     }
 
     /// Detects if a given file or directory URL is hosted inside iCloud Drive or another cloud synchronization container.
@@ -357,7 +344,7 @@ public struct AudioFileMetadataWriter: Sendable {
         // Exported
         let exported = await exportWithTimeout(session: exportSession, timeoutSeconds: 6.0)
 
-        if exported && exportSession.status == .completed {
+        if exported {
             // Replaced
             let replaced = coordinateReplace(targetURL: fileURL, tempURL: tempOutputURL)
             if replaced {
@@ -369,7 +356,7 @@ public struct AudioFileMetadataWriter: Sendable {
             }
         } else {
             // Err
-            let err = exportSession.error?.localizedDescription ?? (exported ? "Unknown error" : "Export timed out after 6.0s")
+            let err = exportSession.error?.localizedDescription ?? "Export failed or timed out after 6.0s"
             AppLogger.storage.warning("AVAssetExportSession incomplete (\(err)) for: \(fileURL.lastPathComponent). Skipping disk write.")
             return false
         }
@@ -901,22 +888,19 @@ public struct AudioFileMetadataWriter: Sendable {
 
     // Export with timeout
     private func exportWithTimeout(session: AVAssetExportSession, timeoutSeconds: Double = 6.0) async -> Bool {
-        await withTaskGroup(of: Bool.self) { group in
-            group.addTask {
-                await session.export()
-                return session.status == .completed
-            }
-            group.addTask {
-                // Sleep ns
-                let sleepNs = UInt64(timeoutSeconds * 1_000_000_000)
-                try? await Task.sleep(nanoseconds: sleepNs)
-                session.cancelExport()
-                return false
-            }
-            // First result
-            let firstResult = await group.next() ?? false
-            group.cancelAll()
-            return firstResult
+        let exportTask = Task { () -> Bool in
+            await session.export()
+            return session.status == .completed
         }
+        let timeoutTask = Task {
+            let sleepNs = UInt64(timeoutSeconds * 1_000_000_000)
+            try? await Task.sleep(nanoseconds: sleepNs)
+            if !Task.isCancelled {
+                session.cancelExport()
+            }
+        }
+        let success = await exportTask.value
+        timeoutTask.cancel()
+        return success
     }
 }

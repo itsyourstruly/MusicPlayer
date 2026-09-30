@@ -473,7 +473,6 @@ public struct FullScreenPlayerView: View {
     // MARK: - 3D Artwork Hero View (With 180° Flip Card)
 
     private func heroArtworkView(track: Track, dimension: CGFloat, isPlaying: Bool) -> some View {
-        let isAlbumColor = libraryStore.settings.playerBackgroundStyle == .albumColor
         let effectivePitch: Double = isTouchingArtwork ? touchPitch : currentPitch
         let effectiveYaw: Double = isTouchingArtwork ? touchYaw : currentYaw
         let effectiveRoll: Double = isTouchingArtwork ? touchRoll : currentRoll

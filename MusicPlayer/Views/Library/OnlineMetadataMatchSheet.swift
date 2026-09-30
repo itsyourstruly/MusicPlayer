@@ -296,12 +296,16 @@ public struct OnlineMetadataMatchSheet: View {
                             #if canImport(UIKit)
                             Image(uiImage: img)
                                 .resizable()
+                                .interpolation(.high)
+                                .antialiased(true)
                                 .aspectRatio(contentMode: .fill)
                                 .frame(width: 72, height: 72)
                                 .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                             #elseif canImport(AppKit)
                             Image(nsImage: img)
                                 .resizable()
+                                .interpolation(.high)
+                                .antialiased(true)
                                 .aspectRatio(contentMode: .fill)
                                 .frame(width: 72, height: 72)
                                 .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
@@ -312,6 +316,8 @@ public struct OnlineMetadataMatchSheet: View {
                                 case .success(let image):
                                     image
                                         .resizable()
+                                        .interpolation(.high)
+                                        .antialiased(true)
                                         .aspectRatio(contentMode: .fill)
                                 default:
                                     AlbumArtworkView(

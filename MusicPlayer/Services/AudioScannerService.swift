@@ -29,7 +29,7 @@ public struct AudioScannerService: Sendable {
         AppLogger.scanner.info("Starting high-speed audio scan at: \(folderURL.path) (with \(existingTracks.count) cached tracks)")
 
         // Ensure security-scoped root folder access is active
-        _ = SecurityScopedBookmark.shared.resolveAndAccessBookmark()
+        _ = await SecurityScopedBookmark.shared.resolveAndAccessBookmark()
         _ = folderURL.startAccessingSecurityScopedResource()
 
         // Build fast path-based lookup map for differential scan
@@ -62,7 +62,7 @@ public struct AudioScannerService: Sendable {
                     includingPropertiesForKeys: [.isRegularFileKey, .isDirectoryKey, .isSymbolicLinkKey, .fileSizeKey, .contentModificationDateKey],
                     options: [.skipsHiddenFiles, .skipsPackageDescendants]
                 ) {
-                    for case let fileURL as URL in enumerator {
+                    while let fileURL = enumerator.nextObject() as? URL {
                         // Safety ceiling to prevent runaway allocations on corrupted filesystems
                         if audioFileURLs.count >= 200_000 {
                             AppLogger.scanner.warning("Reached safety limit of 200,000 files during scanning.")
@@ -253,23 +253,23 @@ public struct AudioScannerService: Sendable {
                 let idLower = item.identifier?.rawValue.lowercased() ?? ""
 
                 if fallback.title == nil && (commonKey == .commonKeyTitle || keyLower.contains("titl") || keyLower.contains("name") || idLower.contains("titl") || idLower.contains("name")) {
-                    fallback.title = extractString(from: item)
+                    fallback.title = await extractString(from: item)
                 }
                 if fallback.artist == nil && (commonKey == .commonKeyArtist || commonKey == .commonKeyAuthor || keyLower.contains("art") || keyLower.contains("author") || keyLower.contains("auth") || idLower.contains("art") || idLower.contains("author") || idLower.contains("auth")) {
-                    let str = extractString(from: item)
+                    let str = await extractString(from: item)
                     if fallback.author == nil && (commonKey == .commonKeyAuthor || keyLower.contains("author") || keyLower.contains("auth") || idLower.contains("author") || idLower.contains("auth")) {
                         fallback.author = str
                     }
                     fallback.artist = str
                 }
                 if fallback.album == nil && (commonKey == .commonKeyAlbumName || keyLower.contains("alb") || idLower.contains("alb") || keyLower == "talb" || keyLower == "©alb") {
-                    fallback.album = extractString(from: item)
+                    fallback.album = await extractString(from: item)
                 }
                 if fallback.albumArtist == nil && (keyLower.contains("aart") || keyLower.contains("albumartist") || keyLower.contains("album_artist") || keyLower.contains("band") || idLower.contains("aart") || idLower.contains("albumartist") || idLower.contains("band") || commonKey?.rawValue.lowercased().contains("albumartist") == true) {
-                    fallback.albumArtist = extractString(from: item)
+                    fallback.albumArtist = await extractString(from: item)
                 }
                 if fallback.year == nil {
-                    if let str = extractString(from: item) {
+                    if let str = await extractString(from: item) {
                         let digits = str.filter { $0.isNumber }
                         if digits.count >= 4, let y = Int(digits.prefix(4)), y >= 1900, y <= 2099 {
                             fallback.year = y
@@ -277,12 +277,12 @@ public struct AudioScannerService: Sendable {
                     }
                 }
                 if fallback.artworkData == nil && (commonKey == .commonKeyArtwork || keyLower.contains("art") || keyLower.contains("covr") || idLower.contains("art") || idLower.contains("covr") || keyLower.contains("apic")) {
-                    fallback.artworkData = extractArtwork(from: item)
+                    fallback.artworkData = await extractArtwork(from: item)
                 }
                 if fallback.lyrics == nil {
                     if keyLower.contains("lyr") || keyLower.contains("uslt") || keyLower.contains("sylt") || idLower.contains("lyr") {
-                        fallback.lyrics = extractString(from: item)
-                    } else if let str = extractString(from: item), str.count > 50, (str.contains("\n") || str.contains("\r") || str.contains("[0")) {
+                        fallback.lyrics = await extractString(from: item)
+                    } else if let str = await extractString(from: item), str.count > 50, (str.contains("\n") || str.contains("\r") || str.contains("[0")) {
                         fallback.lyrics = str
                     }
                 }
@@ -420,16 +420,16 @@ public struct AudioScannerService: Sendable {
     // MARK: - Fast Synchronous Metadata Field Extractors
 
     // Extract string
-    private func extractString(from item: AVMetadataItem) -> String? {
-        if let str = item.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines), !str.isEmpty {
+    private func extractString(from item: AVMetadataItem) async -> String? {
+        if let str = (try? await item.load(.stringValue))?.trimmingCharacters(in: .whitespacesAndNewlines), !str.isEmpty {
             return str
         }
-        if let val = item.value as? String {
+        if let val = try? await item.load(.value) as? String {
             // Trimmed
             let trimmed = val.trimmingCharacters(in: .whitespacesAndNewlines)
             if !trimmed.isEmpty { return trimmed }
         }
-        if let data = item.dataValue,
+        if let data = try? await item.load(.dataValue),
            // Str
            let str = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .ascii) ?? String(data: data, encoding: .isoLatin1) {
             // Trimmed
@@ -440,14 +440,14 @@ public struct AudioScannerService: Sendable {
     }
 
     // Extract number
-    private func extractNumber(from item: AVMetadataItem) -> Int? {
-        if let num = item.numberValue?.intValue, num > 0 {
+    private func extractNumber(from item: AVMetadataItem) async -> Int? {
+        if let num = (try? await item.load(.numberValue))?.intValue, num > 0 {
             return num
         }
-        if let val = item.value as? NSNumber, val.intValue > 0 {
+        if let val = (try? await item.load(.value)) as? NSNumber, val.intValue > 0 {
             return val.intValue
         }
-        if let str = extractString(from: item) {
+        if let str = await extractString(from: item) {
             // Digits
             let digits = str.filter { $0.isNumber }
             if let n = Int(digits), n > 0 {
@@ -458,11 +458,11 @@ public struct AudioScannerService: Sendable {
     }
 
     // Extract artwork
-    private func extractArtwork(from item: AVMetadataItem) -> Data? {
-        if let data = item.dataValue, !data.isEmpty {
+    private func extractArtwork(from item: AVMetadataItem) async -> Data? {
+        if let data = try? await item.load(.dataValue), !data.isEmpty {
             return data
         }
-        if let val = item.value {
+        if let val = try? await item.load(.value) {
             if let data = val as? Data, !data.isEmpty { return data }
             if let data = val as? NSData, data.length > 0 { return data as Data }
             if let dict = val as? [String: Any], let data = dict["data"] as? Data, !data.isEmpty { return data }

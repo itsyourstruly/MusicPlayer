@@ -125,9 +125,13 @@ public struct PlayerBackgroundView: View {
         #if canImport(UIKit)
         Image(uiImage: image)
             .resizable()
+            .interpolation(.high)
+            .antialiased(true)
         #elseif canImport(AppKit)
         Image(nsImage: image)
             .resizable()
+            .interpolation(.high)
+            .antialiased(true)
         #endif
     }
 
@@ -136,7 +140,7 @@ public struct PlayerBackgroundView: View {
 
         var loaded: PlatformImage? = nil
         if let key = newKey, !key.isEmpty {
-            loaded = await ArtworkCacheService.shared.loadDecodedArtwork(key: key, maxDimension: 128)
+            loaded = await ArtworkCacheService.shared.loadDecodedArtwork(key: key)
         }
 
         guard !Task.isCancelled else { return }

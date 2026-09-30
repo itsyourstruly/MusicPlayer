@@ -10,6 +10,8 @@ public struct FolderSettingsView: View {
     @Environment(\.appTheme) private var appTheme
 
     @State private var showingFolderPicker: Bool = false
+    @State private var folderToChange: LinkedFolder? = nil
+    @State private var folderToUnlink: LinkedFolder? = nil
     @State private var showingUnlinkAlert: Bool = false
     @State private var showingTagFinderSheet: Bool = false
     @State private var showingClearMetadataAlert: Bool = false
@@ -68,18 +70,33 @@ public struct FolderSettingsView: View {
             switch result {
             case .success(let urls):
                 if let selectedURL = urls.first {
-                    Task {
-                        await libraryStore.linkAndScanFolder(url: selectedURL)
+                    if let folder = folderToChange {
+                        Task {
+                            await libraryStore.changeFolder(id: folder.id, newURL: selectedURL)
+                        }
+                    } else {
+                        Task {
+                            await libraryStore.addAndScanFolder(url: selectedURL)
+                        }
                     }
                 }
+                folderToChange = nil
             case .failure(let error):
+                folderToChange = nil
                 AppLogger.library.error("Folder selection failed: \(error.localizedDescription)")
             }
         }
         .alert("UNLINK DIRECTORY?", isPresented: $showingUnlinkAlert) {
-            Button("CANCEL", role: .cancel) {}
+            Button("CANCEL", role: .cancel) {
+                folderToUnlink = nil
+            }
             Button("UNLINK", role: .destructive) {
-                libraryStore.unlinkDirectory()
+                if let folder = folderToUnlink {
+                    libraryStore.unlinkFolder(id: folder.id)
+                    folderToUnlink = nil
+                } else {
+                    libraryStore.unlinkDirectory()
+                }
             }
         } message: {
             Text("THIS WILL REMOVE INDEXED TRACKS AND PLAYLISTS FROM THE APP. YOUR AUDIO FILES ON DISK WILL NOT BE MODIFIED OR DELETED.")
@@ -123,16 +140,11 @@ public struct FolderSettingsView: View {
 
     // MARK: - 1. Linked Folder Header Section (Top of Sheet, No Background)
     private var linkedFolderHeaderSection: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(alignment: .center) {
-                if let folder = libraryStore.settings.linkedFolderName {
-                    Text("LINKED TO \(folder.uppercased())")
-                        .font(.system(size: 14, weight: .bold, design: .monospaced))
-                        .foregroundStyle(Color.white)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.8)
-                } else {
+        VStack(alignment: .leading, spacing: 14) {
+            if libraryStore.settings.linkedFolders.isEmpty {
+                HStack(alignment: .center) {
                     Button(action: {
+                        folderToChange = nil
                         showingFolderPicker = true
                     }) {
                         Text("LINK FOLDER")
@@ -140,20 +152,50 @@ public struct FolderSettingsView: View {
                             .foregroundStyle(libraryStore.settings.appTheme.accentColor)
                     }
                     .buttonStyle(.plain)
+
+                    Spacer()
                 }
+            } else {
+                ForEach(libraryStore.settings.linkedFolders) { folder in
+                    linkedFolderRow(folder: folder)
+                }
+
+                Button(action: {
+                    folderToChange = nil
+                    showingFolderPicker = true
+                }) {
+                    Text("ADD ANOTHER FOLDER")
+                        .font(.system(size: 13, weight: .bold, design: .monospaced))
+                        .foregroundStyle(libraryStore.settings.appTheme.accentColor)
+                }
+                .buttonStyle(.plain)
+                .padding(.top, 2)
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    private func linkedFolderRow(folder: LinkedFolder) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .center) {
+                Text("LINKED TO \(folder.name.uppercased())")
+                    .font(.system(size: 14, weight: .bold, design: .monospaced))
+                    .foregroundStyle(Color.white)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
 
                 Spacer()
 
                 Text("RESCAN")
                     .font(.system(size: 13, weight: .bold, design: .monospaced))
                     .foregroundStyle(
-                        (libraryStore.isScanning || libraryStore.settings.linkedFolderName == nil)
+                        libraryStore.isScanning
                             ? libraryStore.settings.appTheme.accentColor.opacity(0.4)
                             : libraryStore.settings.appTheme.accentColor
                     )
                     .contentShape(Rectangle())
                     .gesture(
-                        (libraryStore.isScanning || libraryStore.settings.linkedFolderName == nil)
+                        libraryStore.isScanning
                             ? nil
                             : LongPressGesture(minimumDuration: 0.45)
                                 .onEnded { _ in
@@ -162,7 +204,7 @@ public struct FolderSettingsView: View {
                                 }
                                 .exclusively(before: TapGesture().onEnded {
                                     Task {
-                                        await libraryStore.rescanCurrentDirectory()
+                                        await libraryStore.rescanFolder(id: folder.id)
                                     }
                                 })
                     )
@@ -170,16 +212,26 @@ public struct FolderSettingsView: View {
                 // Gear Icon with clean context menu
                 Menu {
                     Button("CHANGE FOLDER") {
+                        folderToChange = folder
                         showingFolderPicker = true
                     }
 
-                    if libraryStore.settings.linkedFolderName != nil {
-                        Divider()
-                        Button(role: .destructive) {
-                            showingUnlinkAlert = true
-                        } label: {
-                            Text("UNLINK FOLDER")
+                    Button {
+                        libraryStore.toggleTagEnrichmentExclusion(for: folder.id)
+                    } label: {
+                        if folder.isExcludedFromTagEnrichment {
+                            Label("EXCLUDE FROM TAG ENRICHMENT", systemImage: "checkmark")
+                        } else {
+                            Text("EXCLUDE FROM TAG ENRICHMENT")
                         }
+                    }
+
+                    Divider()
+                    Button(role: .destructive) {
+                        folderToUnlink = folder
+                        showingUnlinkAlert = true
+                    } label: {
+                        Text("UNLINK FOLDER")
                     }
                 } label: {
                     Image(systemName: "gear")
@@ -191,7 +243,7 @@ public struct FolderSettingsView: View {
             }
 
             // Plain text, slightly gray summary of tracks, albums, and artists
-            Text("\(libraryStore.tracks.count) TRACKS, \(libraryStore.albums.count) ALBUMS, \(libraryStore.artists.count) ARTISTS")
+            Text("\(libraryStore.trackCount(for: folder)) TRACKS, \(libraryStore.albumCount(for: folder)) ALBUMS, \(libraryStore.artistCount(for: folder)) ARTISTS")
                 .font(.system(size: 11, design: .monospaced))
                 .foregroundStyle(.secondary)
         }
@@ -217,7 +269,7 @@ public struct FolderSettingsView: View {
                         .font(.system(size: 10.5, weight: .bold, design: .monospaced))
                         .foregroundStyle(Color.black.opacity(0.65))
                 } else {
-                    Text("\(libraryStore.enrichmentDiffs.count) FOUND • \(libraryStore.verifiedGoodCount) GOOD • \(libraryStore.unmatchedTracksCount) LOST • \(libraryStore.duplicateGroups.count) DUPES")
+                    Text("\(libraryStore.visibleEnrichmentDiffs.count) FOUND • \(libraryStore.visibleVerifiedGoodCount) GOOD • \(libraryStore.unmatchedTracksCount) LOST • \(libraryStore.visibleDuplicateGroups.count) DUPES")
                         .font(.system(size: 10.5, weight: .bold, design: .monospaced))
                         .foregroundStyle(Color.black.opacity(0.65))
                 }
@@ -410,7 +462,9 @@ public struct FolderSettingsView: View {
     }
 
     private func refreshArtworkCacheSize() async {
-        let size = await ArtworkCacheService.shared.calculateDiskSize()
+        let size = await Task.detached(priority: .utility) {
+            await ArtworkCacheService.shared.calculateDiskSize()
+        }.value
         await MainActor.run {
             self.artworkCacheSizeBytes = size
         }

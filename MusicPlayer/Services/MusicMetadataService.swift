@@ -666,7 +666,7 @@ public actor MusicMetadataService {
                 guard let title = r.title, !title.isEmpty else { return nil }
                 let artist = r.artistCredit?.compactMap { $0.name }.joined(separator: ", ") ?? "Unknown Artist"
                 let year = r.date.flatMap { MetadataSanitizer.extract4DigitYear(from: $0) }
-                let artworkURL = r.id.flatMap { URL(string: "https://coverartarchive.org/release/\($0)/front-500") }
+                let artworkURL = r.id.flatMap { URL(string: "https://coverartarchive.org/release/\($0)/front") }
 
                 return OnlineAlbumItem(
                     id: r.id ?? UUID().uuidString,
@@ -1400,7 +1400,7 @@ public actor MusicMetadataService {
             let releaseYear = releaseDate.flatMap { MetadataSanitizer.extract4DigitYear(from: $0) }
             let trackNum = firstRelease?.media?.first?.trackOffset ?? firstRelease?.media?.first?.tracks?.first?.position
             let totalTracks = firstRelease?.trackCount ?? firstRelease?.media?.first?.trackCount
-            let artworkURL = releaseId.flatMap { URL(string: "https://coverartarchive.org/release/\($0)/front-500") }
+            let artworkURL = releaseId.flatMap { URL(string: "https://coverartarchive.org/release/\($0)/front") }
             let durationSec = rec.length.map { Double($0) / 1000.0 }
 
             return OnlineTrackMetadata(
@@ -1458,6 +1458,18 @@ public actor MusicMetadataService {
             }
         }
 
+        // 4. Fallbacks for Cover Art Archive (front -> front-1200 -> front-500)
+        if urlStr.hasSuffix("/front") {
+            let fallback1200 = urlStr.replacingOccurrences(of: "/front", with: "/front-1200")
+            if let fallbackURL = URL(string: fallback1200), let data = await fetchImageData(from: fallbackURL) {
+                return data
+            }
+            let fallback500 = urlStr.replacingOccurrences(of: "/front", with: "/front-500")
+            if let fallbackURL = URL(string: fallback500), let data = await fetchImageData(from: fallbackURL) {
+                return data
+            }
+        }
+
         return nil
     }
 
@@ -1488,7 +1500,7 @@ public actor MusicMetadataService {
 
 // MARK: - Deezer API Codable Models
 
-private struct DeezerTrackSearchResponse: Codable {
+private struct DeezerTrackSearchResponse: Codable, Sendable {
     let data: [DeezerTrackItemResult]
     let total: Int?
 
@@ -1503,7 +1515,7 @@ private struct DeezerTrackSearchResponse: Codable {
     }
 }
 
-private struct DeezerTrackItemResult: Codable {
+private struct DeezerTrackItemResult: Codable, Sendable {
     let id: Int64
     let title: String?
     let duration: Int?
@@ -1519,12 +1531,12 @@ private struct DeezerTrackItemResult: Codable {
     }
 }
 
-private struct DeezerArtistSnippet: Codable {
+private struct DeezerArtistSnippet: Codable, Sendable {
     let id: Int64?
     let name: String?
 }
 
-private struct DeezerAlbumSnippet: Codable {
+private struct DeezerAlbumSnippet: Codable, Sendable {
     let id: Int64?
     let title: String?
     let cover_xl: String?
@@ -1533,7 +1545,7 @@ private struct DeezerAlbumSnippet: Codable {
     let release_date: String?
 }
 
-private struct DeezerAlbumDetailResponse: Codable {
+private struct DeezerAlbumDetailResponse: Codable, Sendable {
     let id: Int64
     let title: String?
     let release_date: String?
@@ -1545,7 +1557,7 @@ private struct DeezerAlbumDetailResponse: Codable {
     let tracks: DeezerAlbumTracksListResponse?
 }
 
-private struct DeezerAlbumSearchResponse: Codable {
+private struct DeezerAlbumSearchResponse: Codable, Sendable {
     let data: [DeezerAlbumSearchResult]
 
     enum CodingKeys: String, CodingKey {
@@ -1558,7 +1570,7 @@ private struct DeezerAlbumSearchResponse: Codable {
     }
 }
 
-private struct DeezerAlbumSearchResult: Codable {
+private struct DeezerAlbumSearchResult: Codable, Sendable {
     let id: Int64
     let title: String
     let cover_xl: String?
@@ -1572,7 +1584,7 @@ private struct DeezerAlbumSearchResult: Codable {
     }
 }
 
-private struct DeezerAlbumTracksListResponse: Codable {
+private struct DeezerAlbumTracksListResponse: Codable, Sendable {
     let data: [DeezerAlbumTrackItem]
 
     enum CodingKeys: String, CodingKey {
@@ -1585,7 +1597,7 @@ private struct DeezerAlbumTracksListResponse: Codable {
     }
 }
 
-private struct DeezerAlbumTrackItem: Codable {
+private struct DeezerAlbumTrackItem: Codable, Sendable {
     let id: Int64
     let title: String
     let duration: Int?
@@ -1601,7 +1613,7 @@ private struct DeezerAlbumTrackItem: Codable {
 
 // MARK: - iTunes API Codable Models
 
-private struct ITunesAlbumSearchResponse: Codable {
+private struct ITunesAlbumSearchResponse: Codable, Sendable {
     let resultCount: Int?
     let results: [ITunesAlbumResult]
 
@@ -1616,7 +1628,7 @@ private struct ITunesAlbumSearchResponse: Codable {
     }
 }
 
-private struct ITunesAlbumResult: Codable {
+private struct ITunesAlbumResult: Codable, Sendable {
     let wrapperType: String?
     let collectionType: String?
     let collectionId: Int64?
@@ -1633,7 +1645,7 @@ private struct ITunesAlbumResult: Codable {
     }
 }
 
-private struct ITunesSearchResponse: Codable {
+private struct ITunesSearchResponse: Codable, Sendable {
     let resultCount: Int?
     let results: [ITunesTrackResult]
 
@@ -1648,7 +1660,7 @@ private struct ITunesSearchResponse: Codable {
     }
 }
 
-private struct ITunesTrackResult: Codable {
+private struct ITunesTrackResult: Codable, Sendable {
     let wrapperType: String?
     let kind: String?
     let trackId: Int64?
@@ -1741,7 +1753,7 @@ private struct ITunesTrackResult: Codable {
 
 // MARK: - MusicBrainz API Codable Models
 
-private struct MusicBrainzReleaseSearchResponse: Codable {
+private struct MusicBrainzReleaseSearchResponse: Codable, Sendable {
     let releases: [MusicBrainzReleaseItem]
 
     enum CodingKeys: String, CodingKey {
@@ -1754,7 +1766,7 @@ private struct MusicBrainzReleaseSearchResponse: Codable {
     }
 }
 
-private struct MusicBrainzRecordingSearchResponse: Codable {
+private struct MusicBrainzRecordingSearchResponse: Codable, Sendable {
     let recordings: [MusicBrainzRecordingItem]
 
     enum CodingKeys: String, CodingKey {
@@ -1767,7 +1779,7 @@ private struct MusicBrainzRecordingSearchResponse: Codable {
     }
 }
 
-private struct MusicBrainzRecordingItem: Codable {
+private struct MusicBrainzRecordingItem: Codable, Sendable {
     let id: String
     let title: String?
     let length: Int?
@@ -1782,11 +1794,11 @@ private struct MusicBrainzRecordingItem: Codable {
     }
 }
 
-private struct MusicBrainzArtistCreditItem: Codable {
+private struct MusicBrainzArtistCreditItem: Codable, Sendable {
     let name: String?
 }
 
-private struct MusicBrainzReleaseItem: Codable {
+private struct MusicBrainzReleaseItem: Codable, Sendable {
     let id: String?
     let title: String?
     let date: String?
@@ -1802,7 +1814,7 @@ private struct MusicBrainzReleaseItem: Codable {
     }
 }
 
-private struct MusicBrainzMediaItem: Codable {
+private struct MusicBrainzMediaItem: Codable, Sendable {
     let trackOffset: Int?
     let trackCount: Int?
     let tracks: [MusicBrainzTrackItem]?
@@ -1814,10 +1826,10 @@ private struct MusicBrainzMediaItem: Codable {
     }
 }
 
-private struct MusicBrainzTrackItem: Codable {
+private struct MusicBrainzTrackItem: Codable, Sendable {
     let position: Int?
 }
 
-private struct MusicBrainzTagItem: Codable {
+private struct MusicBrainzTagItem: Codable, Sendable {
     let name: String?
 }

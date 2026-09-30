@@ -59,7 +59,7 @@ public struct OnlineTrackMetadata: Identifiable, Codable, Sendable, Hashable {
     public let isShazamMatch: Bool
 
     // Initialize with configured properties
-    public init(
+    public nonisolated init(
         id: String = UUID().uuidString,
         title: String,
         artist: String,
@@ -140,7 +140,7 @@ public struct MetadataDiff: Identifiable, Codable, Sendable, Hashable {
     public var preserveLocalTitleAndArtist: Bool = true
 
     // Initialize with configured properties
-    public init(
+    public nonisolated init(
         localTrack: Track,
         onlineMetadata: OnlineTrackMetadata,
         preserveLocalTitleAndArtist: Bool = true

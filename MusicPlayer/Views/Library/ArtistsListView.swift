@@ -81,6 +81,7 @@ public struct ArtistsListView: View {
                 .padding(.horizontal, 16)
             }
         }
+        .padding(.top, 4)
         .navigationDestination(item: $selectedArtist) { artist in
             ArtistDetailView(artist: artist, libraryStore: libraryStore, playerService: playerService)
         }

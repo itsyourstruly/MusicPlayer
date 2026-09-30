@@ -280,7 +280,7 @@ public enum DiagnosticsCollector {
         var parts: [String] = []
         if options.contains(.mixWithOthers) { parts.append("mixWithOthers") }
         if options.contains(.duckOthers) { parts.append("duckOthers") }
-        if options.contains(.allowBluetooth) { parts.append("allowBluetooth") }
+        if options.contains(.allowBluetoothHFP) { parts.append("allowBluetoothHFP") }
         if options.contains(.defaultToSpeaker) { parts.append("defaultToSpeaker") }
         if options.contains(.interruptSpokenAudioAndMixWithOthers) { parts.append("interruptSpokenAudio") }
         if options.contains(.allowBluetoothA2DP) { parts.append("allowBluetoothA2DP") }

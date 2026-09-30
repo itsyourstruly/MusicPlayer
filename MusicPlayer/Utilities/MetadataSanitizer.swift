@@ -3,7 +3,7 @@ import Foundation
 /// High-performance metadata and filename sanitization engine.
 /// Extracts clean core identity attributes and isolates contextual modifiers (remixes, features, live, remasters)
 /// to produce stripped search query strings and structured matching signatures.
-public enum MetadataSanitizer {
+public enum MetadataSanitizer: Sendable {
 
     // MARK: - Regular Expressions (Compiled Once)
 
@@ -387,12 +387,12 @@ public enum MetadataSanitizer {
         return keywords.contains { titleLower.contains($0) }
     }
 
-    private static let alternateVersionRegex = try? NSRegularExpression(
+    nonisolated(unsafe) private static let alternateVersionRegex = try? NSRegularExpression(
         pattern: #"[\(\[\{]\s*(?:clear\s+channel|heineken|red\s+star|session|sessions|live\s+session|live\b.*?|bbc|live\s+lounge|tiny\s*desk|spotify\s+session|apple\s+music\s+session|itunes\s+session|aol\s+session|stripped|unplugged|mtv|exclusive|performance|snippet|demo|unreleased|alternate|alternative|alt\.?\s*(?:take|version)?|take\s+\d+|rough\s+mix|work\s+in\s+progress|wip|early\s+version|outtake|b-side|clean\s+version|clean\b|explicit\s+version|explicit\b|instrumental|acapella|a\s+cappella|orchestral|acoustic|dub|vip|re-?mix|club\s+mix|extended|radio\s+edit|radio\s+version|dance\s+mix|slowed|reverb|sped\s+up|speed\s+up|chopped\s+(?:and|&)\s+screwed|mash-?up|re-?work|re-?edit|bootleg|nightcore|daycore|intro\s+version|outro\s+version|single\s+version|album\s+version|piano\s+version|strings\s+version|guitar\s+version|re-?recorded|flip|mix|edit|version).*?[\)\]\}]|\s+-\s*(?:clear\s+channel|heineken|red\s+star|session|sessions|live\s+session|live\b.*?|bbc|live\s+lounge|tiny\s*desk|stripped|unplugged|mtv|exclusive|performance|snippet|demo|unreleased|alternate|alternative|alt\.?\s*(?:take|version)?|take\s+\d+|rough\s+mix|outtake|b-side|clean\s+version|clean\b|explicit\s+version|explicit\b|instrumental|acapella|acoustic|dub|vip|re-?mix|extended|radio\s+edit|radio\s+version|slowed|sped\s+up|mash-?up|re-?work|re-?edit|bootleg|nightcore|re-?recorded|piano\s+version|strings\s+version|guitar\s+version|flip|mix|edit|version).*$"#,
         options: [.caseInsensitive]
     )
 
-    private static let liveBracketRegex = try? NSRegularExpression(
+    nonisolated(unsafe) private static let liveBracketRegex = try? NSRegularExpression(
         pattern: #"[\(\[\{][^\)\]\}]*\blive\b[^\)\]\}]*[\)\]\}]|\s+-\s*.*?\blive\b.*$"#,
         options: [.caseInsensitive]
     )
@@ -501,7 +501,7 @@ public enum MetadataSanitizer {
 
     // MARK: - 4-Digit Release Year Extractor
 
-    private static let fourDigitYearRegex = try? NSRegularExpression(
+    nonisolated(unsafe) private static let fourDigitYearRegex = try? NSRegularExpression(
         pattern: #"\b(19\d{2}|20\d{2})\b"#,
         options: []
     )

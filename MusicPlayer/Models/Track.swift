@@ -61,6 +61,8 @@ public struct Track: Identifiable, Codable, Sendable, Hashable {
     public let lyrics: String?
     // Explicit alternate status
     public let isAlternate: Bool?
+    // Linked folder ID containing this track
+    public let folderID: UUID?
 
     // Original track number
     public let originalTrackNumber: Int?
@@ -77,7 +79,7 @@ public struct Track: Identifiable, Codable, Sendable, Hashable {
     public let searchTokens: String
 
     // Initialize with configured properties
-    public init(
+    public nonisolated init(
         id: UUID = UUID(),
         title: String,
         artist: String,
@@ -99,7 +101,8 @@ public struct Track: Identifiable, Codable, Sendable, Hashable {
         dateAdded: Date = Date(),
         fileInfo: AudioFileInfo? = nil,
         lyrics: String? = nil,
-        isAlternate: Bool? = nil
+        isAlternate: Bool? = nil,
+        folderID: UUID? = nil
     ) {
         self.id = id
         self.title = title
@@ -123,6 +126,7 @@ public struct Track: Identifiable, Codable, Sendable, Hashable {
         self.fileInfo = fileInfo
         self.lyrics = lyrics
         self.isAlternate = isAlternate
+        self.folderID = folderID
 
         // N title
         let nTitle = FuzzyMatcher.normalize(title)
@@ -140,7 +144,7 @@ public struct Track: Identifiable, Codable, Sendable, Hashable {
     }
 
     // Initialize with configured properties
-    public init(from decoder: Decoder) throws {
+    public nonisolated init(from decoder: Decoder) throws {
         // Container
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
@@ -185,6 +189,7 @@ public struct Track: Identifiable, Codable, Sendable, Hashable {
         self.fileInfo = try container.decodeIfPresent(AudioFileInfo.self, forKey: .fileInfo)
         self.lyrics = try container.decodeIfPresent(String.self, forKey: .lyrics)
         self.isAlternate = try container.decodeIfPresent(Bool.self, forKey: .isAlternate)
+        self.folderID = try container.decodeIfPresent(UUID.self, forKey: .folderID)
 
         // Fast-path: deserialize precomputed search tokens if cached, avoiding expensive runtime normalization
         if let nTitle = try container.decodeIfPresent(String.self, forKey: .normalizedTitle),
@@ -211,12 +216,12 @@ public struct Track: Identifiable, Codable, Sendable, Hashable {
     // Defines CodingKeys cases
     private enum CodingKeys: String, CodingKey {
         // Id option
-        case id, title, artist, album, albumArtist, composer, performer, genre, year, trackNumber, originalTrackNumber, deluxeTrackNumber, totalTracks, discNumber, discTotal, duration, url, artworkKey, dateAdded, fileInfo, lyrics, isAlternate
+        case id, title, artist, album, albumArtist, composer, performer, genre, year, trackNumber, originalTrackNumber, deluxeTrackNumber, totalTracks, discNumber, discTotal, duration, url, artworkKey, dateAdded, fileInfo, lyrics, isAlternate, folderID
         case normalizedTitle, normalizedArtist, normalizedAlbum, searchTokens
     }
 
     // Encode
-    public func encode(to encoder: Encoder) throws {
+    public nonisolated func encode(to encoder: Encoder) throws {
         // Container
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(id, forKey: .id)
@@ -241,6 +246,7 @@ public struct Track: Identifiable, Codable, Sendable, Hashable {
         try container.encodeIfPresent(fileInfo, forKey: .fileInfo)
         try container.encodeIfPresent(lyrics, forKey: .lyrics)
         try container.encodeIfPresent(isAlternate, forKey: .isAlternate)
+        try container.encodeIfPresent(folderID, forKey: .folderID)
         try container.encode(normalizedTitle, forKey: .normalizedTitle)
         try container.encode(normalizedArtist, forKey: .normalizedArtist)
         try container.encode(normalizedAlbum, forKey: .normalizedAlbum)
@@ -298,7 +304,7 @@ public struct Track: Identifiable, Codable, Sendable, Hashable {
     }
 
     /// Returns a copy of the track with an updated artworkKey.
-    public func withArtworkKey(_ key: String?) -> Track {
+    public nonisolated func withArtworkKey(_ key: String?) -> Track {
         Track(
             id: self.id,
             title: self.title,
@@ -321,7 +327,8 @@ public struct Track: Identifiable, Codable, Sendable, Hashable {
             dateAdded: self.dateAdded,
             fileInfo: self.fileInfo,
             lyrics: self.lyrics,
-            isAlternate: self.isAlternate
+            isAlternate: self.isAlternate,
+            folderID: self.folderID
         )
     }
 
@@ -349,7 +356,8 @@ public struct Track: Identifiable, Codable, Sendable, Hashable {
             dateAdded: self.dateAdded,
             fileInfo: self.fileInfo,
             lyrics: self.lyrics,
-            isAlternate: self.isAlternate
+            isAlternate: self.isAlternate,
+            folderID: self.folderID
         )
     }
 
@@ -377,7 +385,8 @@ public struct Track: Identifiable, Codable, Sendable, Hashable {
             dateAdded: self.dateAdded,
             fileInfo: self.fileInfo,
             lyrics: self.lyrics,
-            isAlternate: self.isAlternate
+            isAlternate: self.isAlternate,
+            folderID: self.folderID
         )
     }
 
@@ -405,7 +414,8 @@ public struct Track: Identifiable, Codable, Sendable, Hashable {
             dateAdded: self.dateAdded,
             fileInfo: self.fileInfo,
             lyrics: self.lyrics,
-            isAlternate: self.isAlternate
+            isAlternate: self.isAlternate,
+            folderID: self.folderID
         )
     }
 
@@ -446,7 +456,8 @@ public struct Track: Identifiable, Codable, Sendable, Hashable {
             dateAdded: self.dateAdded,
             fileInfo: self.fileInfo,
             lyrics: self.lyrics,
-            isAlternate: self.isAlternate
+            isAlternate: self.isAlternate,
+            folderID: self.folderID
         )
     }
 
@@ -474,7 +485,8 @@ public struct Track: Identifiable, Codable, Sendable, Hashable {
             dateAdded: self.dateAdded,
             fileInfo: self.fileInfo,
             lyrics: self.lyrics,
-            isAlternate: isAlternate
+            isAlternate: isAlternate,
+            folderID: self.folderID
         )
     }
 
@@ -502,7 +514,37 @@ public struct Track: Identifiable, Codable, Sendable, Hashable {
             dateAdded: self.dateAdded,
             fileInfo: self.fileInfo,
             lyrics: self.lyrics,
-            isAlternate: isAlternate ?? self.isAlternate
+            isAlternate: isAlternate ?? self.isAlternate,
+            folderID: self.folderID
+        )
+    }
+
+    /// Returns a copy of the track assigned to a specific folder.
+    public func withFolderID(_ newFolderID: UUID?) -> Track {
+        Track(
+            id: self.id,
+            title: self.title,
+            artist: self.artist,
+            album: self.album,
+            albumArtist: self.albumArtist,
+            composer: self.composer,
+            performer: self.performer,
+            genre: self.genre,
+            year: self.year,
+            trackNumber: self.trackNumber,
+            originalTrackNumber: self.originalTrackNumber,
+            deluxeTrackNumber: self.deluxeTrackNumber,
+            totalTracks: self.totalTracks,
+            discNumber: self.discNumber,
+            discTotal: self.discTotal,
+            duration: self.duration,
+            url: self.url,
+            artworkKey: self.artworkKey,
+            dateAdded: self.dateAdded,
+            fileInfo: self.fileInfo,
+            lyrics: self.lyrics,
+            isAlternate: self.isAlternate,
+            folderID: newFolderID
         )
     }
 
@@ -563,7 +605,7 @@ public struct Track: Identifiable, Codable, Sendable, Hashable {
     }
 
     /// Indicates if all 7 core metadata fields (Title, Artist, Album, Genre, Year, TrackNumber, Artwork) are present and valid.
-    public var isComplete7CoreTags: Bool {
+    public nonisolated var isComplete7CoreTags: Bool {
         hasValidTitle &&
         hasValidArtist &&
         hasValidAlbum &&

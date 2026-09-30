@@ -178,7 +178,7 @@ public struct MacAllTracksView: View {
                 .frame(width: 28, height: 1)
 
             // Title Column (Sortable)
-            sortableColumnHeader(title: "TITLE", option: .title)
+            sortableColumnHeader(title: "NAME", option: .title)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
             // Artist Column (Sortable)

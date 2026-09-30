@@ -85,6 +85,8 @@ public enum LibraryCategory: String, CaseIterable, Identifiable, Codable, Sendab
     case playlists
     // Tracks option
     case tracks
+    // Folders option
+    case folders
 
     // Unique track identifier
     public var id: String { rawValue }
@@ -96,6 +98,7 @@ public enum LibraryCategory: String, CaseIterable, Identifiable, Codable, Sendab
         case .albums: return "ALBUMS"
         case .playlists: return "PLAYLISTS"
         case .tracks: return "TRACKS"
+        case .folders: return "FOLDERS"
         }
     }
 
@@ -142,7 +145,7 @@ public enum TrackSortOption: String, CaseIterable, Identifiable, Sendable {
 
     public var label: String {
         switch self {
-        case .title: return "TITLE"
+        case .title: return "NAME"
         case .artist: return "ARTIST"
         case .album: return "ALBUM"
         case .duration: return "DURATION"
@@ -191,7 +194,7 @@ public enum AlbumSortOption: String, CaseIterable, Identifiable, Sendable {
 
     public var label: String {
         switch self {
-        case .title: return "TITLE"
+        case .title: return "NAME"
         case .most: return "MOST"
         case .artist: return "ARTIST"
         case .duration: return "DURATION"
@@ -214,6 +217,21 @@ public enum PlaylistSortOption: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .name: return "NAME"
         case .most: return "MOST"
+        }
+    }
+}
+
+/// Folder sorting criteria for the folders library view.
+public enum FolderSortOption: String, CaseIterable, Identifiable, Sendable {
+    // Name option
+    case name
+
+    // Unique track identifier
+    public var id: String { rawValue }
+
+    public var label: String {
+        switch self {
+        case .name: return "NAME"
         }
     }
 }

@@ -17,7 +17,7 @@ public struct DuplicateCandidate: Identifiable, Codable, Sendable, Hashable {
     public let isRecommended: Bool
 
     // Initialize with configured properties
-    public init(
+    public nonisolated init(
         track: Track,
         qualityScore: Int,
         scoreBreakdown: [String: Int] = [:],
@@ -73,7 +73,7 @@ public struct DuplicateGroup: Identifiable, Codable, Sendable, Hashable {
     public var selectedPrimaryTrackID: UUID
 
     // Initialize with configured properties
-    public init(
+    public nonisolated init(
         id: String,
         normalizedTitle: String,
         normalizedArtist: String,
@@ -108,7 +108,7 @@ public struct DuplicateGroup: Identifiable, Codable, Sendable, Hashable {
     }
 
     /// Total wasted disk space in bytes consumed by the secondary duplicates in this group.
-    public var potentialSavedBytes: Int64 {
+    public nonisolated var potentialSavedBytes: Int64 {
         duplicateCandidates.reduce(0) { $0 + ($1.track.fileInfo?.fileSizeBytes ?? 0) }
     }
 

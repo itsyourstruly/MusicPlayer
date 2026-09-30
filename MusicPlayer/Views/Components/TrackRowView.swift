@@ -45,7 +45,6 @@ public struct TrackRowView: View {
     @Environment(\.appTheme) private var appTheme
     @GestureState private var gestureDragOffset: CGFloat = 0
     @State private var dragOffset: CGFloat = 0
-    @State private var isActionAnimating: Bool = false
     @State private var isTapPlayNextTriggered: Bool = false
     @State private var showPlayNowSuccess: Bool = false
     @State private var showPlayNextSuccess: Bool = false
@@ -54,8 +53,7 @@ public struct TrackRowView: View {
     @State private var showQueueAgain: Bool = false
     @State private var isLeadingBadgeVisible: Bool = false
     @State private var isTrailingBadgeVisible: Bool = false
-    @State private var againDismissTask: Task<Void, Never>? = nil
-    @State private var successDismissTask: Task<Void, Never>? = nil
+    @State private var dismissTask: Task<Void, Never>? = nil
 
     // Activation thresholds - leading has longer badge (PLAYING NEXT / PLAY NOW), trailing is shorter (QUEUE)
     private let leadingActivationThreshold: CGFloat = 118
@@ -109,10 +107,7 @@ public struct TrackRowView: View {
     }
 
     private var currentOffset: CGFloat {
-        if isActionAnimating {
-            return dragOffset
-        }
-        return gestureDragOffset != 0 ? gestureDragOffset : dragOffset
+        gestureDragOffset != 0 ? gestureDragOffset : dragOffset
     }
 
     private var trailingRevealProgress: Double {
@@ -229,7 +224,10 @@ public struct TrackRowView: View {
                     albumThumbnailView
                         .contentShape(Rectangle())
                         .onTapGesture {
-                            guard !isActionAnimating && abs(currentOffset) < 5 else { return }
+                            if abs(currentOffset) > 5 {
+                                resetOffset()
+                                return
+                            }
                             HapticFeedback.lightImpact()
                             onSelectAlbum()
                         }
@@ -273,17 +271,11 @@ public struct TrackRowView: View {
             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
             .contentShape(Rectangle())
             .onTapGesture {
-                guard !isActionAnimating && abs(currentOffset) < 5 else {
-                    if abs(currentOffset) > 5 {
-                        resetOffset()
-                    }
+                if abs(currentOffset) > 5 {
+                    resetOffset()
                     return
                 }
-                if showPlayNextAgain {
-                    confirmAgain(isPlayNext: true)
-                } else if showQueueAgain {
-                    confirmAgain(isPlayNext: false)
-                } else if isTapToPlayNextEnabled {
+                if isTapToPlayNextEnabled {
                     triggerTapPlayNext()
                 } else {
                     onPlay()
@@ -294,21 +286,17 @@ public struct TrackRowView: View {
             .highPriorityGesture(
                 isSwipeDisabled ? nil : DragGesture(minimumDistance: 24, coordinateSpace: .local)
                     .updating($gestureDragOffset) { value, state, _ in
-                        guard !isActionAnimating else {
-                            state = 0
-                            return
-                        }
                         let translationX = value.translation.width
                         let translationY = value.translation.height
 
-                        // Yield immediately to vertical scrolling if any noticeable vertical movement occurs
-                        if abs(translationY) > 6 && abs(translationY) * 1.5 >= abs(translationX) {
+                        // Immediately yield to vertical scrolling if any vertical motion occurs
+                        if abs(translationY) > 4 && abs(translationY) * 1.2 >= abs(translationX) {
                             state = 0
                             return
                         }
 
-                        // Only track horizontal displacement if horizontal motion strongly dominates
-                        if abs(translationX) > 16 && abs(translationX) > abs(translationY) * 2.0 {
+                        // Only track horizontal displacement if horizontal motion clearly dominates
+                        if abs(translationX) > 20 && abs(translationX) > abs(translationY) * 1.8 {
                             if translationX > leadingActivationThreshold {
                                 let extra = translationX - leadingActivationThreshold
                                 state = leadingActivationThreshold + (extra * 0.35)
@@ -323,17 +311,18 @@ public struct TrackRowView: View {
                         }
                     }
                     .onEnded { value in
-                        guard !isActionAnimating else { return }
                         let translationX = value.translation.width
                         let translationY = value.translation.height
 
                         // Require clearly horizontal motion
-                        let isSwipeRight = translationX >= leadingActivationThreshold && translationX > abs(translationY) * 2.0
-                        let isSwipeLeft = translationX <= -trailingActivationThreshold && abs(translationX) > abs(translationY) * 2.0
+                        let isSwipeRight = translationX >= leadingActivationThreshold && translationX > abs(translationY) * 1.8
+                        let isSwipeLeft = translationX <= -trailingActivationThreshold && abs(translationX) > abs(translationY) * 1.8
 
                         guard isSwipeRight || isSwipeLeft else {
-                            withAnimation(.spring(response: 0.28, dampingFraction: 0.85)) {
-                                dragOffset = 0
+                            if dragOffset != 0 {
+                                withAnimation(.spring(response: 0.22, dampingFraction: 0.88)) {
+                                    dragOffset = 0
+                                }
                             }
                             return
                         }
@@ -418,216 +407,107 @@ public struct TrackRowView: View {
 
     // Trigger tap play next (used when tap-to-play-next is enabled and track is tapped)
     private func triggerTapPlayNext() {
-        successDismissTask?.cancel()
-        againDismissTask?.cancel()
-        isActionAnimating = true
+        dismissTask?.cancel()
+        HapticFeedback.notificationSuccess()
+        onPlayNext()
         isTapPlayNextTriggered = true
         isLeadingBadgeVisible = true
         showPlayNowSuccess = false
         showPlayNextSuccess = false
         showPlayNextAgain = false
-        HapticFeedback.notificationSuccess()
-        onPlayNext()
 
-        withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) {
+        withAnimation(.spring(response: 0.25, dampingFraction: 0.85)) {
             dragOffset = activationThreshold
         }
 
-        successDismissTask = Task { @MainActor in
-            defer {
-                isActionAnimating = false
+        dismissTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 350_000_000)
+            guard !Task.isCancelled else { return }
+            withAnimation(.spring(response: 0.28, dampingFraction: 0.85)) {
                 dragOffset = 0
                 isLeadingBadgeVisible = false
                 isTapPlayNextTriggered = false
             }
-            try? await Task.sleep(nanoseconds: 650_000_000)
-            // Fade out the badge first
-            withAnimation(.easeOut(duration: 0.18)) {
-                isLeadingBadgeVisible = false
-            }
-            try? await Task.sleep(nanoseconds: 80_000_000)
-            // Slide track back smoothly
-            withAnimation(.spring(response: 0.32, dampingFraction: 0.84)) {
-                dragOffset = 0
-            }
-            try? await Task.sleep(nanoseconds: 320_000_000)
         }
     }
 
     // Trigger play now (used when swipe-right while tap-to-play-next is enabled)
     private func triggerPlayNow() {
-        successDismissTask?.cancel()
-        againDismissTask?.cancel()
-        isActionAnimating = true
+        dismissTask?.cancel()
+        HapticFeedback.notificationSuccess()
+        onPlay()
         showPlayNowSuccess = true
         isLeadingBadgeVisible = true
         isTapPlayNextTriggered = false
         showPlayNextSuccess = false
         showPlayNextAgain = false
-        HapticFeedback.notificationSuccess()
-        onPlay()
 
-        withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) {
+        withAnimation(.spring(response: 0.25, dampingFraction: 0.85)) {
             dragOffset = activationThreshold
         }
 
-        successDismissTask = Task { @MainActor in
-            defer {
-                isActionAnimating = false
+        dismissTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 350_000_000)
+            guard !Task.isCancelled else { return }
+            withAnimation(.spring(response: 0.28, dampingFraction: 0.85)) {
                 dragOffset = 0
                 isLeadingBadgeVisible = false
                 showPlayNowSuccess = false
             }
-            try? await Task.sleep(nanoseconds: 650_000_000)
-            // Fade out the badge first so it disappears before track returns
-            withAnimation(.easeOut(duration: 0.18)) {
-                isLeadingBadgeVisible = false
-            }
-            try? await Task.sleep(nanoseconds: 80_000_000)
-            // Slide track back smoothly into place
-            withAnimation(.spring(response: 0.32, dampingFraction: 0.84)) {
-                dragOffset = 0
-            }
-            try? await Task.sleep(nanoseconds: 320_000_000)
         }
     }
 
     // Trigger play next (swipe right when tap-to-play-next is disabled)
     private func triggerPlayNext() {
-        againDismissTask?.cancel()
-        successDismissTask?.cancel()
+        dismissTask?.cancel()
+        HapticFeedback.notificationSuccess()
+        onPlayNext()
+        showPlayNextSuccess = true
+        isLeadingBadgeVisible = true
+        showPlayNextAgain = false
 
-        if isInPlayNext {
-            HapticFeedback.notificationWarning()
-            showPlayNextAgain = true
-            isLeadingBadgeVisible = true
-            showPlayNextSuccess = false
-            isActionAnimating = true
+        withAnimation(.spring(response: 0.25, dampingFraction: 0.85)) {
+            dragOffset = activationThreshold
+        }
 
-            withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) {
-                dragOffset = activationThreshold
-            }
-
-            againDismissTask = Task { @MainActor in
-                defer {
-                    isActionAnimating = false
-                    dragOffset = 0
-                    isLeadingBadgeVisible = false
-                    showPlayNextAgain = false
-                }
-                try? await Task.sleep(nanoseconds: 4_000_000_000)
-                withAnimation(.easeOut(duration: 0.18)) {
-                    isLeadingBadgeVisible = false
-                }
-                try? await Task.sleep(nanoseconds: 80_000_000)
-                withAnimation(.spring(response: 0.32, dampingFraction: 0.84)) {
-                    dragOffset = 0
-                }
-                try? await Task.sleep(nanoseconds: 320_000_000)
-            }
-        } else {
-            isActionAnimating = true
-            HapticFeedback.notificationSuccess()
-            showPlayNextSuccess = true
-            isLeadingBadgeVisible = true
-            showPlayNextAgain = false
-            onPlayNext()
-
-            withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) {
-                dragOffset = activationThreshold
-            }
-
-            successDismissTask = Task { @MainActor in
-                defer {
-                    isActionAnimating = false
-                    dragOffset = 0
-                    isLeadingBadgeVisible = false
-                    showPlayNextSuccess = false
-                }
-                try? await Task.sleep(nanoseconds: 650_000_000)
-                withAnimation(.easeOut(duration: 0.18)) {
-                    isLeadingBadgeVisible = false
-                }
-                try? await Task.sleep(nanoseconds: 80_000_000)
-                withAnimation(.spring(response: 0.32, dampingFraction: 0.84)) {
-                    dragOffset = 0
-                }
-                try? await Task.sleep(nanoseconds: 320_000_000)
+        dismissTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 350_000_000)
+            guard !Task.isCancelled else { return }
+            withAnimation(.spring(response: 0.28, dampingFraction: 0.85)) {
+                dragOffset = 0
+                isLeadingBadgeVisible = false
+                showPlayNextSuccess = false
             }
         }
     }
 
     // Trigger queue (swipe left)
     private func triggerQueue() {
-        againDismissTask?.cancel()
-        successDismissTask?.cancel()
+        dismissTask?.cancel()
+        HapticFeedback.notificationSuccess()
+        onQueueNext()
+        showQueueSuccess = true
+        isTrailingBadgeVisible = true
+        showQueueAgain = false
 
-        if isInPlayNext {
-            HapticFeedback.notificationWarning()
-            showQueueAgain = true
-            isTrailingBadgeVisible = true
-            showQueueSuccess = false
-            isActionAnimating = true
+        withAnimation(.spring(response: 0.25, dampingFraction: 0.85)) {
+            dragOffset = -trailingActivationThreshold
+        }
 
-            withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) {
-                dragOffset = -trailingActivationThreshold
-            }
-
-            againDismissTask = Task { @MainActor in
-                defer {
-                    isActionAnimating = false
-                    dragOffset = 0
-                    isTrailingBadgeVisible = false
-                    showQueueAgain = false
-                }
-                try? await Task.sleep(nanoseconds: 4_000_000_000)
-                withAnimation(.easeOut(duration: 0.18)) {
-                    isTrailingBadgeVisible = false
-                }
-                try? await Task.sleep(nanoseconds: 80_000_000)
-                withAnimation(.spring(response: 0.32, dampingFraction: 0.84)) {
-                    dragOffset = 0
-                }
-                try? await Task.sleep(nanoseconds: 320_000_000)
-            }
-        } else {
-            isActionAnimating = true
-            HapticFeedback.notificationSuccess()
-            showQueueSuccess = true
-            isTrailingBadgeVisible = true
-            showQueueAgain = false
-            onQueueNext()
-
-            withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) {
-                dragOffset = -trailingActivationThreshold
-            }
-
-            successDismissTask = Task { @MainActor in
-                defer {
-                    isActionAnimating = false
-                    dragOffset = 0
-                    isTrailingBadgeVisible = false
-                    showQueueSuccess = false
-                }
-                try? await Task.sleep(nanoseconds: 650_000_000)
-                withAnimation(.easeOut(duration: 0.18)) {
-                    isTrailingBadgeVisible = false
-                }
-                try? await Task.sleep(nanoseconds: 80_000_000)
-                withAnimation(.spring(response: 0.32, dampingFraction: 0.84)) {
-                    dragOffset = 0
-                }
-                try? await Task.sleep(nanoseconds: 320_000_000)
+        dismissTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 350_000_000)
+            guard !Task.isCancelled else { return }
+            withAnimation(.spring(response: 0.28, dampingFraction: 0.85)) {
+                dragOffset = 0
+                isTrailingBadgeVisible = false
+                showQueueSuccess = false
             }
         }
     }
 
     // Confirm again
     private func confirmAgain(isPlayNext: Bool) {
-        againDismissTask?.cancel()
-        successDismissTask?.cancel()
-        againDismissTask = nil
-        isActionAnimating = true
+        dismissTask?.cancel()
         HapticFeedback.notificationSuccess()
 
         if isPlayNext {
@@ -642,27 +522,16 @@ public struct TrackRowView: View {
             onQueueNext()
         }
 
-        successDismissTask = Task { @MainActor in
-            defer {
-                isActionAnimating = false
+        dismissTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 350_000_000)
+            guard !Task.isCancelled else { return }
+            withAnimation(.spring(response: 0.28, dampingFraction: 0.85)) {
                 dragOffset = 0
                 isLeadingBadgeVisible = false
                 isTrailingBadgeVisible = false
                 showPlayNextSuccess = false
                 showQueueSuccess = false
-                showPlayNextAgain = false
-                showQueueAgain = false
             }
-            try? await Task.sleep(nanoseconds: 650_000_000)
-            withAnimation(.easeOut(duration: 0.18)) {
-                isLeadingBadgeVisible = false
-                isTrailingBadgeVisible = false
-            }
-            try? await Task.sleep(nanoseconds: 80_000_000)
-            withAnimation(.spring(response: 0.32, dampingFraction: 0.84)) {
-                dragOffset = 0
-            }
-            try? await Task.sleep(nanoseconds: 320_000_000)
         }
     }
 
@@ -704,13 +573,10 @@ public struct TrackRowView: View {
         .contentShape(Rectangle())
     }
 
-    // Reset offset
+    // Reset offset immediately
     private func resetOffset() {
-        againDismissTask?.cancel()
-        successDismissTask?.cancel()
-        againDismissTask = nil
-        successDismissTask = nil
-        isActionAnimating = false
+        dismissTask?.cancel()
+        dismissTask = nil
         dragOffset = 0
         isLeadingBadgeVisible = false
         isTrailingBadgeVisible = false

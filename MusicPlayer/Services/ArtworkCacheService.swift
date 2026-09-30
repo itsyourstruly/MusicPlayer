@@ -40,26 +40,40 @@ public actor ArtworkCacheService {
 
     // Initialize with configured properties
     private init() {
-        // Memory-bounded limits (300 thumbnails, 60MB total image cost)
-        decodedImageCache.countLimit = 300
-        decodedImageCache.totalCostLimit = 60 * 1024 * 1024
+        // Memory-bounded limits (500 full-quality images, 300MB total image cost)
+        decodedImageCache.countLimit = 500
+        decodedImageCache.totalCostLimit = 300 * 1024 * 1024
 
-        rawDataCache.countLimit = 15
-        rawDataCache.totalCostLimit = 2 * 1024 * 1024
+        rawDataCache.countLimit = 50
+        rawDataCache.totalCostLimit = 100 * 1024 * 1024
 
         self.cacheDirectoryURL = ArtworkCacheService.sharedCacheDirectoryURL
 
         #if canImport(UIKit)
-        NotificationCenter.default.addObserver(
-            forName: UIApplication.didReceiveMemoryWarningNotification,
-            object: nil,
-            queue: nil
-        ) { [weak decodedImageCache, weak rawDataCache] _ in
-            decodedImageCache?.removeAllObjects()
-            rawDataCache?.removeAllObjects()
-            AppLogger.storage.warning("Purged artwork memory cache in response to OS memory pressure.")
+        Task { @MainActor in
+            NotificationCenter.default.addObserver(
+                forName: UIApplication.didReceiveMemoryWarningNotification,
+                object: nil,
+                queue: nil
+            ) { _ in
+                Task {
+                    await ArtworkCacheService.shared.clearMemoryCache()
+                    AppLogger.storage.warning("Purged artwork memory cache in response to OS memory pressure.")
+                }
+            }
         }
         #endif
+    }
+
+    /// Synchronously retrieves a cached decoded image from the in-memory cache if available.
+    public nonisolated func cachedImage(key: String, maxDimension: CGFloat = 128) -> PlatformImage? {
+        guard !key.isEmpty else { return nil }
+        let nsKey = key as NSString
+        if let cached = decodedImageCache.object(forKey: nsKey) {
+            return cached
+        }
+        let fallbackKey = "\(key)_\(Int(maxDimension))" as NSString
+        return decodedImageCache.object(forKey: fallbackKey)
     }
 
     /// Clears only the volatile in-memory cache without affecting disk persistence.
@@ -96,8 +110,9 @@ public actor ArtworkCacheService {
         guard !key.isEmpty else { return }
         let nsKey = key as NSString
         rawDataCache.removeObject(forKey: nsKey)
+        decodedImageCache.removeObject(forKey: nsKey)
         // Evict common thumbnail dimensions from decoded cache
-        for dim in [64, 86, 100, 120, 124, 128, 200, 256, 300, 350, 400, 512, 600, 800, 1024] {
+        for dim in [64, 86, 100, 120, 124, 128, 200, 256, 300, 350, 400, 512, 600, 800, 1024, 1400, 3000] {
             decodedImageCache.removeObject(forKey: "\(key)_\(dim)" as NSString)
         }
     }
@@ -122,11 +137,11 @@ public actor ArtworkCacheService {
         }
     }
 
-    /// Loads artwork on-demand with hardware-accelerated thumbnail downsampling (ImageIO) to minimize RAM consumption.
+    /// Loads artwork on-demand at full native resolution and quality without compression or downsampling.
     public func loadDecodedArtwork(key: String, maxDimension: CGFloat = 512) -> PlatformImage? {
         guard !key.isEmpty else { return nil }
 
-        let nsKey = "\(key)_\(Int(maxDimension))" as NSString
+        let nsKey = key as NSString
         if let cachedImage = decodedImageCache.object(forKey: nsKey) {
             return cachedImage
         }
@@ -134,74 +149,110 @@ public actor ArtworkCacheService {
         // File URL on disk
         let fileURL = cacheDirectoryURL.appendingPathComponent(sanitizedKey(key) + ".art")
 
-        // Downsample directly from disk file URL or raw data using ImageIO
-        let downsampledImage: PlatformImage? = {
+        // Decode directly from disk file URL or raw data preserving full native resolution
+        let nativeImage: PlatformImage? = {
             if fileManager.fileExists(atPath: fileURL.path) {
-                return decodeDownsampledImage(from: fileURL, maxDimension: maxDimension)
+                return decodeNativeImage(from: fileURL)
             } else if let rawData = rawDataCache.object(forKey: key as NSString) {
-                return decodeDownsampledImage(from: rawData as Data, maxDimension: maxDimension)
+                return decodeNativeImage(from: rawData as Data)
             }
             return nil
         }()
 
-        if let image = downsampledImage {
-            let cost = Int(maxDimension * maxDimension * 4)
+        if let image = nativeImage {
+            #if canImport(UIKit)
+            let pixelW = max(1, Int(image.size.width * image.scale))
+            let pixelH = max(1, Int(image.size.height * image.scale))
+            #elseif canImport(AppKit)
+            let pixelW = max(1, Int(image.representations.first?.pixelsWide ?? Int(image.size.width)))
+            let pixelH = max(1, Int(image.representations.first?.pixelsHigh ?? Int(image.size.height)))
+            #endif
+            let cost = pixelW * pixelH * 4
             decodedImageCache.setObject(image, forKey: nsKey, cost: cost)
+            decodedImageCache.setObject(image, forKey: "\(key)_\(Int(maxDimension))" as NSString, cost: cost)
             return image
         }
 
         return nil
     }
 
-    /// Efficient ImageIO downsampling directly from a file URL on disk.
-    private func decodeDownsampledImage(from url: URL, maxDimension: CGFloat) -> PlatformImage? {
+    /// Decodes an image from disk URL preserving its full native quality, resolution, and color profile.
+    private func decodeNativeImage(from url: URL) -> PlatformImage? {
         let imageSourceOptions = [kCGImageSourceShouldCache: false] as CFDictionary
         guard let imageSource = CGImageSourceCreateWithURL(url as CFURL, imageSourceOptions) else {
-            return nil
+            #if canImport(UIKit)
+            return UIImage(contentsOfFile: url.path)
+            #elseif canImport(AppKit)
+            return NSImage(contentsOf: url)
+            #endif
         }
 
-        let maxPixelSize = max(64, Int(maxDimension))
-        let downsampleOptions = [
+        let decodeOptions = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
             kCGImageSourceShouldCacheImmediately: true,
-            kCGImageSourceCreateThumbnailWithTransform: true,
-            kCGImageSourceThumbnailMaxPixelSize: maxPixelSize
+            kCGImageSourceCreateThumbnailWithTransform: true
         ] as CFDictionary
 
-        guard let downsampledCGImage = CGImageSourceCreateThumbnailAtIndex(imageSource, 0, downsampleOptions) else {
-            return nil
+        if let fullResCGImage = CGImageSourceCreateThumbnailAtIndex(imageSource, 0, decodeOptions) {
+            #if canImport(UIKit)
+            return UIImage(cgImage: fullResCGImage)
+            #elseif canImport(AppKit)
+            return NSImage(cgImage: fullResCGImage, size: NSSize(width: fullResCGImage.width, height: fullResCGImage.height))
+            #endif
+        }
+
+        if let fullResCGImage = CGImageSourceCreateImageAtIndex(imageSource, 0, [kCGImageSourceShouldCacheImmediately: true] as CFDictionary) {
+            #if canImport(UIKit)
+            return UIImage(cgImage: fullResCGImage)
+            #elseif canImport(AppKit)
+            return NSImage(cgImage: fullResCGImage, size: NSSize(width: fullResCGImage.width, height: fullResCGImage.height))
+            #endif
         }
 
         #if canImport(UIKit)
-        return UIImage(cgImage: downsampledCGImage)
+        return UIImage(contentsOfFile: url.path)
         #elseif canImport(AppKit)
-        return NSImage(cgImage: downsampledCGImage, size: NSSize(width: maxDimension, height: maxDimension))
+        return NSImage(contentsOf: url)
         #endif
     }
 
-    /// Efficient ImageIO downsampling directly from raw data.
-    private func decodeDownsampledImage(from data: Data, maxDimension: CGFloat) -> PlatformImage? {
+    /// Decodes an image from raw data preserving its full native quality, resolution, and color profile.
+    private func decodeNativeImage(from data: Data) -> PlatformImage? {
         let imageSourceOptions = [kCGImageSourceShouldCache: false] as CFDictionary
         guard let imageSource = CGImageSourceCreateWithData(data as CFData, imageSourceOptions) else {
-            return nil
+            #if canImport(UIKit)
+            return UIImage(data: data)
+            #elseif canImport(AppKit)
+            return NSImage(data: data)
+            #endif
         }
 
-        let maxPixelSize = max(64, Int(maxDimension))
-        let downsampleOptions = [
+        let decodeOptions = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
             kCGImageSourceShouldCacheImmediately: true,
-            kCGImageSourceCreateThumbnailWithTransform: true,
-            kCGImageSourceThumbnailMaxPixelSize: maxPixelSize
+            kCGImageSourceCreateThumbnailWithTransform: true
         ] as CFDictionary
 
-        guard let downsampledCGImage = CGImageSourceCreateThumbnailAtIndex(imageSource, 0, downsampleOptions) else {
-            return nil
+        if let fullResCGImage = CGImageSourceCreateThumbnailAtIndex(imageSource, 0, decodeOptions) {
+            #if canImport(UIKit)
+            return UIImage(cgImage: fullResCGImage)
+            #elseif canImport(AppKit)
+            return NSImage(cgImage: fullResCGImage, size: NSSize(width: fullResCGImage.width, height: fullResCGImage.height))
+            #endif
+        }
+
+        if let fullResCGImage = CGImageSourceCreateImageAtIndex(imageSource, 0, [kCGImageSourceShouldCacheImmediately: true] as CFDictionary) {
+            #if canImport(UIKit)
+            return UIImage(cgImage: fullResCGImage)
+            #elseif canImport(AppKit)
+            return NSImage(cgImage: fullResCGImage, size: NSSize(width: fullResCGImage.width, height: fullResCGImage.height))
+            #endif
         }
 
         #if canImport(UIKit)
-        return UIImage(cgImage: downsampledCGImage)
+        return UIImage(data: data)
         #elseif canImport(AppKit)
-        return NSImage(cgImage: downsampledCGImage, size: NSSize(width: maxDimension, height: maxDimension))
+        return NSImage(data: data)
         #endif
     }
 

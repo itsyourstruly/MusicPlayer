@@ -19,6 +19,7 @@ public struct ContentView: View {
     @State private var selectedHomeAlbum: Album? = nil
     @State private var selectedHomePlaylist: Playlist? = nil
     @State private var isLibrarySearchFocused: Bool = false
+    @State private var lastHomeTabTapTime: TimeInterval = 0
 
     /// Custom tab binding so re-tapping the active tab pops its navigation stack or triggers shortcuts
     private var tabBinding: Binding<Int> {
@@ -26,6 +27,9 @@ public struct ContentView: View {
             get: { selectedTab },
             set: { newTab in
                 if newTab == 0 {
+                    let now = Date().timeIntervalSince1970
+                    guard now - lastHomeTabTapTime > 0.35 else { return }
+                    lastHomeTabTapTime = now
                     HapticFeedback.selectionChanged()
                     if selectedTab == 0 {
                         // Already on the Home tab
@@ -36,6 +40,7 @@ public struct ContentView: View {
                             homeNavigateToSearch = false
                         } else if homeNavigateToSearch {
                             // Currently in Search Library -> tap Home to return to the Home page
+                            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
                             homeNavigateToSearch = false
                         } else {
                             // Already on the Home page -> tap Home to go to the SEARCH LIBRARY page
@@ -43,6 +48,7 @@ public struct ContentView: View {
                         }
                     } else {
                         // Switching from Library tab to Home -> return to the Home page
+                        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
                         selectedHomeAlbum = nil
                         selectedHomePlaylist = nil
                         homeNavigateToSearch = false
@@ -59,6 +65,9 @@ public struct ContentView: View {
                         } else {
                             isLibrarySearchFocused = true
                         }
+                    } else {
+                        // Switching from Home tab to Library: resign any active search keyboard cleanly
+                        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
                     }
                     selectedTab = 1
                 }

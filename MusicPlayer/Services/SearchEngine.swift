@@ -212,82 +212,84 @@ public actor SearchEngine {
         maxArtistResults: Int = 40
     ) -> AsyncStream<GlobalSearchResults> {
         AsyncStream { continuation in
-            let cleanQuery = FuzzyMatcher.normalize(query)
-            guard cleanQuery.count >= 2 else {
-                continuation.yield(.empty)
-                continuation.finish()
-                return
-            }
+            Task {
+                let cleanQuery = FuzzyMatcher.normalize(query)
+                guard cleanQuery.count >= 2 else {
+                    continuation.yield(.empty)
+                    continuation.finish()
+                    return
+                }
 
-            let effectiveTracks = !self.tracks.isEmpty ? self.tracks : (tracksFallback ?? [])
-            let effectiveAlbums = !self.albums.isEmpty ? self.albums : (albumsFallback ?? [])
-            let effectiveArtists = !self.artists.isEmpty ? self.artists : (artistsFallback ?? [])
-            let effectivePlaylists = !self.playlists.isEmpty ? self.playlists : (playlistsFallback ?? [])
-            let effectiveJoinedArtists = !self.joinedArtists.isEmpty ? self.joinedArtists : (joinedArtistsFallback ?? [])
+                let effectiveTracks = await (!self.tracks.isEmpty ? self.tracks : (tracksFallback ?? []))
+                let effectiveAlbums = await (!self.albums.isEmpty ? self.albums : (albumsFallback ?? []))
+                let effectiveArtists = await (!self.artists.isEmpty ? self.artists : (artistsFallback ?? []))
+                let effectivePlaylists = await (!self.playlists.isEmpty ? self.playlists : (playlistsFallback ?? []))
+                let effectiveJoinedArtists = await (!self.joinedArtists.isEmpty ? self.joinedArtists : (joinedArtistsFallback ?? []))
 
-            guard !effectiveTracks.isEmpty || !effectiveAlbums.isEmpty || !effectiveArtists.isEmpty else {
-                continuation.yield(.empty)
-                continuation.finish()
-                return
-            }
+                guard !effectiveTracks.isEmpty || !effectiveAlbums.isEmpty || !effectiveArtists.isEmpty else {
+                    continuation.yield(.empty)
+                    continuation.finish()
+                    return
+                }
 
-            if !self.isIndexed {
-                self.updateIndex(
-                    tracks: effectiveTracks,
-                    albums: effectiveAlbums,
-                    artists: effectiveArtists,
-                    playlists: effectivePlaylists,
-                    joinedArtists: effectiveJoinedArtists
+                if await !self.isIndexed {
+                    await self.updateIndex(
+                        tracks: effectiveTracks,
+                        albums: effectiveAlbums,
+                        artists: effectiveArtists,
+                        playlists: effectivePlaylists,
+                        joinedArtists: effectiveJoinedArtists
+                    )
+                }
+
+                guard !Task.isCancelled else {
+                    continuation.finish()
+                    return
+                }
+
+                // Phase 1: Rapid Top-Tier Direct Matches
+                let topTier = await self.evaluateTopTier(
+                    cleanQuery: cleanQuery,
+                    effectiveTracks: effectiveTracks,
+                    effectiveAlbums: effectiveAlbums,
+                    effectiveArtists: effectiveArtists,
+                    effectivePlaylists: effectivePlaylists,
+                    effectiveJoinedArtists: effectiveJoinedArtists,
+                    maxTrackResults: min(maxTrackResults, 40),
+                    maxAlbumResults: min(maxAlbumResults, 24),
+                    maxArtistResults: min(maxArtistResults, 12)
                 )
-            }
 
-            guard !Task.isCancelled else {
+                if topTier.hasResults {
+                    continuation.yield(topTier)
+                }
+
+                guard !Task.isCancelled else {
+                    continuation.finish()
+                    return
+                }
+
+                // Phase 2: Full Deep Ranked Search Hierarchy
+                let fullResults = await self.evaluateFullSearch(
+                    cleanQuery: cleanQuery,
+                    effectiveTracks: effectiveTracks,
+                    effectiveAlbums: effectiveAlbums,
+                    effectiveArtists: effectiveArtists,
+                    effectivePlaylists: effectivePlaylists,
+                    effectiveJoinedArtists: effectiveJoinedArtists,
+                    maxTrackResults: maxTrackResults,
+                    maxAlbumResults: maxAlbumResults,
+                    maxArtistResults: maxArtistResults
+                )
+
+                guard !Task.isCancelled else {
+                    continuation.finish()
+                    return
+                }
+
+                continuation.yield(fullResults)
                 continuation.finish()
-                return
             }
-
-            // Phase 1: Rapid Top-Tier Direct Matches
-            let topTier = self.evaluateTopTier(
-                cleanQuery: cleanQuery,
-                effectiveTracks: effectiveTracks,
-                effectiveAlbums: effectiveAlbums,
-                effectiveArtists: effectiveArtists,
-                effectivePlaylists: effectivePlaylists,
-                effectiveJoinedArtists: effectiveJoinedArtists,
-                maxTrackResults: min(maxTrackResults, 40),
-                maxAlbumResults: min(maxAlbumResults, 24),
-                maxArtistResults: min(maxArtistResults, 12)
-            )
-
-            if topTier.hasResults {
-                continuation.yield(topTier)
-            }
-
-            guard !Task.isCancelled else {
-                continuation.finish()
-                return
-            }
-
-            // Phase 2: Full Deep Ranked Search Hierarchy
-            let fullResults = self.evaluateFullSearch(
-                cleanQuery: cleanQuery,
-                effectiveTracks: effectiveTracks,
-                effectiveAlbums: effectiveAlbums,
-                effectiveArtists: effectiveArtists,
-                effectivePlaylists: effectivePlaylists,
-                effectiveJoinedArtists: effectiveJoinedArtists,
-                maxTrackResults: maxTrackResults,
-                maxAlbumResults: maxAlbumResults,
-                maxArtistResults: maxArtistResults
-            )
-
-            guard !Task.isCancelled else {
-                continuation.finish()
-                return
-            }
-
-            continuation.yield(fullResults)
-            continuation.finish()
         }
     }
 

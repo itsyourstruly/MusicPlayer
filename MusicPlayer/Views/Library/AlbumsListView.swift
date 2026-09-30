@@ -90,6 +90,7 @@ public struct AlbumsListView: View {
                 .padding(.horizontal, 16)
             }
         }
+        .padding(.top, 4)
         .navigationDestination(item: $selectedAlbum) { album in
             AlbumDetailView(album: album, libraryStore: libraryStore, playerService: playerService)
         }

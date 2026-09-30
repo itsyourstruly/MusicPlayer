@@ -31,8 +31,8 @@ public actor AudioWaveformSpectrogramGenerator {
             return cached
         }
 
-        _ = SecurityScopedBookmark.shared.resolveAndAccessBookmark()
-        let effectiveURL = SecurityScopedBookmark.shared.resolveAccessibleURL(for: url)
+        _ = await SecurityScopedBookmark.shared.resolveAndAccessBookmark()
+        let effectiveURL = await SecurityScopedBookmark.shared.resolveAccessibleURL(for: url)
 
         let isAccessing = effectiveURL.startAccessingSecurityScopedResource()
         defer {
@@ -326,19 +326,19 @@ public actor AudioWaveformSpectrogramGenerator {
 /// Thread-safe, high-speed in-memory cache for waveform amplitude envelopes.
 /// Allows zero-latency synchronous waveform rendering on frame 1 without awaiting asynchronous actors.
 public final class WaveformCache: @unchecked Sendable {
-    public static let shared = WaveformCache()
+    public nonisolated static let shared = WaveformCache()
     private let lock = NSLock()
     private var peaksByURL: [URL: [Float]] = [:]
 
     private init() {}
 
-    public func peaks(for url: URL) -> [Float]? {
+    public nonisolated func peaks(for url: URL) -> [Float]? {
         lock.lock()
         defer { lock.unlock() }
         return peaksByURL[url]
     }
 
-    public func setPeaks(_ peaks: [Float], for url: URL) {
+    public nonisolated func setPeaks(_ peaks: [Float], for url: URL) {
         lock.lock()
         defer { lock.unlock() }
         peaksByURL[url] = peaks

@@ -602,18 +602,18 @@ private struct MorphingPlayerCard: View, Animatable {
                     .zIndex(2)
 
                 // 3. Fullscreen Layer (Controls, progress bar, title, queue, lyrics)
-                fullscreenContent(
-                    fullArtworkSize: fullArtworkDimension,
-                    progress: clampedProgress
-                )
-                .opacity(fullOpacity)
-                .offset(y: (1.0 - clampedProgress) * 28)
-                .allowsHitTesting(clampedProgress > 0.75)
-                .zIndex(5)
+                if clampedProgress > 0.01 {
+                    fullscreenContent(
+                        fullArtworkSize: fullArtworkDimension,
+                        progress: clampedProgress
+                    )
+                    .opacity(fullOpacity)
+                    .offset(y: (1.0 - clampedProgress) * 28)
+                    .allowsHitTesting(clampedProgress > 0.75)
+                    .zIndex(5)
+                }
 
                 // 4. SINGLE SHARED ALBUM ARTWORK (Continuous transition in all modes: hero 3D in standard, header in lyrics mode)
-                let isAlbumColor = backgroundStyle == .albumColor
-
                 // Effective raw pitch
                 let effectiveRawPitch: Double = isTouchingArtwork ? touchPitch : currentPitch
                 // Effective raw yaw

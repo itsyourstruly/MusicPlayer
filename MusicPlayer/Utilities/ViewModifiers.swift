@@ -208,7 +208,7 @@ public struct AlbumContextMenuModifier: ViewModifier {
 // MARK: - Universal Keyboard Drag-to-Dismiss Helper
 
 public extension View {
-    /// Allows dragging down anywhere on the scroll content to interactively dismiss the software keyboard.
+    /// Allows dragging on the scroll content to dismiss the software keyboard interactively without cancelling in-flight scroll gestures.
     func dismissKeyboardOnDrag() -> some View {
         self
             .scrollDismissesKeyboard(.interactively)

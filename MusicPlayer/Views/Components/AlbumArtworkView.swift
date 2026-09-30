@@ -15,6 +15,7 @@ public struct AlbumArtworkView: View {
     // Subtitle
     public let subtitle: String?
     public var cornerRadius: CGFloat = 8
+    public var targetDimension: CGFloat = 128
 
     @State private var loadedImage: Image?
     @State private var isLoading: Bool = false
@@ -24,19 +25,44 @@ public struct AlbumArtworkView: View {
         artworkKey: String?,
         title: String,
         subtitle: String? = nil,
-        cornerRadius: CGFloat = 8
+        cornerRadius: CGFloat = 8,
+        targetDimension: CGFloat = 128
     ) {
         self.artworkKey = artworkKey
         self.title = title
         self.subtitle = subtitle
         self.cornerRadius = cornerRadius
+        self.targetDimension = targetDimension
+
+        if let key = artworkKey, !key.isEmpty,
+           let cached = ArtworkCacheService.shared.cachedImage(key: key, maxDimension: targetDimension) {
+            #if canImport(UIKit)
+            _loadedImage = State(initialValue: Image(uiImage: cached))
+            #elseif canImport(AppKit)
+            _loadedImage = State(initialValue: Image(nsImage: cached))
+            #endif
+        } else {
+            _loadedImage = State(initialValue: nil)
+        }
     }
+
+    private static let hasArtAsset: Bool = {
+        #if canImport(UIKit)
+        return UIImage(named: "art") != nil
+        #elseif canImport(AppKit)
+        return NSImage(named: "art") != nil
+        #else
+        return true
+        #endif
+    }()
 
     public var body: some View {
         ZStack {
             if let image = loadedImage {
                 image
                     .resizable()
+                    .interpolation(.high)
+                    .antialiased(true)
                     .aspectRatio(1.0, contentMode: .fill)
             } else {
                 defaultArtworkPlaceholder
@@ -51,17 +77,21 @@ public struct AlbumArtworkView: View {
     @ViewBuilder
     private var defaultArtworkPlaceholder: some View {
         #if canImport(UIKit)
-        if UIImage(named: "art") != nil {
+        if Self.hasArtAsset {
             Image("art")
                 .resizable()
+                .interpolation(.high)
+                .antialiased(true)
                 .aspectRatio(1.0, contentMode: .fill)
         } else {
             typographicPlaceholder
         }
         #elseif canImport(AppKit)
-        if NSImage(named: "art") != nil {
+        if Self.hasArtAsset {
             Image("art")
                 .resizable()
+                .interpolation(.high)
+                .antialiased(true)
                 .aspectRatio(1.0, contentMode: .fill)
         } else {
             typographicPlaceholder
@@ -69,6 +99,8 @@ public struct AlbumArtworkView: View {
         #else
         Image("art")
             .resizable()
+            .interpolation(.high)
+            .antialiased(true)
             .aspectRatio(1.0, contentMode: .fill)
         #endif
     }
@@ -102,8 +134,18 @@ public struct AlbumArtworkView: View {
             return
         }
 
-        // Load downsampled decoded artwork from disk cache with zero memory bloat
-        let platformImg = await ArtworkCacheService.shared.loadDecodedArtwork(key: key, maxDimension: 400)
+        // Fast synchronous memory cache check
+        if let cached = ArtworkCacheService.shared.cachedImage(key: key, maxDimension: targetDimension) {
+            #if canImport(UIKit)
+            self.loadedImage = Image(uiImage: cached)
+            #elseif canImport(AppKit)
+            self.loadedImage = Image(nsImage: cached)
+            #endif
+            return
+        }
+
+        // Load full native quality decoded artwork from cache
+        let platformImg = await ArtworkCacheService.shared.loadDecodedArtwork(key: key, maxDimension: targetDimension)
         guard !Task.isCancelled else { return }
 
         if let platformImg = platformImg {

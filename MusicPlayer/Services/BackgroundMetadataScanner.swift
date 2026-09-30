@@ -406,8 +406,6 @@ public actor BackgroundMetadataScanner {
                     let albumSongs = albumSongsOpt ?? []
                     if !albumSongs.isEmpty {
                         let primaryCut = albumSongs.first(where: { !DeluxeAlbumDetector.isDeluxe(text: $0.album) }) ?? albumSongs.first
-                        let verifiedAlbumTitle = primaryCut?.album ?? batch.albumName
-                        let verifiedAlbumArtist = primaryCut?.albumArtist ?? batch.artistName
                         let verifiedGenre = primaryCut?.genre
                         let verifiedYear = primaryCut?.releaseYear
                         let verifiedArtworkURL = primaryCut?.artworkURL

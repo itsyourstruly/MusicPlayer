@@ -639,6 +639,8 @@ public struct SwipeableMetadataTrackCard: View {
                             case .success(let image):
                                 image
                                     .resizable()
+                                    .interpolation(.high)
+                                    .antialiased(true)
                                     .aspectRatio(contentMode: .fill)
                             default:
                                 AlbumArtworkView(

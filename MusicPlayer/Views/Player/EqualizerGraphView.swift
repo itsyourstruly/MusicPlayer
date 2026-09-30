@@ -39,7 +39,7 @@ public struct EqualizerGraphView: View {
                         .font(.system(size: 9, weight: isDragging ? .heavy : .bold, design: .monospaced))
                         .foregroundStyle(
                             isEnabled
-                                ? (gain > 0 ? Color.blue : (gain < 0 ? Color.blue.opacity(0.75) : Color.secondary))
+                                ? (gain > 0 ? appTheme.accentColor : (gain < 0 ? appTheme.accentColor.opacity(0.75) : Color.secondary))
                                 : Color.secondary.opacity(0.6)
                         )
                         .scaleEffect(isDragging ? 1.15 : 1.0)
@@ -166,8 +166,8 @@ public struct EqualizerGraphView: View {
                         LinearGradient(
                             colors: isEnabled
                                 ? [
-                                    Color.blue.opacity(0.20),
-                                    Color.blue.opacity(0.04),
+                                    appTheme.accentColor.opacity(0.20),
+                                    appTheme.accentColor.opacity(0.04),
                                     Color.clear
                                 ]
                                 : [
@@ -199,7 +199,7 @@ public struct EqualizerGraphView: View {
                         }
                     }
                     .stroke(
-                        isEnabled ? Color.blue : Color(white: 0.45),
+                        isEnabled ? appTheme.accentColor : Color(white: 0.45),
                         style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round)
                     )
 
@@ -213,9 +213,9 @@ public struct EqualizerGraphView: View {
                             .frame(width: isDragging ? 16 : 13, height: isDragging ? 16 : 13)
                             .overlay(
                                 Circle()
-                                    .stroke(isEnabled ? Color.blue : Color(white: 0.4), lineWidth: isDragging ? 3 : 2.5)
+                                    .stroke(isEnabled ? appTheme.accentColor : Color(white: 0.4), lineWidth: isDragging ? 3 : 2.5)
                             )
-                            .shadow(color: isEnabled ? Color.blue.opacity(0.4) : Color.clear, radius: isDragging ? 6 : 3, x: 0, y: 1)
+                            .shadow(color: isEnabled ? appTheme.accentColor.opacity(0.4) : Color.clear, radius: isDragging ? 6 : 3, x: 0, y: 1)
                             .position(x: pt.x, y: pt.y)
                             .animation(.easeInOut(duration: 0.12), value: isDragging)
                     }

@@ -1,4 +1,7 @@
 import SwiftUI
+#if canImport(UIKit)
+import UIKit
+#endif
 
 // MARK: - Discography Category
 
@@ -186,7 +189,7 @@ public struct GlobalSearchView: View {
     @State private var results: GlobalSearchResults = .empty
     @State private var isSearching: Bool = false
     @State private var activeCategoryFilter: SearchCategoryFilter? = nil
-    @FocusState private var isSearchFocused: Bool
+    @State private var isSearchPresented: Bool = false
 
     // Expansion sets for artists and independent multiple albums
     @State private var expandedArtistIDs: Set<String> = []
@@ -230,6 +233,15 @@ public struct GlobalSearchView: View {
         searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    private func goBack() {
+        HapticFeedback.lightImpact()
+        isSearchPresented = false
+        #if os(iOS)
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+        #endif
+        dismiss()
+    }
+
     public var body: some View {
         Group {
             if isOnlineMode {
@@ -238,16 +250,41 @@ public struct GlobalSearchView: View {
                 libraryContentView
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(libraryStore.settings.appTheme.backgroundColor.ignoresSafeArea())
+        #if os(iOS)
+        .background(InteractivePopGestureEnabler())
+        #endif
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 20)
+                .onEnded { value in
+                    // Allow pulling right from any empty space on the page to go back
+                    let isHorizontalPull = abs(value.translation.height) < max(value.translation.width, 1) * 0.65
+                    let isSignificantRightwardDrag = value.translation.width > 60 || (value.translation.width > 25 && value.predictedEndTranslation.width > 90)
+
+                    if isHorizontalPull && isSignificantRightwardDrag {
+                        goBack()
+                    }
+                }
+        )
         .navigationTitle(isOnlineMode ? "SEARCH ONLINE" : "SEARCH LIBRARY")
         .navigationBarTitleDisplayMode(.inline)
         .searchable(
             text: $searchQuery,
+            isPresented: $isSearchPresented,
             placement: .navigationBarDrawer(displayMode: .always),
             prompt: Text(isOnlineMode ? "SEARCH ONLINE CATALOG..." : "SEARCH TRACKS, ARTISTS, ALBUMS...")
         )
-        .searchFocused($isSearchFocused)
         .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                Button(action: goBack) {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 16, weight: .bold))
+                        .foregroundStyle(Color.primary)
+                        .frame(width: 32, height: 32, alignment: .leading)
+                        .contentShape(Rectangle())
+                }
+            }
             ToolbarItem(placement: .topBarTrailing) {
                 Button(action: {
                     HapticFeedback.selectionChanged()
@@ -259,6 +296,7 @@ public struct GlobalSearchView: View {
                 }
             }
         }
+        .navigationBarBackButtonHidden(true)
         .navigationDestination(item: $selectedArtistForNavigation) { artist in
             ArtistDetailView(artist: artist, libraryStore: libraryStore, playerService: playerService)
         }
@@ -273,16 +311,20 @@ public struct GlobalSearchView: View {
         .sheet(item: $selectedTrackForPlaylist) { track in
             playlistPickerSheet(for: track)
         }
-        .onAppear {
+        .task {
+            // Allow the push transition to completely settle (380ms) so the search controller is safely mounted
+            try? await Task.sleep(nanoseconds: 380_000_000)
+            guard !Task.isCancelled else { return }
             if searchQuery.isEmpty {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                    isSearchFocused = true
-                }
+                isSearchPresented = true
             }
         }
         .onDisappear {
             previewManager.stop()
-            isSearchFocused = false
+            isSearchPresented = false
+            #if os(iOS)
+            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+            #endif
         }
         .task(id: "\(searchQuery)_\(isOnlineMode)_\(libraryStore.tracks.count)") {
             let clean = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -350,10 +392,12 @@ public struct GlobalSearchView: View {
         if trimmedQuery.count < 2 {
             ScrollView(.vertical, showsIndicators: false) {
                 recentSearchPlayedTracksSection
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 16)
                     .padding(.vertical, 12)
                     .padding(.bottom, 140)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
             .scrollDismissesKeyboard(.interactively)
             .scrollBounceBehavior(.always)
             .ignoresSafeArea(.keyboard, edges: .bottom)
@@ -363,6 +407,7 @@ public struct GlobalSearchView: View {
                     .frame(maxWidth: .infinity, minHeight: 350, alignment: .top)
                     .padding(.bottom, 140)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
             .scrollDismissesKeyboard(.interactively)
             .scrollBounceBehavior(.always)
             .ignoresSafeArea(.keyboard, edges: .bottom)
@@ -421,12 +466,14 @@ public struct GlobalSearchView: View {
                 }
             )
             .equatable()
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             ScrollView(.vertical, showsIndicators: false) {
                 emptyResultsView
                     .frame(maxWidth: .infinity, minHeight: 350, alignment: .top)
                     .padding(.bottom, 140)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
             .scrollDismissesKeyboard(.interactively)
             .scrollBounceBehavior(.always)
             .ignoresSafeArea(.keyboard, edges: .bottom)
@@ -1785,3 +1832,52 @@ public struct LibrarySearchResultsContainer: View, Equatable {
         }
     }
 }
+
+// MARK: - Interactive Pop Gesture Enabler
+
+#if os(iOS)
+private struct InteractivePopGestureEnabler: UIViewControllerRepresentable {
+    func makeUIViewController(context: Context) -> UIViewController {
+        let vc = UIViewController()
+        DispatchQueue.main.async {
+            if let nav = vc.navigationController {
+                context.coordinator.navigationController = nav
+                nav.interactivePopGestureRecognizer?.isEnabled = true
+                nav.interactivePopGestureRecognizer?.delegate = context.coordinator
+            }
+        }
+        return vc
+    }
+
+    func updateUIViewController(_ uiViewController: UIViewController, context: Context) {
+        DispatchQueue.main.async {
+            if let nav = uiViewController.navigationController {
+                context.coordinator.navigationController = nav
+                nav.interactivePopGestureRecognizer?.isEnabled = true
+                nav.interactivePopGestureRecognizer?.delegate = context.coordinator
+            }
+        }
+    }
+
+    static func dismantleUIViewController(_ uiViewController: UIViewController, coordinator: Coordinator) {
+        coordinator.navigationController?.interactivePopGestureRecognizer?.delegate = nil
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
+    class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        weak var navigationController: UINavigationController?
+
+        func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+            let nav = navigationController ?? (gestureRecognizer.view?.next as? UINavigationController)
+            return (nav?.viewControllers.count ?? 2) > 1
+        }
+
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
+            false
+        }
+    }
+}
+#endif

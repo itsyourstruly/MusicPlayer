@@ -76,12 +76,14 @@ public struct FolderHierarchyScanner: Sendable {
                     let keyLower = (item.keyString ?? (item.key as? String) ?? "").lowercased()
                     let idLower = item.identifier?.rawValue.lowercased() ?? ""
                     if commonKey == .commonKeyAuthor || keyLower.contains("author") || keyLower.contains("auth") || idLower.contains("author") || idLower.contains("auth") {
-                        if let s = item.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines), !s.isEmpty {
+                        let stringVal = try? await item.load(.stringValue)
+                        if let s = stringVal?.trimmingCharacters(in: .whitespacesAndNewlines), !s.isEmpty {
                             avAuthor = s
                         }
                     }
                     if commonKey == .commonKeyArtist || keyLower.contains("art") || idLower.contains("art") {
-                        if let s = item.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines), !s.isEmpty {
+                        let stringVal = try? await item.load(.stringValue)
+                        if let s = stringVal?.trimmingCharacters(in: .whitespacesAndNewlines), !s.isEmpty {
                             avArtist = s
                         }
                     }

@@ -23,30 +23,39 @@ public struct LibraryView: View {
 
     // Main view layout structure
     public var body: some View {
-        ScrollView(.vertical, showsIndicators: false) {
-            VStack(spacing: 16) {
-                // Category Switcher
-                categorySegmentPicker
+        ScrollViewReader { proxy in
+            ScrollView(.vertical, showsIndicators: false) {
+                VStack(spacing: 0) {
+                    // Category Switcher moves with the rest of the page and overscrolls naturally
+                    categorySegmentPicker
+                        .id("categoryTopSegment")
+                        .padding(.top, 4)
+                        .padding(.bottom, 6)
 
-                // Active Category Content
-                Group {
-                    switch libraryStore.selectedCategory {
-                    case .artists:
-                        ArtistsListView(libraryStore: libraryStore, playerService: playerService)
-                    case .albums:
-                        AlbumsListView(libraryStore: libraryStore, playerService: playerService)
-                    case .playlists:
-                        PlaylistsListView(libraryStore: libraryStore, playerService: playerService)
-                    case .tracks:
-                        AllTracksListView(libraryStore: libraryStore, playerService: playerService)
+                    // Active Category Content
+                    Group {
+                        switch libraryStore.selectedCategory {
+                        case .artists:
+                            ArtistsListView(libraryStore: libraryStore, playerService: playerService)
+                        case .albums:
+                            AlbumsListView(libraryStore: libraryStore, playerService: playerService)
+                        case .playlists:
+                            PlaylistsListView(libraryStore: libraryStore, playerService: playerService)
+                        case .tracks:
+                            AllTracksListView(libraryStore: libraryStore, playerService: playerService)
+                        case .folders:
+                            FoldersListView(libraryStore: libraryStore)
+                        }
                     }
+                    .transaction { $0.animation = nil }
                 }
-                .transaction { $0.animation = nil }
+                .padding(.bottom, 140)
             }
-            .padding(.vertical, 12)
-            .padding(.bottom, 140) // Padding for floating mini player and tab bar
+            .scrollDismissesKeyboard(.interactively)
+            .onChange(of: libraryStore.selectedCategory) {
+                proxy.scrollTo("categoryTopSegment", anchor: .top)
+            }
         }
-        .dismissKeyboardOnDrag()
         .background(libraryStore.settings.appTheme.backgroundColor.ignoresSafeArea())
         .navigationTitle("LIBRARY")
         .navigationBarTitleDisplayMode(.large)
@@ -64,6 +73,19 @@ public struct LibraryView: View {
                         .foregroundStyle(Color.primary)
                 }
             }
+        }
+        .onAppear {
+            if libraryStore.selectedCategory == .folders && libraryStore.settings.linkedFolders.count <= 1 {
+                libraryStore.selectedCategory = .tracks
+            }
+        }
+    }
+
+    private var visibleCategories: [LibraryCategory] {
+        if libraryStore.settings.linkedFolders.count > 1 {
+            return [.artists, .albums, .playlists, .tracks, .folders]
+        } else {
+            return [.artists, .albums, .playlists, .tracks]
         }
     }
 
@@ -85,7 +107,22 @@ public struct LibraryView: View {
             // Count
             let count = libraryStore.tracks.count
             return "FIND \(count) \(count == 1 ? "TRACK" : "TRACKS")"
+        case .folders:
+            let count = libraryStore.settings.linkedFolders.count
+            return "FIND \(count) \(count == 1 ? "FOLDER" : "FOLDERS")"
         }
+    }
+
+    private func nextCategory() -> LibraryCategory {
+        let cats = visibleCategories
+        guard let idx = cats.firstIndex(of: libraryStore.selectedCategory) else { return cats.first ?? .artists }
+        return cats[(idx + 1) % cats.count]
+    }
+
+    private func previousCategory() -> LibraryCategory {
+        let cats = visibleCategories
+        guard let idx = cats.firstIndex(of: libraryStore.selectedCategory) else { return cats.first ?? .artists }
+        return cats[(idx - 1 + cats.count) % cats.count]
     }
 
     private var headerSwipeGesture: some Gesture {
@@ -95,18 +132,18 @@ public struct LibraryView: View {
                 let horizontalAmount = value.translation.width
                 // Vertical amount
                 let verticalAmount = value.translation.height
-                if abs(horizontalAmount) > abs(verticalAmount) * 2.0 {
+                if abs(horizontalAmount) > abs(verticalAmount) * 2.5 && abs(horizontalAmount) > 40 {
                     if horizontalAmount < -40 {
                         // Swiped Left -> Next tab in carousel
                         HapticFeedback.selectionChanged()
                         withAnimation(.spring(response: 0.25, dampingFraction: 0.8)) {
-                            libraryStore.selectedCategory = libraryStore.selectedCategory.next
+                            libraryStore.selectedCategory = nextCategory()
                         }
                     } else if horizontalAmount > 40 {
                         // Swiped Right -> Previous tab in carousel
                         HapticFeedback.selectionChanged()
                         withAnimation(.spring(response: 0.25, dampingFraction: 0.8)) {
-                            libraryStore.selectedCategory = libraryStore.selectedCategory.previous
+                            libraryStore.selectedCategory = previousCategory()
                         }
                     }
                 }
@@ -115,7 +152,7 @@ public struct LibraryView: View {
 
     private var categorySegmentPicker: some View {
         HStack(spacing: 8) {
-            ForEach(LibraryCategory.allCases) { category in
+            ForEach(visibleCategories) { category in
                 // Flag indicating if selected
                 let isSelected = libraryStore.selectedCategory == category
                 Button(action: {

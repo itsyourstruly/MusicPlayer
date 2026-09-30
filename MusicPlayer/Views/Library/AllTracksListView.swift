@@ -88,6 +88,7 @@ public struct AllTracksListView: View {
                 .padding(.horizontal, 16)
             }
         }
+        .padding(.top, 4)
         // Modal presentation sheet
         .sheet(item: $selectedTrackForInfo) { track in
             TrackInfoSheetView(track: track, libraryStore: libraryStore)

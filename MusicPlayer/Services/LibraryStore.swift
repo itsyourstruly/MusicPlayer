@@ -27,7 +27,7 @@ public struct CachedTrackMetadataRecord: Codable, Sendable {
     public var appliedTotalTracks: Int?
     public var appliedDiscNumber: Int?
 
-    public init(
+    public nonisolated init(
         onlineMetadata: OnlineTrackMetadata,
         localTrackSignature: String,
         filePath: String,
@@ -76,7 +76,7 @@ public struct PersistentDownloadedMetadataCache: Codable, Sendable {
     public var recordsBySignature: [String: CachedTrackMetadataRecord] = [:]
     public var recordsByFileSignature: [String: CachedTrackMetadataRecord] = [:]
 
-    public init() {}
+    public nonisolated init() {}
 
     public var totalRecordsCount: Int {
         recordsByFilePath.count
@@ -165,10 +165,46 @@ public final class LibraryStore {
         verifiedGoodDiffs.count
     }
 
+    private var hasExcludedFolders: Bool {
+        settings.linkedFolders.contains { $0.isExcludedFromTagEnrichment }
+    }
+
+    public var visibleEnrichmentDiffs: [MetadataDiff] {
+        guard hasExcludedFolders else { return enrichmentDiffs }
+        return enrichmentDiffs.filter { !isTrackExcludedFromTagEnrichment($0.localTrack) }
+    }
+
+    public var visibleVerifiedGoodDiffs: [MetadataDiff] {
+        guard hasExcludedFolders else { return verifiedGoodDiffs }
+        return verifiedGoodDiffs.filter { !isTrackExcludedFromTagEnrichment($0.localTrack) }
+    }
+
+    public var visibleVerifiedGoodCount: Int {
+        guard hasExcludedFolders else { return verifiedGoodDiffs.count }
+        return visibleVerifiedGoodDiffs.count
+    }
+
+    public var visibleDuplicateGroups: [DuplicateGroup] {
+        guard hasExcludedFolders else { return duplicateGroups }
+        return duplicateGroups.compactMap { (group: DuplicateGroup) -> DuplicateGroup? in
+            let nonExcludedCandidates = group.candidates.filter { !isTrackExcludedFromTagEnrichment($0.track) }
+            if nonExcludedCandidates.count < 2 {
+                return nil
+            }
+            return DuplicateGroup(
+                id: group.id,
+                normalizedTitle: group.normalizedTitle,
+                normalizedArtist: group.normalizedArtist,
+                candidates: nonExcludedCandidates,
+                selectedPrimaryTrackID: group.selectedPrimaryTrackID
+            )
+        }
+    }
+
     public var unmatchedTracks: [Track] {
-        // Id set
         let idSet = unmatchedTrackIDs
-        return tracks.filter { idSet.contains($0.id) }
+        guard hasExcludedFolders else { return tracks.filter { idSet.contains($0.id) } }
+        return tracks.filter { idSet.contains($0.id) && !isTrackExcludedFromTagEnrichment($0) }
     }
 
     public var unmatchedTracksCount: Int {
@@ -296,6 +332,7 @@ public final class LibraryStore {
 
         // 1. Instant sync load of lightweight preferences for immediate frame 1 paint
         loadLightweightPreferences()
+        SecurityScopedBookmark.shared.resolveAndAccessAllBookmarks(folders: self.settings.linkedFolders)
 
         // 2. Stream heavy track library and cached collections asynchronously off main thread
         loadPersistedStateAsync()
@@ -590,35 +627,193 @@ public final class LibraryStore {
 
     // MARK: - Directory Linking & Scanning
 
-    /// Links a new directory, saves the security bookmark, and initiates indexing.
-    public func linkAndScanFolder(url: URL) async {
-        // Ensure preconditions are met before proceeding
-        guard SecurityScopedBookmark.shared.saveBookmark(for: url) else {
+    /// Returns the linked folder entity that owns this track, if matched.
+    public func folder(for track: Track) -> LinkedFolder? {
+        if let folderID = track.folderID, let match = settings.linkedFolders.first(where: { $0.id == folderID }) {
+            return match
+        }
+        if settings.linkedFolders.count == 1 {
+            return settings.linkedFolders.first
+        }
+        for f in settings.linkedFolders {
+            if let p = f.path, track.url.path.hasPrefix(p) {
+                return f
+            }
+        }
+        for f in settings.linkedFolders {
+            if let fURL = SecurityScopedBookmark.shared.url(for: f.id) {
+                if track.url.standardizedFileURL.path.hasPrefix(fURL.standardizedFileURL.path) {
+                    return f
+                }
+            }
+        }
+        return nil
+    }
+
+    /// Determines if a track should be excluded from tag enrichment sheets and scans.
+    public func isTrackExcludedFromTagEnrichment(_ track: Track) -> Bool {
+        guard hasExcludedFolders else { return false }
+        guard let f = folder(for: track) else { return false }
+        return f.isExcludedFromTagEnrichment
+    }
+
+    /// Toggles the tag enrichment exclusion flag for a specific linked folder.
+    public func toggleTagEnrichmentExclusion(for folderID: UUID) {
+        guard let index = settings.linkedFolders.firstIndex(where: { $0.id == folderID }) else { return }
+        settings.linkedFolders[index].isExcludedFromTagEnrichment.toggle()
+        saveSettings()
+    }
+
+    /// Track count for an individual linked folder.
+    public func trackCount(for folder: LinkedFolder) -> Int {
+        if settings.linkedFolders.count <= 1 {
+            return tracks.count
+        }
+        return tracks.filter { $0.folderID == folder.id || self.folder(for: $0)?.id == folder.id }.count
+    }
+
+    /// Album count for an individual linked folder.
+    public func albumCount(for folder: LinkedFolder) -> Int {
+        if settings.linkedFolders.count <= 1 {
+            return albums.count
+        }
+        let folderTracks = tracks.filter { $0.folderID == folder.id || self.folder(for: $0)?.id == folder.id }
+        let albums = Set(folderTracks.map { "\($0.album.lowercased())---\($0.artist.lowercased())" })
+        return albums.count
+    }
+
+    /// Artist count for an individual linked folder.
+    public func artistCount(for folder: LinkedFolder) -> Int {
+        if settings.linkedFolders.count <= 1 {
+            return artists.count
+        }
+        let folderTracks = tracks.filter { $0.folderID == folder.id || self.folder(for: $0)?.id == folder.id }
+        let artists = Set(folderTracks.map { $0.artist.lowercased() })
+        return artists.count
+    }
+
+    /// Adds a new music directory, creates a security bookmark, and initiates indexing for that folder.
+    public func addAndScanFolder(url: URL) async {
+        let folderID = UUID()
+        guard let bookmark = SecurityScopedBookmark.shared.saveBookmark(for: url, folderID: folderID) else {
             AppLogger.library.error("Could not obtain security-scoped bookmark for \(url.path)")
             return
         }
 
-        settings.linkedFolderName = url.lastPathComponent
+        let newFolder = LinkedFolder(
+            id: folderID,
+            name: url.lastPathComponent,
+            path: url.path,
+            bookmarkData: bookmark,
+            isExcludedFromTagEnrichment: false,
+            dateAdded: Date()
+        )
+
+        settings.linkedFolders.append(newFolder)
+        settings.linkedFolderName = settings.linkedFolders.first?.name
         saveSettings()
 
-        await rescanDirectory(url: url)
+        await rescanSingleFolder(folder: newFolder, url: url)
     }
 
-    /// Rescans the previously linked directory.
-    public func rescanCurrentDirectory() async {
-        // Ensure preconditions are met before proceeding
-        guard let url = SecurityScopedBookmark.shared.resolveAndAccessBookmark() else {
-            AppLogger.library.warning("No active security-scoped directory available to rescan.")
+    /// Backwards compatibility linkAndScanFolder method.
+    public func linkAndScanFolder(url: URL) async {
+        await addAndScanFolder(url: url)
+    }
+
+    /// Rescans a specific linked folder by its UUID.
+    public func rescanFolder(id: UUID) async {
+        guard let folder = settings.linkedFolders.first(where: { $0.id == id }) else { return }
+        guard let url = SecurityScopedBookmark.shared.resolveAndAccessBookmark(folderID: folder.id, bookmarkData: folder.bookmarkData) ??
+              (folder.path.map { URL(fileURLWithPath: $0) }) else {
+            AppLogger.library.warning("Unable to resolve URL for folder: \(folder.name)")
+            return
+        }
+        await rescanSingleFolder(folder: folder, url: url)
+    }
+
+    /// Changes the target directory of an existing linked folder and rescans it.
+    public func changeFolder(id: UUID, newURL: URL) async {
+        guard let index = settings.linkedFolders.firstIndex(where: { $0.id == id }) else { return }
+        guard let bookmark = SecurityScopedBookmark.shared.saveBookmark(for: newURL, folderID: id) else {
+            AppLogger.library.error("Could not obtain security-scoped bookmark for \(newURL.path)")
             return
         }
 
-        await rescanDirectory(url: url)
+        settings.linkedFolders[index].name = newURL.lastPathComponent
+        settings.linkedFolders[index].path = newURL.path
+        settings.linkedFolders[index].bookmarkData = bookmark
+        settings.linkedFolderName = settings.linkedFolders.first?.name
+        saveSettings()
+
+        await rescanSingleFolder(folder: settings.linkedFolders[index], url: newURL)
     }
 
-    /// Unlinks the music folder and clears scanned library data.
+    /// Unlinks a specific folder by its UUID, removing its tracks while preserving cache and other folders.
+    public func unlinkFolder(id: UUID) {
+        SecurityScopedBookmark.shared.stopAccessing(folderID: id)
+        settings.linkedFolders.removeAll { $0.id == id }
+        settings.linkedFolderName = settings.linkedFolders.first?.name
+
+        // Remove tracks belonging to this folder
+        self.tracks.removeAll { self.folder(for: $0)?.id == id }
+        rebuildAlbumsAndArtists()
+
+        self.settings.totalScannedFiles = self.tracks.count
+        if settings.linkedFolders.isEmpty {
+            self.settings.lastScanDate = nil
+            self.duplicateGroups = []
+        }
+
+        saveSettings()
+        saveLibrary()
+        saveDuplicates()
+
+        let currentTracks = self.tracks
+        let currentAlbums = self.albums
+        let currentArtists = self.artists
+        let currentPlaylists = self.playlists
+        let currentJoined = self.settings.joinedArtists
+        Task.detached(priority: .userInitiated) {
+            await SearchEngine.shared.updateIndex(
+                tracks: currentTracks,
+                albums: currentAlbums,
+                artists: currentArtists,
+                playlists: currentPlaylists,
+                joinedArtists: currentJoined
+            )
+        }
+
+        Task {
+            await self.recalculateDuplicates()
+        }
+        AppLogger.library.info("Unlinked folder [\(id)] successfully.")
+    }
+
+    /// Rescans all linked directories.
+    public func rescanCurrentDirectory() async {
+        if settings.linkedFolders.isEmpty {
+            guard let url = SecurityScopedBookmark.shared.resolveAndAccessBookmark() else {
+                AppLogger.library.warning("No active security-scoped directory available to rescan.")
+                return
+            }
+            await addAndScanFolder(url: url)
+            return
+        }
+
+        for folder in settings.linkedFolders {
+            await rescanFolder(id: folder.id)
+        }
+    }
+
+    /// Unlinks all music folders and clears scanned library data.
     /// Preserves downloaded metadata cache and artwork cache so re-linking immediately restores all metadata.
     public func unlinkDirectory() {
         SecurityScopedBookmark.shared.clearSavedBookmark()
+        for f in settings.linkedFolders {
+            SecurityScopedBookmark.shared.stopAccessing(folderID: f.id)
+        }
+        settings.linkedFolders = []
         settings.linkedFolderName = nil
         settings.lastScanDate = nil
         settings.totalScannedFiles = 0
@@ -633,21 +828,22 @@ public final class LibraryStore {
         AppLogger.library.info("Unlinked directory while safely preserving downloaded metadata and artwork cache.")
     }
 
-    // Rescan directory
-    private func rescanDirectory(url: URL) async {
+    // Rescans an individual folder directory and integrates its tracks
+    private func rescanSingleFolder(folder: LinkedFolder, url: URL) async {
         self.isScanning = true
         self.scanProgress = 0.0
-        self.scanStatusText = "Scanning directory..."
+        self.scanStatusText = "Scanning \(folder.name)..."
 
-        let cachedExistingTracks = self.tracks
+        let folderTracks = self.tracks.filter { self.folder(for: $0)?.id == folder.id }
+        let otherTracks = self.tracks.filter { self.folder(for: $0)?.id != folder.id }
 
         // Scanned tracks with smart differential fast-path
         let scannedTracks = await AudioScannerService.shared.scanDirectory(
             at: url,
-            existingTracks: cachedExistingTracks,
+            existingTracks: folderTracks,
             scanMethod: self.settings.libraryScanMethod
         ) { [weak self] current, total, name in
-            Task { @MainActor in
+            Task { @MainActor [weak self] in
                 guard let self = self else { return }
                 self.scanProgress = total > 0 ? Double(current) / Double(total) : 0.0
                 self.scanStatusText = "Processing (\(current)/\(total)): \(name)"
@@ -655,10 +851,12 @@ public final class LibraryStore {
         }
 
         let removedPaths = self.settings.removedTrackPaths
-        let filteredTracks = scannedTracks.filter { !removedPaths.contains($0.url.standardizedFileURL.path) }
+        let filteredTracks = scannedTracks
+            .filter { !removedPaths.contains($0.url.standardizedFileURL.path) }
+            .map { $0.withFolderID(folder.id) }
 
         self.scanStatusText = "Building albums and artists..."
-        self.tracks = filteredTracks
+        self.tracks = otherTracks + filteredTracks
         rebuildAlbumsAndArtists()
 
         self.scanStatusText = "Re-attaching cached metadata & artwork..."
@@ -681,10 +879,10 @@ public final class LibraryStore {
         cacheScannedTracks(self.tracks)
 
         self.settings.lastScanDate = Date()
-        self.settings.totalScannedFiles = scannedTracks.count
+        self.settings.totalScannedFiles = self.tracks.count
         self.isScanning = false
         self.scanProgress = 1.0
-        self.scanStatusText = "Scan complete. Indexed \(scannedTracks.count) tracks (reattached \(reattached) cached)."
+        self.scanStatusText = "Scan complete for \(folder.name). Indexed \(filteredTracks.count) tracks."
 
         saveLibrary()
         saveSettings()
@@ -708,7 +906,7 @@ public final class LibraryStore {
         Task {
             await self.recalculateDuplicates()
         }
-        AppLogger.library.info("Library updated with \(scannedTracks.count) tracks. Reattached \(reattached) cached metadata records.")
+        AppLogger.library.info("Folder [\(folder.name)] scanned with \(filteredTracks.count) tracks.")
     }
 
     // MARK: - Playlist Operations
@@ -2947,14 +3145,17 @@ rebuildAlbumsAndArtists()
         self.verifiedGoodDiffs.removeAll { trackIDs.contains($0.localTrack.id) }
         self.unmatchedTrackIDs.subtract(trackIDs)
 
+        let currentDiffs = self.enrichmentDiffs
+        let currentGood = self.verifiedGoodDiffs
+        let currentUnmatched = self.unmatchedTrackIDs
         let storageURL = self.storageDirectoryURL
 
-        Task {
+        Task { [weak self] in
             await BackgroundMetadataScanner.shared.startScan(
                 tracks: artistTracks,
-                existingDiffs: self.enrichmentDiffs,
-                existingGood: self.verifiedGoodDiffs,
-                existingUnmatched: self.unmatchedTrackIDs,
+                existingDiffs: currentDiffs,
+                existingGood: currentGood,
+                existingUnmatched: currentUnmatched,
                 forceRecheck: true,
                 storageDirectoryURL: storageURL,
                 source: source,
@@ -2988,7 +3189,8 @@ rebuildAlbumsAndArtists()
     public func startBackgroundMetadataScan(for customTracks: [Track]? = nil, forceRecheck: Bool = false) {
         // Ensure preconditions are met before proceeding
         guard !isBackgroundCheckingMetadata else { return }
-        let tracksToScan = customTracks ?? self.tracks
+        let rawTracks = customTracks ?? self.tracks
+        let tracksToScan = rawTracks.filter { !isTrackExcludedFromTagEnrichment($0) }
         guard !tracksToScan.isEmpty else { return }
 
         isBackgroundCheckingMetadata = true
@@ -3010,7 +3212,7 @@ rebuildAlbumsAndArtists()
         // File system location for storage url
         let storageURL = self.storageDirectoryURL
 
-        Task {
+        Task { [weak self] in
             await BackgroundMetadataScanner.shared.startScan(
                 tracks: tracksToScan,
                 existingDiffs: diffs,
@@ -3089,7 +3291,7 @@ rebuildAlbumsAndArtists()
 
     /// Audits all library tracks and immediately indexes any tracks whose tags are filled in the app's cache into `verifiedGoodDiffs`.
     public func indexCompleteTracksIntoVerifiedGood() {
-        let currentTracks = self.tracks
+        let currentTracks = self.tracks.filter { !self.isTrackExcludedFromTagEnrichment($0) }
         let currentExistingIDs = Set(verifiedGoodDiffs.map { $0.localTrack.id })
         let currentDiffIDs = Set(enrichmentDiffs.map { $0.localTrack.id })
 
@@ -3140,13 +3342,14 @@ rebuildAlbumsAndArtists()
             }
 
             if !newGood.isEmpty {
+                let goodToAppend = newGood
                 await MainActor.run { [weak self] in
                     guard let self = self else { return }
-                    self.verifiedGoodDiffs.append(contentsOf: newGood)
-                    let addedIDs = Set(newGood.map { $0.localTrack.id })
+                    self.verifiedGoodDiffs.append(contentsOf: goodToAppend)
+                    let addedIDs = Set(goodToAppend.map { $0.localTrack.id })
                     self.unmatchedTrackIDs.subtract(addedIDs)
                     self.saveEnrichmentCache()
-                    AppLogger.metadata.info("[LibraryStore] Indexed \(newGood.count) complete cached tracks directly into Verified Good.")
+                    AppLogger.metadata.info("[LibraryStore] Indexed \(goodToAppend.count) complete cached tracks directly into Verified Good.")
                 }
             }
         }
@@ -3382,7 +3585,7 @@ rebuildAlbumsAndArtists()
         self.enrichStatusText = "Scanning library for missing metadata..."
 
         // Candidates
-        let candidates = tracks.filter { $0.artworkKey == nil || $0.year == nil || $0.trackNumber == nil }
+        let candidates = tracks.filter { !isTrackExcludedFromTagEnrichment($0) && ($0.artworkKey == nil || $0.year == nil || $0.trackNumber == nil) }
         // Total
         let total = candidates.count
         self.enrichTotalCount = total
@@ -4253,8 +4456,9 @@ rebuildAlbumsAndArtists()
                     if let u = loadedUnmatched { self.unmatchedTrackIDs = Set(u) }
                     if let mc = loadedMetaCache { self.downloadedMetadataCache = mc }
 
-                    // Run tag verification audit when idle
+                    // Run tag verification audit when idle after startup settling
                     Task(priority: .background) { [weak self] in
+                        try? await Task.sleep(nanoseconds: 5_000_000_000)
                         self?.indexCompleteTracksIntoVerifiedGood()
                     }
                 }

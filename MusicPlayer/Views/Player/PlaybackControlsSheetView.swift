@@ -132,7 +132,7 @@ public struct PlaybackControlsSheetView: View {
                         }) {
                             Text("0 dB")
                                 .font(.system(size: 9, weight: equalizerManager.volumeBoosterDB == 0 ? .bold : .medium, design: .monospaced))
-                                .foregroundStyle(equalizerManager.volumeBoosterDB == 0 ? Color.green : .secondary)
+                                .foregroundStyle(equalizerManager.volumeBoosterDB == 0 ? Color.white : .secondary)
                         }
                         .buttonStyle(.plain)
                         .position(x: zeroX, y: 7)
@@ -228,7 +228,7 @@ public struct PlaybackControlsSheetView: View {
                         }) {
                             Text("1.0x")
                                 .font(.system(size: 9, weight: equalizerManager.playbackSpeed == 1.0 ? .bold : .medium, design: .monospaced))
-                                .foregroundStyle(equalizerManager.playbackSpeed == 1.0 ? Color.blue : .secondary)
+                                .foregroundStyle(equalizerManager.playbackSpeed == 1.0 ? Color.white : .secondary)
                         }
                         .buttonStyle(.plain)
                         .position(x: oneX, y: 7)
@@ -339,12 +339,12 @@ public struct PlaybackControlsSheetView: View {
                 HStack {
                     Text("SET GLOBAL DEFAULT")
                         .font(.system(size: 12, weight: .bold, design: .monospaced))
-                        .foregroundStyle(equalizerManager.isGlobalDefaultActive ? Color.blue : Color.secondary)
+                        .foregroundStyle(equalizerManager.isGlobalDefaultActive ? appTheme.accentColor : Color.secondary)
                     Spacer()
                     if equalizerManager.isGlobalDefaultActive {
                         Text("ACTIVE")
                             .font(.system(size: 10, weight: .bold, design: .monospaced))
-                            .foregroundStyle(Color.blue)
+                            .foregroundStyle(appTheme.accentColor)
                     }
                 }
                 .padding(.vertical, 4)
@@ -366,7 +366,7 @@ public struct PlaybackControlsSheetView: View {
                     HStack {
                         Text("SET FOR \(currentTrack.title.uppercased())")
                             .font(.system(size: 12, weight: .bold, design: .monospaced))
-                            .foregroundStyle(isTrackSaved ? Color.blue : Color.secondary)
+                            .foregroundStyle(isTrackSaved ? appTheme.accentColor : Color.secondary)
                             .lineLimit(1)
 
                         Spacer()
@@ -374,7 +374,7 @@ public struct PlaybackControlsSheetView: View {
                         if isTrackSaved {
                             Text("SAVED")
                                 .font(.system(size: 10, weight: .bold, design: .monospaced))
-                                .foregroundStyle(Color.blue)
+                                .foregroundStyle(appTheme.accentColor)
                         }
                     }
                     .padding(.vertical, 4)
@@ -394,7 +394,7 @@ public struct PlaybackControlsSheetView: View {
                     Spacer()
                     Text("CHOOSE →")
                         .font(.system(size: 11, weight: .bold, design: .monospaced))
-                        .foregroundStyle(Color.blue)
+                        .foregroundStyle(appTheme.accentColor)
                 }
                 .padding(.vertical, 4)
             }

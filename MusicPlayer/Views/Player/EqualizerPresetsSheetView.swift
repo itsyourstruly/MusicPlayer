@@ -99,7 +99,7 @@ public struct EqualizerPresetsSheetView: View {
                 HStack(alignment: .center) {
                     Text(preset.name)
                         .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(isApplied ? Color.blue : Color.primary)
+                        .foregroundStyle(isApplied ? appTheme.accentColor : Color.primary)
                         .lineLimit(2)
 
                     Spacer()
@@ -107,10 +107,10 @@ public struct EqualizerPresetsSheetView: View {
                     if isApplied {
                         Text("ACTIVE")
                             .font(.system(size: 10, weight: .bold, design: .monospaced))
-                            .foregroundStyle(Color.blue)
+                            .foregroundStyle(appTheme.accentColor)
                             .padding(.horizontal, 6)
                             .padding(.vertical, 2)
-                            .background(Color.blue.opacity(0.12))
+                            .background(appTheme.accentColor.opacity(0.12))
                             .clipShape(Capsule())
                     } else {
                         Text("APPLY")
@@ -191,8 +191,8 @@ public struct EqualizerPresetsSheetView: View {
                     LinearGradient(
                         colors: isApplied
                             ? [
-                                Color.blue.opacity(0.22),
-                                Color.blue.opacity(0.05),
+                                appTheme.accentColor.opacity(0.22),
+                                appTheme.accentColor.opacity(0.05),
                                 Color.clear
                             ]
                             : [
@@ -224,7 +224,7 @@ public struct EqualizerPresetsSheetView: View {
                     }
                 }
                 .stroke(
-                    isApplied ? Color.blue : appTheme.accentColor,
+                    appTheme.accentColor,
                     style: StrokeStyle(lineWidth: 1.8, lineCap: .round, lineJoin: .round)
                 )
 
@@ -236,7 +236,7 @@ public struct EqualizerPresetsSheetView: View {
                         .frame(width: 4, height: 4)
                         .overlay(
                             Circle()
-                                .stroke(isApplied ? Color.blue : appTheme.accentColor, lineWidth: 1.2)
+                                .stroke(appTheme.accentColor, lineWidth: 1.2)
                         )
                         .position(x: pt.x, y: pt.y)
                 }

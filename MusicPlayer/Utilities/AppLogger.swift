@@ -35,7 +35,7 @@ public struct LogEntry: Identifiable, Sendable, Codable {
     public let message: String
     public let isAppleSystemLog: Bool
 
-    public init(
+    public nonisolated init(
         id: UUID = UUID(),
         timestamp: Date = Date(),
         category: String,
@@ -80,7 +80,7 @@ public struct LogEntry: Identifiable, Sendable, Codable {
 /// Integrates both high-performance custom application events and Apple framework logs from OSLogStore.
 @Observable
 public final class SessionLogStore: @unchecked Sendable {
-    public static let shared = SessionLogStore()
+    public nonisolated static let shared = SessionLogStore()
 
     private let lock = NSLock()
     private var internalEntries: [LogEntry] = []
@@ -90,16 +90,16 @@ public final class SessionLogStore: @unchecked Sendable {
     /// Monotonically increasing revision number to drive live SwiftUI observation safely.
     public private(set) var revision: Int = 0
 
-    public init() {}
+    public nonisolated init() {}
 
     /// Appends a new entry to the session log store in a thread-safe manner.
-    public func append(_ entry: LogEntry) {
-        lock.lock()
-        internalEntries.append(entry)
-        if internalEntries.count > maxEntries {
-            internalEntries.removeFirst(internalEntries.count - maxEntries)
+    public nonisolated func append(_ entry: LogEntry) {
+        lock.withLock {
+            internalEntries.append(entry)
+            if internalEntries.count > maxEntries {
+                internalEntries.removeFirst(internalEntries.count - maxEntries)
+            }
         }
-        lock.unlock()
 
         Task { @MainActor in
             self.revision += 1
@@ -107,25 +107,24 @@ public final class SessionLogStore: @unchecked Sendable {
     }
 
     /// Returns a thread-safe snapshot of all in-app log entries for this session.
-    public func allEntries() -> [LogEntry] {
-        lock.lock()
-        defer { lock.unlock() }
-        return internalEntries
+    public nonisolated func allEntries() -> [LogEntry] {
+        lock.withLock {
+            internalEntries
+        }
     }
 
     /// Returns a thread-safe snapshot of all Apple framework log entries collected via OSLogStore.
-    public func appleSystemEntries() -> [LogEntry] {
-        lock.lock()
-        defer { lock.unlock() }
-        return internalAppleEntries
+    public nonisolated func appleSystemEntries() -> [LogEntry] {
+        lock.withLock {
+            internalAppleEntries
+        }
     }
 
     /// Returns combined in-app and Apple framework logs sorted chronologically.
-    public func allCombinedEntries() -> [LogEntry] {
-        lock.lock()
-        let inApp = internalEntries
-        let apple = internalAppleEntries
-        lock.unlock()
+    public nonisolated func allCombinedEntries() -> [LogEntry] {
+        let (inApp, apple) = lock.withLock {
+            (internalEntries, internalAppleEntries)
+        }
 
         var combined = inApp + apple
         combined.sort { $0.timestamp < $1.timestamp }
@@ -193,9 +192,9 @@ public final class SessionLogStore: @unchecked Sendable {
     /// Asynchronously refreshes internal Apple framework logs and updates the live revision.
     public func refreshAppleSystemLogs(limit: Int = 2000) async {
         let freshLogs = await fetchAppleSystemLogs(limit: limit)
-        lock.lock()
-        internalAppleEntries = freshLogs
-        lock.unlock()
+        lock.withLock {
+            internalAppleEntries = freshLogs
+        }
 
         await MainActor.run {
             self.revision += 1
@@ -203,11 +202,11 @@ public final class SessionLogStore: @unchecked Sendable {
     }
 
     /// Clears all stored session logs.
-    public func clear() {
-        lock.lock()
-        internalEntries.removeAll()
-        internalAppleEntries.removeAll()
-        lock.unlock()
+    public nonisolated func clear() {
+        lock.withLock {
+            internalEntries.removeAll()
+            internalAppleEntries.removeAll()
+        }
 
         Task { @MainActor in
             self.revision += 1
@@ -270,7 +269,7 @@ public final class SessionLogStore: @unchecked Sendable {
     }
 
     /// Generates standard plain-text representation (backward compatibility helper).
-    public func formattedPlainText() -> String {
+    public nonisolated func formattedPlainText() -> String {
         let snapshot = allEntries()
         let formatter = LogEntry.fullFormatter
         var text = "=== LAC APPLICATION LOGS ===\n"
@@ -309,58 +308,58 @@ public struct LogCategory: Sendable {
     public let name: String
     private let osLogger: os.Logger
 
-    public init(subsystem: String, category: String) {
+    public nonisolated init(subsystem: String, category: String) {
         self.name = category
         self.osLogger = os.Logger(subsystem: subsystem, category: category)
     }
 
-    private func record(level: LogLevel, message: String) {
+    private nonisolated func record(level: LogLevel, message: String) {
         SessionLogStore.shared.append(
             LogEntry(category: name, level: level, message: message)
         )
     }
 
-    public func debug(_ message: String) {
+    public nonisolated func debug(_ message: String) {
         record(level: .debug, message: message)
         osLogger.debug("\(message, privacy: .public)")
     }
 
-    public func info(_ message: String) {
+    public nonisolated func info(_ message: String) {
         record(level: .info, message: message)
         osLogger.info("\(message, privacy: .public)")
     }
 
-    public func notice(_ message: String) {
+    public nonisolated func notice(_ message: String) {
         record(level: .notice, message: message)
         osLogger.notice("\(message, privacy: .public)")
     }
 
-    public func warning(_ message: String) {
+    public nonisolated func warning(_ message: String) {
         record(level: .warning, message: message)
         osLogger.warning("\(message, privacy: .public)")
     }
 
-    public func error(_ message: String) {
+    public nonisolated func error(_ message: String) {
         record(level: .error, message: message)
         osLogger.error("\(message, privacy: .public)")
     }
 
-    public func fault(_ message: String) {
+    public nonisolated func fault(_ message: String) {
         record(level: .fault, message: message)
         osLogger.fault("\(message, privacy: .public)")
     }
 
-    public func critical(_ message: String) {
+    public nonisolated func critical(_ message: String) {
         record(level: .critical, message: message)
         osLogger.critical("\(message, privacy: .public)")
     }
 
-    public func log(_ message: String) {
+    public nonisolated func log(_ message: String) {
         record(level: .info, message: message)
         osLogger.log("\(message, privacy: .public)")
     }
 
-    public func log(level: OSLogType, _ message: String) {
+    public nonisolated func log(level: OSLogType, _ message: String) {
         let mappedLevel: LogLevel
         switch level {
         case .debug: mappedLevel = .debug
@@ -378,40 +377,41 @@ public struct LogCategory: Sendable {
 
 /// Structured, high-performance system logger utilizing Apple's unified logging system (`os.Logger`)
 /// and retaining in-memory session logs for in-app debug inspection and export.
-public enum AppLogger {
+public enum AppLogger: Sendable {
     private static let subsystem: String = Bundle.main.bundleIdentifier ?? "com.musicplayer.app"
 
     // MARK: - Categories
 
     /// Logs related to audio engine, playback states, queue transitions, and hardware interruptions.
-    public static let audio = LogCategory(subsystem: subsystem, category: "Audio")
+    public nonisolated static let audio = LogCategory(subsystem: subsystem, category: "Audio")
 
     /// Logs related to library management, playlist mutations, and sorting algorithms.
-    public static let library = LogCategory(subsystem: subsystem, category: "Library")
+    public nonisolated static let library = LogCategory(subsystem: subsystem, category: "Library")
 
     /// Logs related to directory scanning, file system traversal, and AVFoundation metadata extraction.
-    public static let scanner = LogCategory(subsystem: subsystem, category: "Scanner")
+    public nonisolated static let scanner = LogCategory(subsystem: subsystem, category: "Scanner")
 
     /// Logs related to disk persistence, JSON serialization, and cache storage.
-    public static let storage = LogCategory(subsystem: subsystem, category: "Storage")
+    public nonisolated static let storage = LogCategory(subsystem: subsystem, category: "Storage")
 
     /// Logs related to online metadata fetching, network requests, and API rate limits.
-    public static let network = LogCategory(subsystem: subsystem, category: "Network")
+    public nonisolated static let network = LogCategory(subsystem: subsystem, category: "Network")
 
     /// Logs related to metadata comparison, enrichment diffs, and tag parsing.
-    public static let metadata = LogCategory(subsystem: subsystem, category: "Metadata")
+    public nonisolated static let metadata = LogCategory(subsystem: subsystem, category: "Metadata")
 
     /// Logs related to UI lifecycle events, sheet transitions, and navigation.
-    public static let ui = LogCategory(subsystem: subsystem, category: "UI")
+    public nonisolated static let ui = LogCategory(subsystem: subsystem, category: "UI")
 
     // MARK: - Helpers
 
     /// Returns plain text representation of all session logs.
-    public static func allLogsText() -> String {
+    public nonisolated static func allLogsText() -> String {
         SessionLogStore.shared.formattedPlainText()
     }
 
     /// Copies all session logs to system clipboard.
+    @MainActor
     @discardableResult
     public static func copyLogsToClipboard() -> Bool {
         SessionLogStore.shared.copyToClipboard()

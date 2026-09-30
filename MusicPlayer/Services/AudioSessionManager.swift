@@ -12,81 +12,84 @@ public final class AudioSessionManager: @unchecked Sendable {
     private var isSessionActive = false
     private var isSessionConfigured = false
     private var currentActivationTask: Task<Bool, Never>?
-    private var unfairLock = os_unfair_lock()
+    private let lock = NSLock()
     
     private init() {}
     
     /// Returns whether the audio session is currently activated.
     public var isActive: Bool {
-        os_unfair_lock_lock(&unfairLock)
-        defer { os_unfair_lock_unlock(&unfairLock) }
-        return isSessionActive
+        lock.withLock { isSessionActive }
     }
     
     /// Activates and configures the audio session if not already active.
     /// If activation is already in progress, deduplicates and awaits the active task.
     @discardableResult
     public func activateSessionIfNeeded(force: Bool = false) async -> Bool {
-        os_unfair_lock_lock(&unfairLock)
-        if !force && isSessionActive {
-            os_unfair_lock_unlock(&unfairLock)
-            return true
-        }
-        if let existingTask = currentActivationTask {
-            os_unfair_lock_unlock(&unfairLock)
-            return await existingTask.value
-        }
-        
-        let task = Task.detached(priority: .userInitiated) { () -> Bool in
-            #if os(iOS)
-            let session = AVAudioSession.sharedInstance()
-            var succeeded = false
-            do {
-                try session.setCategory(.playback, mode: .default, policy: .longFormAudio, options: [])
-                try session.setActive(true)
-                succeeded = true
-            } catch {
-                AppLogger.audio.info("longFormAudio policy not accepted, falling back to standard playback category: \(error.localizedDescription)")
+        let (shouldProceed, existingTask) = lock.withLock { () -> (Bool, Task<Bool, Never>?) in
+            if !force && isSessionActive {
+                return (false, nil)
+            }
+            if let task = currentActivationTask {
+                return (false, task)
+            }
+            let task = Task.detached(priority: .userInitiated) { () -> Bool in
+                #if os(iOS)
+                let session = AVAudioSession.sharedInstance()
+                var succeeded = false
                 do {
-                    try session.setCategory(.playback, mode: .default, options: [])
+                    try session.setCategory(.playback, mode: .default, policy: .longFormAudio, options: [])
                     try session.setActive(true)
                     succeeded = true
                 } catch {
-                    AppLogger.audio.warning("Could not activate AVAudioSession: \(error.localizedDescription)")
-                    succeeded = false
+                    AppLogger.audio.info("longFormAudio policy not accepted, falling back to standard playback category: \(error.localizedDescription)")
+                    do {
+                        try session.setCategory(.playback, mode: .default, options: [])
+                        try session.setActive(true)
+                        succeeded = true
+                    } catch {
+                        AppLogger.audio.warning("Could not activate AVAudioSession: \(error.localizedDescription)")
+                        succeeded = false
+                    }
                 }
+                return succeeded
+                #else
+                return true
+                #endif
             }
-            return succeeded
-            #else
-            return true
-            #endif
+            currentActivationTask = task
+            return (true, task)
         }
         
-        currentActivationTask = task
-        os_unfair_lock_unlock(&unfairLock)
+        if !shouldProceed {
+            if let existingTask = existingTask {
+                return await existingTask.value
+            }
+            return true
+        }
         
+        guard let task = existingTask else { return false }
         let result = await task.value
         
-        os_unfair_lock_lock(&unfairLock)
-        currentActivationTask = nil
-        if result {
-            let wasActive = isSessionActive
-            isSessionActive = true
-            isSessionConfigured = true
-            if !wasActive {
-                AppLogger.audio.info("AVAudioSession successfully configured and activated.")
+        lock.withLock {
+            currentActivationTask = nil
+            if result {
+                let wasActive = isSessionActive
+                isSessionActive = true
+                isSessionConfigured = true
+                if !wasActive {
+                    AppLogger.audio.info("AVAudioSession successfully configured and activated.")
+                }
             }
         }
-        os_unfair_lock_unlock(&unfairLock)
         
         return result
     }
     
     /// Called when an audio interruption begins (e.g. phone call, Siri, alarm).
     public func notifyInterruptionBegan() {
-        os_unfair_lock_lock(&unfairLock)
-        isSessionActive = false
-        os_unfair_lock_unlock(&unfairLock)
+        lock.withLock {
+            isSessionActive = false
+        }
         AppLogger.audio.info("AVAudioSession interruption began.")
     }
     
@@ -102,25 +105,24 @@ public final class AudioSessionManager: @unchecked Sendable {
     
     /// Called when OS media services are reset.
     public func notifyMediaServicesWereReset() {
-        os_unfair_lock_lock(&unfairLock)
-        isSessionActive = false
-        isSessionConfigured = false
-        currentActivationTask?.cancel()
-        currentActivationTask = nil
-        os_unfair_lock_unlock(&unfairLock)
+        lock.withLock {
+            isSessionActive = false
+            isSessionConfigured = false
+            currentActivationTask?.cancel()
+            currentActivationTask = nil
+        }
         AppLogger.audio.warning("AVAudioSession media services were reset.")
     }
     
     /// Deactivates the audio session when playback has completely stopped.
     public func deactivateSession() {
         #if os(iOS)
-        os_unfair_lock_lock(&unfairLock)
-        guard isSessionActive else {
-            os_unfair_lock_unlock(&unfairLock)
-            return
+        let wasActive = lock.withLock { () -> Bool in
+            guard isSessionActive else { return false }
+            isSessionActive = false
+            return true
         }
-        isSessionActive = false
-        os_unfair_lock_unlock(&unfairLock)
+        guard wasActive else { return }
         
         Task.detached(priority: .utility) {
             do {

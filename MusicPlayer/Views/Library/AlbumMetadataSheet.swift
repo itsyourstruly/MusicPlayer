@@ -209,6 +209,8 @@ public struct AlbumMetadataSheet: View {
                                     case .success(let img):
                                         img
                                             .resizable()
+                                            .interpolation(.high)
+                                            .antialiased(true)
                                             .aspectRatio(contentMode: .fill)
                                     default:
                                         RoundedRectangle(cornerRadius: 5, style: .continuous)
@@ -331,6 +333,8 @@ public struct AlbumMetadataSheet: View {
                     case .success(let img):
                         img
                             .resizable()
+                            .interpolation(.high)
+                            .antialiased(true)
                             .aspectRatio(contentMode: .fill)
                     default:
                         RoundedRectangle(cornerRadius: 8, style: .continuous)
@@ -403,7 +407,7 @@ public struct AlbumMetadataSheet: View {
         let selectedOnline = self.selectedOnlineAlbum
         let allTracks = self.libraryStore.tracks
 
-        let (assignments, initialUnmatched) = await Task.detached(priority: .userInitiated) { () -> ([DisambiguationMatcher.AlbumCutAssignment], [Track]) in
+        let (assignments, _) = await Task.detached(priority: .userInitiated) { () -> ([DisambiguationMatcher.AlbumCutAssignment], [Track]) in
             let localIDs = Set(currentAlbum.tracks.map { $0.id })
             var cutTitles = Set<String>()
             for cut in cuts {
