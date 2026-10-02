@@ -506,10 +506,18 @@ public struct AlbumDetailView: View {
                     }
                 }
 
-                Text(TimeFormatting.formatSummaryDuration(seconds: activeAlbum.totalDuration))
-                    .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(.secondary)
-                    .padding(.top, 2)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(TimeFormatting.formatSummaryDuration(seconds: activeAlbum.totalDuration))
+                        .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(.secondary)
+
+                    if let year = activeAlbum.displayYear {
+                        Text(year)
+                            .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .padding(.top, 2)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }

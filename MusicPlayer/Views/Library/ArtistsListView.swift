@@ -32,13 +32,15 @@ public struct ArtistsListView: View {
             )
 
             if libraryStore.filteredArtists.isEmpty {
-                EmptyStateView(
-                    title: "NO ARTISTS FOUND",
-                    message: libraryStore.searchQuery.isEmpty
-                        ? "Link a music directory in Settings to index artists."
-                        : "No artists match '\(libraryStore.searchQuery)'."
-                )
-                .padding(.top, 24)
+                if !libraryStore.isInitialLoading || libraryStore.settings.linkedFolderName == nil {
+                    EmptyStateView(
+                        title: "NO ARTISTS FOUND",
+                        message: libraryStore.searchQuery.isEmpty
+                            ? "Link a music directory in Settings to index artists."
+                            : "No artists match '\(libraryStore.searchQuery)'."
+                    )
+                    .padding(.top, 24)
+                }
             } else {
                 LazyVGrid(columns: columns, spacing: 10) {
                     ForEach(libraryStore.filteredArtists) { artist in

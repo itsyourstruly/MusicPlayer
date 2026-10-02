@@ -28,13 +28,15 @@ public struct AllTracksListView: View {
             )
 
             if libraryStore.filteredTracks.isEmpty {
-                EmptyStateView(
-                    title: "NO TRACKS FOUND",
-                    message: libraryStore.searchQuery.isEmpty
-                        ? "Link a music directory in Settings to scan audio files."
-                        : "No tracks match '\(libraryStore.searchQuery)'."
-                )
-                .padding(.top, 24)
+                if !libraryStore.isInitialLoading || libraryStore.settings.linkedFolderName == nil {
+                    EmptyStateView(
+                        title: "NO TRACKS FOUND",
+                        message: libraryStore.searchQuery.isEmpty
+                            ? "Link a music directory in Settings to scan audio files."
+                            : "No tracks match '\(libraryStore.searchQuery)'."
+                    )
+                    .padding(.top, 24)
+                }
             } else {
                 let tracks = libraryStore.filteredTracks
                 let currentTrackID = playerService.currentTrack?.id

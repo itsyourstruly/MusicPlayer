@@ -483,10 +483,21 @@ public struct Album: Identifiable, Codable, Sendable, Hashable {
     /// Formatted release year string (e.g. `2024` or `UNKNOWN YEAR`).
     public var formattedYear: String {
         // Release year
-        if let year = resolvedYear, year > 0 {
+        if let year = resolvedYear ?? year, year > 0 {
             return String(year)
         }
         return "UNKNOWN YEAR"
+    }
+
+    /// Display release year string if known (e.g. "2024"), or nil if unknown.
+    public var displayYear: String? {
+        if let year = resolvedYear ?? year, year > 0 {
+            return String(year)
+        }
+        if let trackYear = tracks.compactMap({ $0.year }).first(where: { $0 > 0 }) {
+            return String(trackYear)
+        }
+        return nil
     }
 
     /// Canonical release type title for top bar display: "ALBUM", "SINGLE", "EP", or "ALTERNATE".

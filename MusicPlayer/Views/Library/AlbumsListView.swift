@@ -30,12 +30,14 @@ public struct AlbumsListView: View {
             )
 
             if libraryStore.filteredAlbums.isEmpty {
-                EmptyStateView(
-                    title: "NO ALBUMS FOUND",
-                    message: libraryStore.searchQuery.isEmpty
-                        ? "Link a music directory in Settings to index albums."
-                        : "No albums match '\(libraryStore.searchQuery)'."
-                )
+                if !libraryStore.isInitialLoading || libraryStore.settings.linkedFolderName == nil {
+                    EmptyStateView(
+                        title: "NO ALBUMS FOUND",
+                        message: libraryStore.searchQuery.isEmpty
+                            ? "Link a music directory in Settings to index albums."
+                            : "No albums match '\(libraryStore.searchQuery)'."
+                    )
+                }
             } else {
                 LazyVGrid(columns: columns, spacing: 18) {
                     ForEach(libraryStore.filteredAlbums) { album in

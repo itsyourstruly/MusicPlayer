@@ -54,7 +54,9 @@ public struct MacAllTracksView: View {
 
             // Tracks Table List (Lazily Loaded)
             if libraryStore.filteredTracks.isEmpty {
-                emptyStateView
+                if !libraryStore.isInitialLoading || libraryStore.settings.linkedFolderName == nil {
+                    emptyStateView
+                }
             } else {
                 ScrollView(.vertical, showsIndicators: true) {
                     LazyVStack(spacing: 1) {

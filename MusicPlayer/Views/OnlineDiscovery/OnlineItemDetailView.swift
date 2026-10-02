@@ -607,6 +607,12 @@ public struct OnlineAlbumDetailView: View {
                             .font(.system(size: 12, weight: .semibold, design: .monospaced))
                             .foregroundStyle(Color.primary)
                     }
+
+                    if let year = currentAlbum.releaseYear, year > 0 {
+                        Text(String(year))
+                            .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                    }
                 }
                 .padding(.top, 2)
             }

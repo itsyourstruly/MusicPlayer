@@ -46,21 +46,22 @@ public struct FastAudioMetadataReader: Sendable {
     }
 
     /// Reads metadata directly from file binary headers without spawning AVURLAsset or IPC daemons.
-    public static func readMetadata(for fileURL: URL) -> ParsedAudioMetadata? {
+    public static func readMetadata(for fileURL: URL, knownFileSize: Int64? = nil) -> ParsedAudioMetadata? {
         // Ensure preconditions are met before proceeding
         guard let handle = try? FileHandle(forReadingFrom: fileURL) else { return nil }
         // Cleanup upon exiting scope
         defer { try? handle.close() }
 
-        // File size
-        var fileSize: Int64 = 0
-        if let attr = try? FileManager.default.attributesOfItem(atPath: fileURL.path) {
-            fileSize = (attr[.size] as? NSNumber)?.int64Value ?? 0
-        }
-        if fileSize == 0 {
+        var fileSize: Int64 = knownFileSize ?? 0
+        if fileSize <= 0 {
             if let end = try? handle.seekToEnd() {
                 fileSize = Int64(end)
                 try? handle.seek(toOffset: 0)
+            }
+        }
+        if fileSize <= 0 {
+            if let attr = try? FileManager.default.attributesOfItem(atPath: fileURL.path) {
+                fileSize = (attr[.size] as? NSNumber)?.int64Value ?? 0
             }
         }
 
@@ -815,8 +816,11 @@ public struct FastAudioMetadataReader: Sendable {
             // Block length (clamped to 16MB max)
             let blockLength = (Int(blockHeader[1]) << 16) | (Int(blockHeader[2]) << 8) | Int(blockHeader[3])
 
+            if blockLength == 0 {
+                continue
+            }
             // Ensure preconditions are met before proceeding
-            guard blockLength > 0, blockLength <= 16 * 1024 * 1024, let blockData = try? handle.read(upToCount: blockLength), blockData.count == blockLength else { break }
+            guard blockLength <= 16 * 1024 * 1024, let blockData = try? handle.read(upToCount: blockLength), blockData.count == blockLength else { break }
 
             if blockType == 0 && blockLength >= 18 {
                 // STREAMINFO

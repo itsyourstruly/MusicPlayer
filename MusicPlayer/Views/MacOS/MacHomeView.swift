@@ -43,15 +43,20 @@ public struct MacHomeView: View {
         ScrollView(.vertical, showsIndicators: true) {
             LazyVStack(alignment: .leading, spacing: 24) {
                 // Top Hero / Header
-                if libraryStore.tracks.isEmpty {
+                if libraryStore.tracks.isEmpty && !libraryStore.isInitialLoading && libraryStore.settings.linkedFolderName == nil {
                     unlinkedFolderBanner
-                } else {
+                } else if !libraryStore.tracks.isEmpty {
                     desktopQuickActionsDeck
                 }
 
                 // Pinned Playlists & Albums Section
                 if !libraryStore.pinnedItems.isEmpty {
                     pinnedItemsSection
+                }
+
+                // Latest Plays Section
+                if !libraryStore.recentAlbums.isEmpty {
+                    latestPlaysSection
                 }
             }
             .padding(.horizontal, 20)
@@ -275,5 +280,89 @@ public struct MacHomeView: View {
             )
         }
         .buttonStyle(.plain)
+    }
+
+    // MARK: - Latest Plays Section
+
+    @ViewBuilder
+    private var latestPlaysSection: some View {
+        let recent = libraryStore.recentAlbums
+        if !recent.isEmpty {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    Text("LATEST PLAYS")
+                        .font(.system(size: 11, weight: .bold, design: .monospaced))
+                        .tracking(1.0)
+                        .foregroundStyle(appTheme.primaryTextColor)
+
+                    Spacer()
+
+                    Text("\(recent.count) ALBUMS")
+                        .font(.system(size: 9, design: .monospaced))
+                        .foregroundStyle(.tertiary)
+                }
+
+                ScrollView(.horizontal, showsIndicators: false) {
+                    LazyHStack(spacing: 14) {
+                        ForEach(recent) { album in
+                            Button(action: {
+                                onNavigateToAlbum(album)
+                            }) {
+                                VStack(alignment: .leading, spacing: 6) {
+                                    AlbumArtworkView(
+                                        artworkKey: album.artworkKey,
+                                        title: album.title,
+                                        subtitle: album.artist,
+                                        cornerRadius: 5
+                                    )
+                                    .frame(width: 120, height: 120)
+
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(album.title)
+                                            .font(.system(size: 11, weight: .semibold))
+                                            .foregroundStyle(appTheme.primaryTextColor)
+                                            .lineLimit(1)
+
+                                        Text(album.artist)
+                                            .font(.system(size: 10))
+                                            .foregroundStyle(.secondary)
+                                            .lineLimit(1)
+                                    }
+                                    .frame(width: 120, alignment: .leading)
+                                }
+                                .padding(8)
+                                .background(appTheme.secondaryBackgroundColor.opacity(0.5))
+                                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                        .stroke(appTheme.separatorColor.opacity(0.25), lineWidth: 0.5)
+                                )
+                            }
+                            .buttonStyle(.plain)
+                            .contextMenu {
+                                Button(action: {
+                                    let tracks = album.tracks
+                                    if let first = tracks.first {
+                                        playerService.play(track: first, inQueue: tracks)
+                                    }
+                                }) {
+                                    Label("Play Album", systemImage: "play.fill")
+                                }
+                                Button(action: {
+                                    playerService.playNext(tracks: album.tracks)
+                                }) {
+                                    Label("Play Next", systemImage: "text.line.first.and.arrowtriangle.forward")
+                                }
+                                Button(action: {
+                                    playerService.appendToQueue(tracks: album.tracks)
+                                }) {
+                                    Label("Add to Queue", systemImage: "text.line.last.and.arrowtriangle.forward")
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }

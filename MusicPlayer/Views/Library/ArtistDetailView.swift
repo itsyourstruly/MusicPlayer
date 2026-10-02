@@ -13,6 +13,7 @@ public struct ArtistDetailView: View {
     @State private var selectedTrackForPlaylist: Track? = nil
     @State private var showingFavorites: Bool = false
     @State private var showingOnlineDiscovery: Bool = false
+    @State private var showingDiscographyReviewSheet: Bool = false
     @State private var selectedSectionDestination: ArtistSectionDestination? = nil
 
     private struct ArtistSectionDestination: Identifiable, Hashable {
@@ -366,6 +367,13 @@ public struct ArtistDetailView: View {
                 )
             }
         }
+        .sheet(isPresented: $showingDiscographyReviewSheet) {
+            if let result = libraryStore.discographyScanResult {
+                DiscographyReviewSheet(scanResult: result, libraryStore: libraryStore)
+                    .tint(libraryStore.settings.appTheme.accentColor)
+                    .environment(\.appTheme, libraryStore.settings.appTheme)
+            }
+        }
         .navigationDestination(item: $selectedAlbumForNavigation) { album in
             AlbumDetailView(album: album, libraryStore: libraryStore, playerService: playerService)
         }
@@ -464,7 +472,61 @@ public struct ArtistDetailView: View {
                 Spacer(minLength: 0)
             }
 
-            if libraryStore.isBackgroundCheckingMetadata {
+            // Multi-Source Discography Scanning Banner & Review Button
+            if libraryStore.activeDiscographyScanArtistName == activeArtist.name {
+                if libraryStore.isScanningArtistDiscography {
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            Text(libraryStore.discographyScanStatusText)
+                                .font(.system(size: 11, weight: .bold, design: .monospaced))
+                                .foregroundStyle(libraryStore.settings.appTheme.accentColor)
+                                .lineLimit(1)
+                            Spacer()
+                            Text("\(Int(libraryStore.discographyScanProgress * 100))%")
+                                .font(.system(size: 11, weight: .bold, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                        }
+
+                        ProgressView(value: libraryStore.discographyScanProgress)
+                            .tint(libraryStore.settings.appTheme.accentColor)
+                    }
+                    .padding(10)
+                    .background(libraryStore.settings.appTheme.secondaryBackgroundColor)
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .transition(.opacity)
+                } else if libraryStore.isDiscographyScanComplete, libraryStore.discographyScanResult != nil {
+                    Button(action: {
+                        HapticFeedback.lightImpact()
+                        showingDiscographyReviewSheet = true
+                    }) {
+                        HStack(spacing: 8) {
+                            Image(systemName: "checkmark.circle.fill")
+                                .font(.system(size: 13, weight: .bold))
+                                .foregroundStyle(libraryStore.settings.appTheme.accentColor)
+
+                            Text("Scan Complete • Tap to Review")
+                                .font(.system(size: 12, weight: .bold, design: .monospaced))
+                                .foregroundStyle(Color.primary)
+
+                            Spacer()
+
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 10)
+                        .background(libraryStore.settings.appTheme.accentColor.opacity(0.12))
+                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .stroke(libraryStore.settings.appTheme.accentColor.opacity(0.35), lineWidth: 1)
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .transition(.asymmetric(insertion: .scale(scale: 0.95).combined(with: .opacity), removal: .opacity))
+                }
+            } else if libraryStore.isBackgroundCheckingMetadata {
                 VStack(alignment: .leading, spacing: 6) {
                     HStack {
                         Text(libraryStore.backgroundCheckStatusText)

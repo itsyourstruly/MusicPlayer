@@ -25,7 +25,7 @@ public struct PinnedItemIdentifier: Codable, Identifiable, Hashable, Sendable {
 }
 
 /// Resolved pinned item representation for rendering in the Home view PINS section.
-public enum PinnedItem: Identifiable, Hashable, Sendable {
+public enum PinnedItem: Identifiable, Hashable, Sendable, Codable {
     // Playlist option
     case playlist(Playlist)
     // Album option

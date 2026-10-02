@@ -28,10 +28,17 @@ public struct FolderHierarchyScanner: Sendable {
         "artwork.jpg", "artwork.jpeg", "artwork.png", "Cover.jpg", "Cover.png", "Folder.jpg"
     ]
 
+    nonisolated(unsafe) private static let folderArtworkCache = NSCache<NSURL, NSData>()
+
     public init() {}
 
     /// Parses an audio file using its filesystem hierarchy relative to the linked root directory.
-    public func parseAudioTrack(at url: URL, rootFolderURL: URL?) async -> Track? {
+    public func parseAudioTrack(
+        at url: URL,
+        rootFolderURL: URL?,
+        knownStat: AudioFileStat? = nil,
+        artworkDeduplicator: ArtworkKeyDeduplicator? = nil
+    ) async -> Track? {
         let isFileAccessing = url.startAccessingSecurityScopedResource()
         defer {
             if isFileAccessing {
@@ -44,26 +51,30 @@ public struct FolderHierarchyScanner: Sendable {
            values.isUbiquitousItem == true,
            values.ubiquitousItemDownloadingStatus != .current {
             try? FileManager.default.startDownloadingUbiquitousItem(at: url)
+            return nil
         }
 
         // Read filesystem attributes
-        var fileSizeBytes: Int64 = 0
-        var creationDate: Date?
-        var modificationDate: Date?
+        var fileSizeBytes: Int64 = knownStat?.size ?? 0
+        var creationDate: Date? = knownStat?.creationDate
+        var modificationDate: Date? = knownStat?.modificationDate
 
-        if let attributes = try? FileManager.default.attributesOfItem(atPath: url.path) {
-            fileSizeBytes = (attributes[.size] as? NSNumber)?.int64Value ?? 0
-            creationDate = attributes[.creationDate] as? Date
-            modificationDate = attributes[.modificationDate] as? Date
+        if fileSizeBytes <= 0 {
+            if let attributes = try? FileManager.default.attributesOfItem(atPath: url.path) {
+                fileSizeBytes = (attributes[.size] as? NSNumber)?.int64Value ?? 0
+                creationDate = attributes[.creationDate] as? Date
+                modificationDate = attributes[.modificationDate] as? Date
+            }
         }
 
         // 1. Read binary audio technical specs & embedded metadata baseline (<0.2ms)
-        let binaryMeta = FastAudioMetadataReader.readMetadata(for: url)
+        let binaryMeta = FastAudioMetadataReader.readMetadata(for: url, knownFileSize: fileSizeBytes > 0 ? fileSizeBytes : nil)
         var durationSeconds = binaryMeta?.duration ?? 0
         var avArtist: String? = nil
         var avAuthor: String? = nil
 
-        if durationSeconds <= 0 || ((binaryMeta?.artist == nil || isGenericString(binaryMeta?.artist ?? "")) && (binaryMeta?.author == nil || isGenericString(binaryMeta?.author ?? ""))) {
+        // Fallback to AVURLAsset ONLY if binary reader returned nil (unsupported container) or duration could not be determined
+        if binaryMeta == nil || durationSeconds <= 0 {
             let asset = AVURLAsset(url: url, options: [AVURLAssetPreferPreciseDurationAndTimingKey: false])
             if let (cmDuration, commonMeta, genericMeta) = try? await asset.load(.duration, .commonMetadata, .metadata) {
                 if durationSeconds <= 0 {
@@ -169,7 +180,9 @@ public struct FolderHierarchyScanner: Sendable {
                 artworkKey = "album_art_dir_\(parentFolderName)"
             }
             if let key = artworkKey {
-                await ArtworkCacheService.shared.storeRawArtwork(data: art, key: key)
+                if artworkDeduplicator?.shouldStore(key) ?? true {
+                    await ArtworkCacheService.shared.storeRawArtwork(data: art, key: key)
+                }
             }
         }
 
@@ -330,6 +343,10 @@ public struct FolderHierarchyScanner: Sendable {
     /// Scans the folder containing the audio file (and its parent if inside a CD subfolder) for cover images.
     private func findFolderArtwork(for fileURL: URL) -> Data? {
         let parentDir = fileURL.deletingLastPathComponent()
+        if let cached = Self.folderArtworkCache.object(forKey: parentDir as NSURL) {
+            return cached as Data
+        }
+
         let fm = FileManager.default
 
         // Check parent directory
@@ -337,6 +354,7 @@ public struct FolderHierarchyScanner: Sendable {
             let artURL = parentDir.appendingPathComponent(artName)
             if fm.fileExists(atPath: artURL.path),
                let data = try? Data(contentsOf: artURL), !data.isEmpty {
+                Self.folderArtworkCache.setObject(data as NSData, forKey: parentDir as NSURL)
                 return data
             }
         }
@@ -346,10 +364,16 @@ public struct FolderHierarchyScanner: Sendable {
         if let regex = Self.discRegex,
            regex.firstMatch(in: parentName, options: [], range: NSRange(location: 0, length: parentName.utf16.count)) != nil {
             let grandParentDir = parentDir.deletingLastPathComponent()
+            if let cached = Self.folderArtworkCache.object(forKey: grandParentDir as NSURL) {
+                return cached as Data
+            }
+
             for artName in Self.commonArtworkFilenames {
                 let artURL = grandParentDir.appendingPathComponent(artName)
                 if fm.fileExists(atPath: artURL.path),
                    let data = try? Data(contentsOf: artURL), !data.isEmpty {
+                    Self.folderArtworkCache.setObject(data as NSData, forKey: parentDir as NSURL)
+                    Self.folderArtworkCache.setObject(data as NSData, forKey: grandParentDir as NSURL)
                     return data
                 }
             }

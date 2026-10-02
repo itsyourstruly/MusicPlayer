@@ -3,6 +3,35 @@ import AVFoundation
 import CoreMedia
 import os
 
+/// Fast filesystem audio file stat record obtained during directory enumeration.
+public struct AudioFileStat: Sendable {
+    public let url: URL
+    public let size: Int64
+    public let modificationDate: Date?
+    public let creationDate: Date?
+
+    public init(url: URL, size: Int64, modificationDate: Date?, creationDate: Date?) {
+        self.url = url
+        self.size = size
+        self.modificationDate = modificationDate
+        self.creationDate = creationDate
+    }
+}
+
+/// Thread-safe artwork key deduplicator to prevent worker threads from queueing duplicate writes
+public final class ArtworkKeyDeduplicator: @unchecked Sendable {
+    private let lock = NSLock()
+    private var keys = Set<String>()
+
+    public init() {}
+
+    public func shouldStore(_ key: String) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return keys.insert(key).inserted
+    }
+}
+
 /// High-throughput concurrency-safe audio scanner that traverses directories in parallel,
 /// extracts rich ID3/QuickTime/Vorbis/FLAC metadata with single-shot AVURLAsset batch loading,
 /// directory & filename heuristic fallbacks, and non-blocking background artwork caching.
@@ -34,54 +63,71 @@ public struct AudioScannerService: Sendable {
 
         // Build fast path-based lookup map for differential scan
         var existingTrackMap: [String: Track] = [:]
-        existingTrackMap.reserveCapacity(existingTracks.count)
+        existingTrackMap.reserveCapacity(existingTracks.count * 4)
         for track in existingTracks {
-            existingTrackMap[track.url.standardizedFileURL.path] = track
+            let stdPath = track.url.standardizedFileURL.path
+            existingTrackMap[stdPath] = track
+            existingTrackMap[stdPath.lowercased()] = track
+            let rawPath = track.url.path
+            existingTrackMap[rawPath] = track
+            existingTrackMap[rawPath.lowercased()] = track
         }
 
         let fileManager = FileManager.default
-        var audioFileURLs: [URL] = []
-        var fileSizesByPath: [String: Int64] = [:]
+        var audioFiles: [AudioFileStat] = []
+        audioFiles.reserveCapacity(min(existingTracks.count + 500, 50_000))
         var seenAudioFilePaths = Set<String>()
         var visitedDirectories = Set<String>()
         var isDir: ObjCBool = false
 
-        let rootCanonicalPath = folderURL.resolvingSymlinksInPath().standardizedFileURL.path
-        visitedDirectories.insert(rootCanonicalPath)
+        let rootPath = folderURL.standardizedFileURL.path
+        visitedDirectories.insert(rootPath)
+        visitedDirectories.insert(folderURL.path)
 
         if fileManager.fileExists(atPath: folderURL.path, isDirectory: &isDir) {
             if !isDir.boolValue {
                 // User linked a single audio file directly
                 let ext = folderURL.pathExtension.lowercased()
                 if supportedExtensions.contains(ext) {
-                    audioFileURLs.append(folderURL)
-                    if let res = try? folderURL.resourceValues(forKeys: [.fileSizeKey]), let size = res.fileSize {
-                        fileSizesByPath[folderURL.standardizedFileURL.path] = Int64(size)
-                    }
+                    let res = try? folderURL.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey, .creationDateKey])
+                    let size = Int64(res?.fileSize ?? 0)
+                    audioFiles.append(AudioFileStat(
+                        url: folderURL,
+                        size: size,
+                        modificationDate: res?.contentModificationDate,
+                        creationDate: res?.creationDate
+                    ))
                 }
             } else {
                 // Recursive directory enumeration with cycle & symlink loop protection
                 if let enumerator = fileManager.enumerator(
                     at: folderURL,
-                    includingPropertiesForKeys: [.isRegularFileKey, .isDirectoryKey, .isSymbolicLinkKey, .fileSizeKey, .contentModificationDateKey],
+                    includingPropertiesForKeys: [.isRegularFileKey, .isDirectoryKey, .isSymbolicLinkKey, .fileSizeKey, .contentModificationDateKey, .creationDateKey],
                     options: [.skipsHiddenFiles, .skipsPackageDescendants]
                 ) {
                     while let fileURL = enumerator.nextObject() as? URL {
                         // Safety ceiling to prevent runaway allocations on corrupted filesystems
-                        if audioFileURLs.count >= 200_000 {
+                        if audioFiles.count >= 200_000 {
                             AppLogger.scanner.warning("Reached safety limit of 200,000 files during scanning.")
                             break
                         }
 
-                        // Cycle detection for directories & symbolic links
+                        // Cycle detection for directories & symbolic links (only resolve symlinks if actually a symlink)
                         if let res = try? fileURL.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey]) {
-                            if res.isDirectory == true || res.isSymbolicLink == true {
+                            if res.isSymbolicLink == true {
                                 let canonical = fileURL.resolvingSymlinksInPath().standardizedFileURL.path
                                 if visitedDirectories.contains(canonical) {
                                     enumerator.skipDescendants()
                                     continue
                                 }
                                 visitedDirectories.insert(canonical)
+                            } else if res.isDirectory == true {
+                                let dirPath = fileURL.standardizedFileURL.path
+                                if visitedDirectories.contains(dirPath) {
+                                    enumerator.skipDescendants()
+                                    continue
+                                }
+                                visitedDirectories.insert(dirPath)
                             }
                         }
 
@@ -89,27 +135,39 @@ public struct AudioScannerService: Sendable {
                         if supportedExtensions.contains(ext) {
                             let path = fileURL.standardizedFileURL.path
                             if seenAudioFilePaths.insert(path).inserted {
-                                audioFileURLs.append(fileURL)
-                                if let res = try? fileURL.resourceValues(forKeys: [.fileSizeKey]), let size = res.fileSize {
-                                    fileSizesByPath[path] = Int64(size)
-                                }
+                                let res = try? fileURL.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey, .creationDateKey])
+                                let size = Int64(res?.fileSize ?? 0)
+                                audioFiles.append(AudioFileStat(
+                                    url: fileURL,
+                                    size: size,
+                                    modificationDate: res?.contentModificationDate,
+                                    creationDate: res?.creationDate
+                                ))
                             }
                         }
                     }
                 }
 
                 // Fallback shallow directory scan if enumerator yielded no files
-                if audioFileURLs.isEmpty {
-                    if let directContents = try? fileManager.contentsOfDirectory(at: folderURL, includingPropertiesForKeys: [.fileSizeKey], options: [.skipsHiddenFiles]) {
+                if audioFiles.isEmpty {
+                    if let directContents = try? fileManager.contentsOfDirectory(
+                        at: folderURL,
+                        includingPropertiesForKeys: [.fileSizeKey, .contentModificationDateKey, .creationDateKey],
+                        options: [.skipsHiddenFiles]
+                    ) {
                         for fileURL in directContents {
                             let ext = fileURL.pathExtension.lowercased()
                             if supportedExtensions.contains(ext) {
                                 let path = fileURL.standardizedFileURL.path
                                 if seenAudioFilePaths.insert(path).inserted {
-                                    audioFileURLs.append(fileURL)
-                                    if let res = try? fileURL.resourceValues(forKeys: [.fileSizeKey]), let size = res.fileSize {
-                                        fileSizesByPath[path] = Int64(size)
-                                    }
+                                    let res = try? fileURL.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey, .creationDateKey])
+                                    let size = Int64(res?.fileSize ?? 0)
+                                    audioFiles.append(AudioFileStat(
+                                        url: fileURL,
+                                        size: size,
+                                        modificationDate: res?.contentModificationDate,
+                                        creationDate: res?.creationDate
+                                    ))
                                 }
                             }
                         }
@@ -118,33 +176,38 @@ public struct AudioScannerService: Sendable {
             }
         }
 
-        let totalFiles = audioFileURLs.count
+        let totalFiles = audioFiles.count
         AppLogger.scanner.info("Found \(totalFiles) unique audio files to evaluate.")
 
         // MARK: - Smart Differential Partitioning
         var scannedTracks: [Track] = []
         scannedTracks.reserveCapacity(min(totalFiles, 50_000))
-        var filesNeedingParsing: [URL] = []
+        var filesNeedingParsing: [AudioFileStat] = []
         filesNeedingParsing.reserveCapacity(min(totalFiles, 50_000))
 
-        for fileURL in audioFileURLs {
-            let standardizedPath = fileURL.standardizedFileURL.path
-            if let cachedTrack = existingTrackMap[standardizedPath] {
-                // Ensure track has valid artist and album before differential reuse; if unknown or missing, re-parse from disk
-                let isArtistValid = !cachedTrack.artist.isEmpty && !MetadataSanitizer.isUnknownArtist(cachedTrack.artist)
-                let isAlbumValid = !cachedTrack.album.isEmpty && !MetadataSanitizer.isUnknownAlbum(cachedTrack.album)
+        for fileStat in audioFiles {
+            let stdPath = fileStat.url.standardizedFileURL.path
+            let cachedTrack = existingTrackMap[stdPath] ?? existingTrackMap[stdPath.lowercased()] ?? existingTrackMap[fileStat.url.path]
 
-                if isArtistValid && isAlbumValid {
-                    let cachedSize = cachedTrack.fileInfo?.fileSizeBytes ?? 0
-                    let currentSize = fileSizesByPath[standardizedPath] ?? ((try? fileManager.attributesOfItem(atPath: fileURL.path)[.size] as? NSNumber)?.int64Value ?? 0)
+            if let cached = cachedTrack {
+                let cachedSize = cached.fileInfo?.fileSizeBytes ?? 0
+                let currentSize = fileStat.size
 
-                    if cachedSize > 0 && currentSize == cachedSize {
-                        scannedTracks.append(cachedTrack)
+                if cachedSize > 0 && currentSize == cachedSize {
+                    // Check modification dates if both exist
+                    if let cachedMod = cached.fileInfo?.modificationDate, let curMod = fileStat.modificationDate {
+                        if abs(cachedMod.timeIntervalSince(curMod)) < 2.0 {
+                            scannedTracks.append(cached)
+                            continue
+                        }
+                    } else {
+                        // File size matches and is non-zero
+                        scannedTracks.append(cached)
                         continue
                     }
                 }
             }
-            filesNeedingParsing.append(fileURL)
+            filesNeedingParsing.append(fileStat)
         }
 
         let reusedCount = scannedTracks.count
@@ -156,48 +219,63 @@ public struct AudioScannerService: Sendable {
             onProgress?(reusedCount, totalFiles, "Indexed \(reusedCount) existing files...")
         }
 
-        // MARK: - Scaled TaskGroup Execution for New/Modified Files
+        // MARK: - High-Throughput Streaming TaskGroup Worker Pool
         if !filesNeedingParsing.isEmpty {
-            let maxConcurrentWorkers = min(8, max(2, ProcessInfo.processInfo.activeProcessorCount))
-            let chunkSize = maxConcurrentWorkers * 4
+            let maxConcurrentWorkers = min(16, max(4, ProcessInfo.processInfo.activeProcessorCount))
+            let artworkDeduplicator = ArtworkKeyDeduplicator()
+            var scannedNewTracks: [Track] = []
+            scannedNewTracks.reserveCapacity(toParseCount)
 
-            var processedNewCount = 0
-            var lastReportedTime = Date.distantPast
+            await withTaskGroup(of: Track?.self) { group in
+                var nextIndex = 0
+                let initialBatch = min(maxConcurrentWorkers * 2, toParseCount)
 
-            for chunkStart in stride(from: 0, to: toParseCount, by: chunkSize) {
-                let chunkEnd = min(chunkStart + chunkSize, toParseCount)
-                let currentChunk = Array(filesNeedingParsing[chunkStart..<chunkEnd])
-
-                var chunkResults: [Track] = []
-                await withTaskGroup(of: Track?.self) { group in
-                    for fileURL in currentChunk {
-                        group.addTask(priority: .utility) {
-                            if scanMethod == .folderHierarchy {
-                                return await FolderHierarchyScanner.shared.parseAudioTrack(at: fileURL, rootFolderURL: folderURL)
-                            } else {
-                                return await self.parseAudioTrack(at: fileURL, rootFolderURL: folderURL)
-                            }
-                        }
-                    }
-
-                    for await track in group {
-                        processedNewCount += 1
-                        if let track = track {
-                            chunkResults.append(track)
-                        }
-
-                        let totalProgress = reusedCount + processedNewCount
-                        let now = Date()
-                        if now.timeIntervalSince(lastReportedTime) >= 0.25 || totalProgress == totalFiles {
-                            lastReportedTime = now
-                            let currentName = track?.title ?? "Processing..."
-                            onProgress?(totalProgress, totalFiles, currentName)
+                // Seed initial workers
+                while nextIndex < initialBatch {
+                    let fileStat = filesNeedingParsing[nextIndex]
+                    nextIndex += 1
+                    group.addTask(priority: .userInitiated) {
+                        if scanMethod == .folderHierarchy {
+                            return await FolderHierarchyScanner.shared.parseAudioTrack(at: fileStat.url, rootFolderURL: folderURL, knownStat: fileStat, artworkDeduplicator: artworkDeduplicator)
+                        } else {
+                            return await self.parseAudioTrack(at: fileStat.url, rootFolderURL: folderURL, knownStat: fileStat, artworkDeduplicator: artworkDeduplicator)
                         }
                     }
                 }
 
-                scannedTracks.append(contentsOf: chunkResults)
+                var processedNewCount = 0
+                var lastReportedTime = Date.distantPast
+
+                for await track in group {
+                    processedNewCount += 1
+                    if let track = track {
+                        scannedNewTracks.append(track)
+                    }
+
+                    // Feed next task immediately into the continuous pool
+                    if nextIndex < toParseCount {
+                        let fileStat = filesNeedingParsing[nextIndex]
+                        nextIndex += 1
+                        group.addTask(priority: .userInitiated) {
+                            if scanMethod == .folderHierarchy {
+                                return await FolderHierarchyScanner.shared.parseAudioTrack(at: fileStat.url, rootFolderURL: folderURL, knownStat: fileStat, artworkDeduplicator: artworkDeduplicator)
+                            } else {
+                                return await self.parseAudioTrack(at: fileStat.url, rootFolderURL: folderURL, knownStat: fileStat, artworkDeduplicator: artworkDeduplicator)
+                            }
+                        }
+                    }
+
+                    let totalProgress = reusedCount + processedNewCount
+                    let now = Date()
+                    if now.timeIntervalSince(lastReportedTime) >= 0.1 || totalProgress == totalFiles {
+                        lastReportedTime = now
+                        let currentName = track?.title ?? "Processing..."
+                        onProgress?(totalProgress, totalFiles, currentName)
+                    }
+                }
             }
+
+            scannedTracks.append(contentsOf: scannedNewTracks)
         }
 
         AppLogger.scanner.info("Completed scan. Total indexed: \(scannedTracks.count) tracks (\(reusedCount) reused, \(toParseCount) parsed).")
@@ -205,7 +283,12 @@ public struct AudioScannerService: Sendable {
     }
 
     /// Parses an audio file with pure-Swift binary extraction and lightweight fallback.
-    public func parseAudioTrack(at url: URL, rootFolderURL: URL? = nil) async -> Track? {
+    public func parseAudioTrack(
+        at url: URL,
+        rootFolderURL: URL? = nil,
+        knownStat: AudioFileStat? = nil,
+        artworkDeduplicator: ArtworkKeyDeduplicator? = nil
+    ) async -> Track? {
         let isFileAccessing = url.startAccessingSecurityScopedResource()
         defer {
             if isFileAccessing {
@@ -213,29 +296,32 @@ public struct AudioScannerService: Sendable {
             }
         }
 
-        // Trigger background download if file is an undownloaded iCloud ubiquitous item
+        // Trigger background download if file is an undownloaded iCloud ubiquitous item and skip to avoid hang
         if let values = try? url.resourceValues(forKeys: [.isUbiquitousItemKey, .ubiquitousItemDownloadingStatusKey]),
            values.isUbiquitousItem == true,
            values.ubiquitousItemDownloadingStatus != .current {
             try? FileManager.default.startDownloadingUbiquitousItem(at: url)
+            return nil
         }
 
         // Read file system attributes
-        var fileSizeBytes: Int64 = 0
-        var creationDate: Date?
-        var modificationDate: Date?
+        var fileSizeBytes: Int64 = knownStat?.size ?? 0
+        var creationDate: Date? = knownStat?.creationDate
+        var modificationDate: Date? = knownStat?.modificationDate
 
-        if let attributes = try? FileManager.default.attributesOfItem(atPath: url.path) {
-            fileSizeBytes = (attributes[.size] as? NSNumber)?.int64Value ?? 0
-            creationDate = attributes[.creationDate] as? Date
-            modificationDate = attributes[.modificationDate] as? Date
+        if fileSizeBytes <= 0 {
+            if let attributes = try? FileManager.default.attributesOfItem(atPath: url.path) {
+                fileSizeBytes = (attributes[.size] as? NSNumber)?.int64Value ?? 0
+                creationDate = attributes[.creationDate] as? Date
+                modificationDate = attributes[.modificationDate] as? Date
+            }
         }
 
         // MARK: - 1. Pure-Swift In-Process Direct Binary Metadata Extraction (<0.2ms per file)
-        var parsedMeta = FastAudioMetadataReader.readMetadata(for: url)
+        var parsedMeta = FastAudioMetadataReader.readMetadata(for: url, knownFileSize: fileSizeBytes > 0 ? fileSizeBytes : nil)
 
-        // 2. Comprehensive Fallback if binary reader was unable to parse the file or missed artist/author metadata
-        if parsedMeta == nil || ((parsedMeta?.artist == nil || isGenericArtist(parsedMeta?.artist ?? "")) && (parsedMeta?.author == nil || isGenericArtist(parsedMeta?.author ?? ""))) {
+        // 2. Fallback to AVURLAsset ONLY if binary reader returned nil (unsupported container) or duration could not be determined
+        if parsedMeta == nil || (parsedMeta?.duration ?? 0) <= 0 {
             let asset = AVURLAsset(url: url, options: [AVURLAssetPreferPreciseDurationAndTimingKey: false])
             var durationSeconds: TimeInterval = 0
             var allMetadata: [AVMetadataItem] = []
@@ -375,7 +461,9 @@ public struct AudioScannerService: Sendable {
                 artworkKey = "album_art_dir_\(parentFolderName)"
             }
             if let key = artworkKey {
-                await ArtworkCacheService.shared.storeRawArtwork(data: art, key: key)
+                if artworkDeduplicator?.shouldStore(key) ?? true {
+                    await ArtworkCacheService.shared.storeRawArtwork(data: art, key: key)
+                }
             }
         }
 

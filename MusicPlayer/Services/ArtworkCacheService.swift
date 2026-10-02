@@ -22,6 +22,9 @@ public actor ArtworkCacheService {
     private let decodedImageCache = NSCache<NSString, PlatformImage>()
     // File manager
     private let fileManager = FileManager.default
+    // In-memory set of artwork keys known to exist on disk/cache to avoid repeated fileManager.fileExists & disk writes
+    private var knownPersistedKeys = Set<String>()
+
     // Pre-computed static disk cache path and invalid characters for microsecond lookups
     public static let sharedCacheDirectoryURL: URL = {
         let paths = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)
@@ -85,17 +88,29 @@ public actor ArtworkCacheService {
     /// Checks if artwork is already cached in memory or on disk.
     public func hasArtwork(key: String) -> Bool {
         guard !key.isEmpty else { return false }
+        if knownPersistedKeys.contains(key) {
+            return true
+        }
         let nsKey = key as NSString
         if rawDataCache.object(forKey: nsKey) != nil || decodedImageCache.object(forKey: nsKey) != nil {
+            knownPersistedKeys.insert(key)
             return true
         }
         let fileURL = cacheDirectoryURL.appendingPathComponent(sanitizedKey(key) + ".art")
-        return fileManager.fileExists(atPath: fileURL.path)
+        if fileManager.fileExists(atPath: fileURL.path) {
+            knownPersistedKeys.insert(key)
+            return true
+        }
+        return false
     }
 
     /// Fast, lightweight raw artwork staging during directory scans (zero image decoding, deduplicated atomic disk write).
     public func storeRawArtwork(data: Data, key: String) {
         guard !data.isEmpty, !key.isEmpty else { return }
+        if knownPersistedKeys.contains(key) {
+            return
+        }
+
         let nsKey = key as NSString
         rawDataCache.setObject(data as NSData, forKey: nsKey, cost: min(data.count, 500_000))
 
@@ -103,11 +118,13 @@ public actor ArtworkCacheService {
         if !fileManager.fileExists(atPath: fileURL.path) {
             try? data.write(to: fileURL, options: .atomic)
         }
+        knownPersistedKeys.insert(key)
     }
 
     /// Invalidates in-memory raw and decoded image caches for a specific artwork key.
     public func invalidateCachedImage(for key: String) {
         guard !key.isEmpty else { return }
+        knownPersistedKeys.remove(key)
         let nsKey = key as NSString
         rawDataCache.removeObject(forKey: nsKey)
         decodedImageCache.removeObject(forKey: nsKey)
@@ -132,6 +149,7 @@ public actor ArtworkCacheService {
 
         do {
             try data.write(to: fileURL, options: .atomic)
+            knownPersistedKeys.insert(key)
         } catch {
             AppLogger.storage.error("Failed to write artwork to disk for key \(key): \(error.localizedDescription)")
         }
@@ -295,6 +313,7 @@ public actor ArtworkCacheService {
     public func clearCache() {
         rawDataCache.removeAllObjects()
         decodedImageCache.removeAllObjects()
+        knownPersistedKeys.removeAll()
         try? fileManager.removeItem(at: cacheDirectoryURL)
         try? fileManager.createDirectory(at: cacheDirectoryURL, withIntermediateDirectories: true)
         AppLogger.storage.info("Artwork cache purged successfully.")
@@ -303,14 +322,14 @@ public actor ArtworkCacheService {
     /// Calculates total size in bytes consumed by artwork on disk.
     public func calculateDiskSize() -> Int64 {
         // Ensure preconditions are met before proceeding
-        guard let files = try? fileManager.contentsOfDirectory(at: cacheDirectoryURL, includingPropertiesForKeys: [.fileSizeKey]) else {
+        guard let files = try? fileManager.contentsOfDirectory(at: cacheDirectoryURL, includingPropertiesForKeys: [URLResourceKey.fileSizeKey]) else {
             return 0
         }
 
         // Total size
         var totalSize: Int64 = 0
         for file in files {
-            if let values = try? file.resourceValues(forKeys: [.fileSizeKey]),
+            if let values = try? file.resourceValues(forKeys: [URLResourceKey.fileSizeKey]),
                // Size
                let size = values.fileSize {
                 totalSize += Int64(size)
