@@ -208,10 +208,13 @@ public enum LibraryScanMethod: String, CaseIterable, Identifiable, Codable, Send
 
     public var descriptionText: String {
         switch self {
-        case .id3Tags: return "Organizes music using embedded ID3/audio tags (Artist > Album > Track)."
-        case .folderHierarchy: return "Organizes music from folder structure (Artist Folder > Album Folder > Tracks)."
+        case .id3Tags: return "ORGANIZES USING EMBEDDED AUDIO TAGS. IDEAL FOR WELL-TAGGED FILES."
+        case .folderHierarchy: return "ORGANIZES USING FOLDER & FILE NAMES (ARTIST/ALBUM/TRACK). BEST FOR ICLOUD AND UNTAGGED LIBRARIES."
         }
     }
+
+    public static var metadata: LibraryScanMethod { .id3Tags }
+    public static var folder: LibraryScanMethod { .folderHierarchy }
 }
 
 // MARK: - LinkedFolder
@@ -246,6 +249,7 @@ public struct LinkedFolder: Identifiable, Codable, Equatable, Sendable {
 
 /// User preferences and persistent application configuration.
 public struct AppSettings: Codable, Sendable {
+    public typealias LibraryScanMethod = MusicPlayer.LibraryScanMethod
     public var appTheme: AppTheme
     public var defaultLibraryCategory: LibraryCategory
     public var playerBackgroundStyle: PlayerBackgroundStyle
@@ -290,6 +294,18 @@ public struct AppSettings: Codable, Sendable {
     public var disabledFolderIDs: Set<UUID>
     // When enabled, fullscreen album artwork has rounded corners; when disabled, artwork is a non-rounded square
     public var isArtworkRounded: Bool
+    // Track ID hashing scheme version (1 = legacy full path hash, 2 = stable relative path v2)
+    public var trackIDSchemeVersion: Int
+    // Configured remote Jellyfin server instances
+    public var jellyfinServers: [JellyfinServerLink]
+    // Silently pre-fetches upcoming cloud tracks over Wi-Fi
+    public var downloadNextSongOnWiFi: Bool
+    // Automatically downloads Jellyfin tracks in background when playback begins
+    public var autoDownloadOnPlay: Bool
+    // Allows Jellyfin track downloads over cellular network
+    public var downloadOnCellular: Bool
+    // Persistently hidden/removed Jellyfin item IDs excluded from library sync
+    public var removedJellyfinItemIDs: Set<String>
 
     /// Backwards compatibility property
     public var accentTheme: AppTheme {
@@ -328,7 +344,13 @@ public struct AppSettings: Codable, Sendable {
         manualCollaborativeAlbumIDs: Set<String> = [],
         originalAlbumArtistsByTrackID: [String: String] = [:],
         disabledFolderIDs: Set<UUID> = [],
-        isArtworkRounded: Bool = true
+        isArtworkRounded: Bool = true,
+        trackIDSchemeVersion: Int = 1,
+        jellyfinServers: [JellyfinServerLink] = [],
+        downloadNextSongOnWiFi: Bool = true,
+        autoDownloadOnPlay: Bool = false,
+        downloadOnCellular: Bool = true,
+        removedJellyfinItemIDs: Set<String> = []
     ) {
         self.appTheme = appTheme
         self.defaultLibraryCategory = defaultLibraryCategory
@@ -360,6 +382,12 @@ public struct AppSettings: Codable, Sendable {
         self.originalAlbumArtistsByTrackID = originalAlbumArtistsByTrackID
         self.disabledFolderIDs = disabledFolderIDs
         self.isArtworkRounded = isArtworkRounded
+        self.trackIDSchemeVersion = trackIDSchemeVersion
+        self.jellyfinServers = jellyfinServers
+        self.downloadNextSongOnWiFi = downloadNextSongOnWiFi
+        self.autoDownloadOnPlay = autoDownloadOnPlay
+        self.downloadOnCellular = downloadOnCellular
+        self.removedJellyfinItemIDs = removedJellyfinItemIDs
     }
 
     // MARK: - Custom Codable to seamlessly decode older settings JSON
@@ -423,6 +451,12 @@ public struct AppSettings: Codable, Sendable {
         case originalAlbumArtistsByTrackID
         case disabledFolderIDs
         case isArtworkRounded
+        case trackIDSchemeVersion
+        case jellyfinServers
+        case downloadNextSongOnWiFi
+        case autoDownloadOnPlay
+        case downloadOnCellular
+        case removedJellyfinItemIDs
     }
 
     // Initialize with configured properties
@@ -490,6 +524,12 @@ public struct AppSettings: Codable, Sendable {
         self.originalAlbumArtistsByTrackID = try container.decodeIfPresent([String: String].self, forKey: .originalAlbumArtistsByTrackID) ?? [:]
         self.disabledFolderIDs = try container.decodeIfPresent(Set<UUID>.self, forKey: .disabledFolderIDs) ?? []
         self.isArtworkRounded = try container.decodeIfPresent(Bool.self, forKey: .isArtworkRounded) ?? true
+        self.trackIDSchemeVersion = try container.decodeIfPresent(Int.self, forKey: .trackIDSchemeVersion) ?? 1
+        self.jellyfinServers = try container.decodeIfPresent([JellyfinServerLink].self, forKey: .jellyfinServers) ?? []
+        self.downloadNextSongOnWiFi = try container.decodeIfPresent(Bool.self, forKey: .downloadNextSongOnWiFi) ?? true
+        self.autoDownloadOnPlay = try container.decodeIfPresent(Bool.self, forKey: .autoDownloadOnPlay) ?? false
+        self.downloadOnCellular = try container.decodeIfPresent(Bool.self, forKey: .downloadOnCellular) ?? true
+        self.removedJellyfinItemIDs = try container.decodeIfPresent(Set<String>.self, forKey: .removedJellyfinItemIDs) ?? []
     }
 
     // Encode
@@ -526,6 +566,12 @@ public struct AppSettings: Codable, Sendable {
         try container.encode(originalAlbumArtistsByTrackID, forKey: .originalAlbumArtistsByTrackID)
         try container.encode(disabledFolderIDs, forKey: .disabledFolderIDs)
         try container.encode(isArtworkRounded, forKey: .isArtworkRounded)
+        try container.encode(trackIDSchemeVersion, forKey: .trackIDSchemeVersion)
+        try container.encode(jellyfinServers, forKey: .jellyfinServers)
+        try container.encode(downloadNextSongOnWiFi, forKey: .downloadNextSongOnWiFi)
+        try container.encode(autoDownloadOnPlay, forKey: .autoDownloadOnPlay)
+        try container.encode(downloadOnCellular, forKey: .downloadOnCellular)
+        try container.encode(removedJellyfinItemIDs, forKey: .removedJellyfinItemIDs)
     }
 }
 

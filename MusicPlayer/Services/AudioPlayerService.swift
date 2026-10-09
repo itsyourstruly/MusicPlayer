@@ -136,6 +136,8 @@ public final class AudioPlayerService {
     public var rememberPlaybackPosition: Bool = true
     // Minimum track length (in minutes) required to save and remember playback position
     public var rememberPlaybackPositionMinMinutes: Double = 10.0
+    // Pre-fetches upcoming queue tracks over Wi-Fi when nearing end of current track
+    public var downloadNextSongOnWiFi: Bool = true
     // Callbacks for persisting and querying playback position
     public var onSavePlaybackPosition: ((UUID, TimeInterval) -> Void)? = nil
     public var onGetPlaybackPosition: ((UUID) -> TimeInterval?)? = nil
@@ -158,6 +160,32 @@ public final class AudioPlayerService {
     @ObservationIgnored private var crossfadeTask: Task<Void, Never>?
     
     @ObservationIgnored private var smoothSkipTask: Task<Void, Never>?
+
+    // Cloud streaming, prefetch & Jellyfin reporting state
+    public private(set) var cloudWaitTrackID: UUID?
+    public var cloudPlaybackError: String?
+    public var jellyfinServers: [JellyfinServerLink] = []
+    public var autoDownloadOnPlay: Bool = false
+    public var downloadOnCellular: Bool = true
+
+    private func getJellyfinServer(for folderID: UUID?) -> JellyfinServerLink? {
+        guard let folderID = folderID else { return nil }
+        if let match = jellyfinServers.first(where: { $0.id == folderID }) {
+            return match
+        }
+        if let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
+            let settingsURL = appSupport.appendingPathComponent("settings.json")
+            if let data = try? Data(contentsOf: settingsURL),
+               let settings = try? JSONDecoder().decode(AppSettings.self, from: data) {
+                self.jellyfinServers = settings.jellyfinServers
+                return settings.jellyfinServers.first(where: { $0.id == folderID })
+            }
+        }
+        return nil
+    }
+    @ObservationIgnored private var cloudDownloadTask: Task<Void, Never>?
+    @ObservationIgnored private var hasTriggeredWiFiPrefetch: Bool = false
+    @ObservationIgnored private var lastJellyfinReportedSeconds: TimeInterval = 0
     @ObservationIgnored private var isSmoothSkipping: Bool = false
     @ObservationIgnored private var pendingSmoothSkipAction: (() -> Void)?
     
@@ -177,6 +205,8 @@ public final class AudioPlayerService {
     @ObservationIgnored private var prewarmedTrackID: UUID?
     @ObservationIgnored private var prewarmedPlayerItem: AVPlayerItem?
     @ObservationIgnored private var prewarmTask: Task<Void, Never>?
+    @ObservationIgnored private var playerItemStalledObserver: Any?
+    @ObservationIgnored private var itemLikelyToKeepUpObserver: NSKeyValueObservation?
     
     // MARK: - Playback Position Helpers
     
@@ -400,12 +430,21 @@ public final class AudioPlayerService {
     
     /// The upcoming next track in the queue, prioritizing Play Next before upcoming queue songs.
     public var nextTrack: Track? {
+        nextPlaybackTarget()?.track
+    }
+
+    /// Returns the next playback target tuple, prioritizing Up Next (playNextQueue), then repeat and queue order.
+    public func nextPlaybackTarget() -> (track: Track, isFromPlayNext: Bool, nextIndex: Int?)? {
         if let firstPlayNext = playNextQueue.first {
-            return firstPlayNext
+            return (track: firstPlayNext, isFromPlayNext: true, nextIndex: currentIndex)
         }
-        // Ensure preconditions are met before proceeding
-        guard let index = currentIndex, !queue.isEmpty, index + 1 < queue.count else { return nil }
-        return queue[index + 1]
+        guard let index = currentIndex, !queue.isEmpty else { return nil }
+        if index + 1 < queue.count {
+            return (track: queue[index + 1], isFromPlayNext: false, nextIndex: index + 1)
+        } else if repeatMode == .all {
+            return (track: queue[0], isFromPlayNext: false, nextIndex: 0)
+        }
+        return nil
     }
     
     // MARK: - Playback Control APIs
@@ -494,6 +533,23 @@ public final class AudioPlayerService {
         }
         
         loadAndPlay(track: track)
+    }
+    
+    /// Remaps track IDs across active playback queues during migration.
+    public func remapTrackIDs(using map: [UUID: UUID]) {
+        for i in 0..<queue.count {
+            if let newID = map[queue[i].id] {
+                queue[i] = queue[i].withIdentity(id: newID, relativePath: queue[i].relativePath, metadataSource: queue[i].metadataSource, tagSnapshot: queue[i].tagSnapshot)
+            }
+        }
+        for i in 0..<playNextQueue.count {
+            if let newID = map[playNextQueue[i].id] {
+                playNextQueue[i] = playNextQueue[i].withIdentity(id: newID, relativePath: playNextQueue[i].relativePath, metadataSource: playNextQueue[i].metadataSource, tagSnapshot: playNextQueue[i].tagSnapshot)
+            }
+        }
+        if let cur = currentTrack, let newID = map[cur.id] {
+            currentTrack = cur.withIdentity(id: newID, relativePath: cur.relativePath, metadataSource: cur.metadataSource, tagSnapshot: cur.tagSnapshot)
+        }
     }
     
     /// Toggles play and pause state.
@@ -1167,6 +1223,77 @@ public final class AudioPlayerService {
     
     // MARK: - Internal Audio Engine Logic
     
+    /// Prepares and configures a uniform AVPlayerItem for any track, applying the appropriate audio time-pitch algorithm and EQ audio mix tap.
+    public func makePlayerItem(for track: Track) -> AVPlayerItem {
+        let resolvedURL: URL
+        var assetOptions: [String: Any] = [AVURLAssetPreferPreciseDurationAndTimingKey: false]
+
+        if let downloadedURL = JellyfinDownloadManager.shared.localFileURL(for: track.id),
+           FileManager.default.fileExists(atPath: downloadedURL.path) {
+            resolvedURL = downloadedURL
+        } else if track.url.isFileURL {
+            resolvedURL = SecurityScopedBookmark.shared.ensureAccess(for: track.url, folderID: track.folderID)
+        } else if track.isJellyfinItem || track.metadataSource == .server {
+            let matchedServer = getJellyfinServer(for: track.folderID) ?? jellyfinServers.first
+            let sessionInfo: (serverURL: URL, token: String)?
+            if let server = matchedServer {
+                sessionInfo = JellyfinSessionCache.shared.resolveSession(
+                    for: server.id,
+                    servers: jellyfinServers
+                )
+            } else if let folderID = track.folderID {
+                sessionInfo = JellyfinSessionCache.shared.resolveSession(
+                    for: folderID,
+                    servers: jellyfinServers
+                )
+            } else {
+                sessionInfo = nil
+            }
+            let token = sessionInfo?.token ?? (matchedServer.flatMap { JellyfinKeychain.getToken(forServerId: $0.serverId, userId: $0.userId) } ?? "")
+            let serverURL = sessionInfo?.serverURL ?? matchedServer?.serverURL
+
+            let itemId = track.jellyfinItemId ?? track.url.lastPathComponent
+            let baseServer = serverURL ?? track.url.deletingLastPathComponent().deletingLastPathComponent()
+
+            let ext = (track.fileInfo?.fileExtension ?? track.url.pathExtension).lowercased()
+            let needsTranscode = ["ogg", "opus", "wma", "webm"].contains(ext)
+
+            let streamPath = needsTranscode ? "Audio/\(itemId)/universal" : "Audio/\(itemId)/stream"
+            var components = URLComponents(url: baseServer.appendingPathComponent(streamPath), resolvingAgainstBaseURL: true)
+            var queryItems = [
+                URLQueryItem(name: "static", value: "true"),
+                URLQueryItem(name: "api_key", value: token)
+            ]
+            if needsTranscode {
+                queryItems.append(URLQueryItem(name: "audioCodec", value: "aac"))
+                queryItems.append(URLQueryItem(name: "transcodingContainer", value: "ts"))
+            }
+            components?.queryItems = queryItems
+            resolvedURL = components?.url ?? track.url
+
+            if !token.isEmpty {
+                assetOptions["AVURLAssetHTTPHeaderFieldsKey"] = [
+                    "X-Emby-Authorization": "MediaBrowser Client=\"MusicPlayer\", Device=\"Apple\", DeviceId=\"MusicPlayerClient\", Version=\"1.0.0\", Token=\"\(token)\""
+                ]
+            }
+        } else {
+            resolvedURL = track.url
+        }
+
+        let asset = AVURLAsset(url: resolvedURL, options: assetOptions)
+        let item = AVPlayerItem(asset: asset)
+        item.audioTimePitchAlgorithm = appropriateTimePitchAlgorithm(for: resolvedURL)
+        let isRemoteJellyfin = (track.isJellyfinItem || track.metadataSource == .server) && JellyfinDownloadManager.shared.localFileURL(for: track.id) == nil
+        if isRemoteJellyfin {
+            item.preferredForwardBufferDuration = 30.0
+            item.canUseNetworkResourcesForLiveStreamingWhilePaused = false
+        } else {
+            item.preferredForwardBufferDuration = 0.0
+        }
+        attachAudioMix(to: item)
+        return item
+    }
+
     // Load and play
     private func loadAndPlay(track: Track) {
 #if os(iOS)
@@ -1176,6 +1303,8 @@ public final class AudioPlayerService {
             saveCurrentPlaybackPositionIfNeeded()
         }
         cancelCrossfade()
+        cloudDownloadTask?.cancel()
+        cloudDownloadTask = nil
         self.isTransitioningTrack = true
         transitionTimeoutTask?.cancel()
         transitionTimeoutTask = Task { @MainActor [weak self] in
@@ -1185,71 +1314,84 @@ public final class AudioPlayerService {
         self.isSeeking = false
         self.currentTrack = track
         self.duration = track.duration
-        
+        self.hasTriggeredWiFiPrefetch = false
+        self.cloudPlaybackError = nil
+
         let resumePosition = savedPlaybackPosition(for: track) ?? 0.0
         self.currentTime = resumePosition
-        // Immediately set playback status to playing for instantaneous UI responsiveness
-        self.playbackStatus = .playing
         self.hasCountedCurrentPlay = false
         self.playbackAccumulatedTime = 0
-        
+
+        // If track is a file URL but not downloaded yet, pause/buffer and wait for download
+        if track.url.isFileURL && !CloudFileAvailability.isLocal(url: track.url) {
+            self.playbackStatus = .buffering
+            self.cloudWaitTrackID = track.id
+            cloudDownloadTask = Task { @MainActor [weak self] in
+                guard let self = self else { return }
+                do {
+                    _ = try await CloudDownloadCenter.shared.ensureLocal(track: track)
+                    guard self.cloudWaitTrackID == track.id, self.currentTrack?.id == track.id else {
+                        return
+                    }
+                    self.cloudWaitTrackID = nil
+                    self.finishLoadAndPlay(track: track, resumePosition: resumePosition)
+                } catch {
+                    guard self.cloudWaitTrackID == track.id else { return }
+                    self.cloudWaitTrackID = nil
+                    self.playbackStatus = .paused
+                    self.cloudPlaybackError = error.localizedDescription
+                    HapticFeedback.notificationError()
+                    AppLogger.audio.error("Failed to download cloud track: \(error.localizedDescription)")
+                }
+            }
+            return
+        }
+
+        self.cloudWaitTrackID = nil
+        self.finishLoadAndPlay(track: track, resumePosition: resumePosition)
+    }
+
+    private func finishLoadAndPlay(track: Track, resumePosition: TimeInterval) {
+        // Immediately set playback status to playing for instantaneous UI responsiveness
+        self.playbackStatus = .playing
+
         // 1. Ensure audio session is active
         Task {
             await AudioSessionManager.shared.activateSessionIfNeeded()
         }
-        
-        // 2. Ensure security-scoped folder access is active and resolve accessible file URL
-        let resolvedURL = SecurityScopedBookmark.shared.ensureAccess(for: track.url, folderID: track.folderID)
-        
-        // Retain security-scoped access for individual file if applicable
-        if activeTrackSecurityScopeURL?.path != resolvedURL.path {
-            activeTrackSecurityScopeURL?.stopAccessingSecurityScopedResource()
-            activeTrackSecurityScopeURL = nil
-            if resolvedURL.startAccessingSecurityScopedResource() {
-                activeTrackSecurityScopeURL = resolvedURL
-            }
-        }
-        if let fID = track.folderID, let folderURL = SecurityScopedBookmark.shared.url(for: fID) {
-            _ = folderURL.startAccessingSecurityScopedResource()
-        }
-        
+
         // Teardown item-specific observers (keeps player-level time observer intact)
         teardownItemObservers()
-        
-        // Trigger background download if track is an undownloaded iCloud ubiquitous item asynchronously
-        Task.detached(priority: .utility) {
-            if let values = try? resolvedURL.resourceValues(forKeys: [.isUbiquitousItemKey, .ubiquitousItemDownloadingStatusKey]),
-               values.isUbiquitousItem == true,
-               values.ubiquitousItemDownloadingStatus != .current {
-                try? FileManager.default.startDownloadingUbiquitousItem(at: resolvedURL)
-            }
-        }
-        
-        // Use pre-warmed item if available, otherwise instantiate with pristine audio algorithm
+
+        // 2. Use pre-warmed item if available, otherwise instantiate with pristine audio algorithm
         let playerItem: AVPlayerItem
         if prewarmedTrackID == track.id, let prewarmed = prewarmedPlayerItem {
             playerItem = prewarmed
             prewarmedTrackID = nil
             prewarmedPlayerItem = nil
         } else {
-            let asset = AVURLAsset(url: resolvedURL, options: [AVURLAssetPreferPreciseDurationAndTimingKey: false])
-            playerItem = AVPlayerItem(asset: asset)
-            playerItem.audioTimePitchAlgorithm = appropriateTimePitchAlgorithm(for: resolvedURL)
-            attachAudioMix(to: playerItem)
+            playerItem = makePlayerItem(for: track)
         }
         if playerItem.audioMix == nil {
             attachAudioMix(to: playerItem)
         }
-        playerItem.preferredForwardBufferDuration = 0.0
-        
+        let isRemoteStream = (track.isJellyfinItem || track.metadataSource == .server) && JellyfinDownloadManager.shared.localFileURL(for: track.id) == nil
+        playerItem.preferredForwardBufferDuration = isRemoteStream ? 30.0 : 0.0
+
+        if (track.isJellyfinItem || track.metadataSource == .server) && autoDownloadOnPlay {
+            if let server = getJellyfinServer(for: track.folderID) {
+                JellyfinDownloadManager.shared.download(track: track, server: server)
+            }
+        }
+
         if resumePosition > 0 {
             let initialCMTime = CMTime(seconds: resumePosition, preferredTimescale: 600)
             playerItem.seek(to: initialCMTime, toleranceBefore: .zero, toleranceAfter: .zero, completionHandler: nil)
         }
-        
+
         if player == nil {
             let newPlayer = AVPlayer(playerItem: playerItem)
-            newPlayer.automaticallyWaitsToMinimizeStalling = false
+            newPlayer.automaticallyWaitsToMinimizeStalling = isRemoteStream
             newPlayer.allowsExternalPlayback = true
             #if os(iOS)
             newPlayer.usesExternalPlaybackWhileExternalScreenIsActive = true
@@ -1258,7 +1400,7 @@ public final class AudioPlayerService {
             setupPeriodicTimeObserver()
             setupPlayerObservers(for: newPlayer)
         } else {
-            player?.automaticallyWaitsToMinimizeStalling = false
+            player?.automaticallyWaitsToMinimizeStalling = isRemoteStream
             player?.allowsExternalPlayback = true
             #if os(iOS)
             player?.usesExternalPlaybackWhileExternalScreenIsActive = true
@@ -1267,13 +1409,13 @@ public final class AudioPlayerService {
         }
         player?.volume = isSmoothSkipping ? 0.0 : volume
         player?.isMuted = isMuted
-        
+
         // Load track-specific or default equalizer profile
         EqualizerManager.shared.trackWillPlay(track: track)
 
         // Setup Item Observers
         setupPlayerItemObservers(for: playerItem, track: track)
-        
+
         let currentSpeed = Float(EqualizerManager.shared.playbackSpeed)
         player?.defaultRate = currentSpeed
 
@@ -1307,11 +1449,18 @@ public final class AudioPlayerService {
         if resumePosition > 0 {
             updateNowPlayingElapsedTime()
         }
-        
+
+        // Jellyfin playback reporting start
+        if track.metadataSource == .server {
+            if let match = getJellyfinServer(for: track.folderID) {
+                JellyfinPlaybackReporter.shared.reportPlaybackStart(track: track, serverLink: match)
+            }
+        }
+
         // Pre-warm next upcoming track in the queue for instantaneous zero-latency skipping
         prewarmNextTrackIfNeeded()
         
-        AppLogger.audio.info("Now playing: \(track.title) by \(track.artist) at \(resolvedURL.path) (rate: \(currentSpeed)x, resumed at: \(resumePosition)s)")
+        AppLogger.audio.info("Now playing: \(track.title) by \(track.artist) (rate: \(currentSpeed)x, resumed at: \(resumePosition)s)")
     }
 
     /// Selects the optimal audio time-pitch algorithm. Uncompressed PCM/WAV audio and standard 1.0x playback
@@ -1400,29 +1549,33 @@ public final class AudioPlayerService {
         if prewarmedTrackID == next.id && prewarmedPlayerItem != nil {
             return
         }
+        // Never open, decode or prewarm cloud-only tracks that are not downloaded
+        guard next.canReadLocalBytes || next.metadataSource == .server else {
+            return
+        }
         
         prewarmTask?.cancel()
-        let speed = EqualizerManager.shared.playbackSpeed
-        prewarmTask = Task.detached(priority: .utility) { [weak self] in
-            let resolvedURL = SecurityScopedBookmark.shared.ensureAccess(for: next.url, folderID: next.folderID)
-            let asset = AVURLAsset(url: resolvedURL, options: [AVURLAssetPreferPreciseDurationAndTimingKey: false])
-            let item = AVPlayerItem(asset: asset)
-            item.audioTimePitchAlgorithm = AudioPlayerService.determineTimePitchAlgorithm(for: resolvedURL, speed: speed)
+        prewarmTask = Task { [weak self] in
+            guard let self = self else { return }
+            let item = self.makePlayerItem(for: next)
             item.preferredForwardBufferDuration = 0.0
             
-            // Also prewarm waveform amplitude peaks in background for zero-latency dial rendering
-            _ = await AudioWaveformSpectrogramGenerator.shared.fetchSubSecondWaveformPeaks(
-                for: next.url,
-                duration: next.duration,
-                samplesPerSecond: 2
-            )
-            
-            await MainActor.run { [weak self] in
-                guard let self = self, !Task.isCancelled else { return }
-                self.attachAudioMix(to: item)
-                self.prewarmedTrackID = next.id
-                self.prewarmedPlayerItem = item
+            // Only prewarm waveform amplitude peaks for local files
+            if next.canReadLocalBytes {
+                _ = await AudioWaveformSpectrogramGenerator.shared.fetchSubSecondWaveformPeaks(
+                    for: next.url,
+                    duration: next.duration,
+                    samplesPerSecond: 2
+                )
+            } else if next.isJellyfinItem || next.metadataSource == .server {
+                if let urlAsset = item.asset as? AVURLAsset {
+                    _ = try? await urlAsset.load(.isPlayable, .duration)
+                }
             }
+            
+            guard !Task.isCancelled else { return }
+            self.prewarmedTrackID = next.id
+            self.prewarmedPlayerItem = item
         }
     }
 
@@ -1436,6 +1589,12 @@ public final class AudioPlayerService {
             NotificationCenter.default.removeObserver(failedObs)
             playerItemFailedObserver = nil
         }
+        if let stalledObs = playerItemStalledObserver {
+            NotificationCenter.default.removeObserver(stalledObs)
+            playerItemStalledObserver = nil
+        }
+        itemLikelyToKeepUpObserver?.invalidate()
+        itemLikelyToKeepUpObserver = nil
         itemStatusObserver?.invalidate()
         itemStatusObserver = nil
     }
@@ -1604,6 +1763,34 @@ public final class AudioPlayerService {
                 }
             }
         }
+
+        // 4. Observe AVPlayerItem playback stalled for remote streams
+        playerItemStalledObserver = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemPlaybackStalled,
+            object: playerItem,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self = self else { return }
+                AppLogger.audio.info("AVPlayerItem playback stalled, waiting for buffer...")
+                if self.playbackStatus == .playing {
+                    self.playbackStatus = .buffering
+                }
+            }
+        }
+
+        // 5. Observe isPlaybackLikelyToKeepUp to resume from buffering
+        itemLikelyToKeepUpObserver = playerItem.observe(\.isPlaybackLikelyToKeepUp, options: [.new]) { [weak self] item, _ in
+            Task { @MainActor [weak self] in
+                guard let self = self else { return }
+                if item.isPlaybackLikelyToKeepUp && self.playbackStatus == .buffering {
+                    self.playbackStatus = .playing
+                    let speed = Float(EqualizerManager.shared.playbackSpeed)
+                    self.player?.defaultRate = speed
+                    self.player?.play()
+                }
+            }
+        }
     }
     
     // Setup periodic time observer
@@ -1611,30 +1798,57 @@ public final class AudioPlayerService {
         if timeObserverToken != nil { return }
         let interval = CMTime(seconds: 0.08, preferredTimescale: 600)
         timeObserverToken = player?.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self] time in
-            Task { @MainActor [weak self] in
-                guard let self = self, !self.isSeeking else { return }
-                let seconds = CMTimeGetSeconds(time)
-                if !seconds.isNaN && !seconds.isInfinite {
-                    self.currentTime = seconds
-                    if self.duration <= 0, let itemDur = self.player?.currentItem?.duration {
-                        let dSec = CMTimeGetSeconds(itemDur)
-                        if !dSec.isNaN && !dSec.isInfinite && dSec > 0 {
-                            self.duration = dSec
+            guard let self = self, !self.isSeeking else { return }
+            let seconds = CMTimeGetSeconds(time)
+            if !seconds.isNaN && !seconds.isInfinite {
+                self.currentTime = seconds
+                if self.duration <= 0, let itemDur = self.player?.currentItem?.duration {
+                    let dSec = CMTimeGetSeconds(itemDur)
+                    if !dSec.isNaN && !dSec.isInfinite && dSec > 0 {
+                        self.duration = dSec
+                    }
+                }
+                
+                // Count as a listen if track is played for more than 15 seconds (or finishes if shorter)
+                if self.playbackStatus == .playing && !self.hasCountedCurrentPlay {
+                    self.playbackAccumulatedTime += 0.08
+                    if self.playbackAccumulatedTime >= 15.0 || self.currentTime >= 15.0 || (self.duration > 0 && self.duration < 15.0 && self.currentTime >= self.duration * 0.9) {
+                        self.hasCountedCurrentPlay = true
+                        if let track = self.currentTrack {
+                            self.onTrackPlay?(track.id)
                         }
                     }
-                    
-                    // Count as a listen if track is played for more than 15 seconds (or finishes if shorter)
-                    if self.playbackStatus == .playing && !self.hasCountedCurrentPlay {
-                        self.playbackAccumulatedTime += 0.08
-                        if self.playbackAccumulatedTime >= 15.0 || self.currentTime >= 15.0 || (self.duration > 0 && self.duration < 15.0 && self.currentTime >= self.duration * 0.9) {
-                            self.hasCountedCurrentPlay = true
-                            if let track = self.currentTrack {
-                                self.onTrackPlay?(track.id)
-                            }
+                }
+                
+                self.checkAndTriggerCrossfadeIfNeeded()
+                
+                // 10-second Wi-Fi prefetch check for next song
+                if !self.hasTriggeredWiFiPrefetch && seconds >= 10.0 {
+                    self.hasTriggeredWiFiPrefetch = true
+                    if self.downloadNextSongOnWiFi,
+                       let nextTarget = self.nextPlaybackTarget()?.track,
+                       !nextTarget.canReadLocalBytes,
+                       nextTarget.metadataSource != .server,
+                       CloudDownloadCenter.shared.isWiFiConnected {
+                        Task {
+                            _ = try? await CloudDownloadCenter.shared.ensureLocal(track: nextTarget)
                         }
                     }
-                    
-                    self.checkAndTriggerCrossfadeIfNeeded()
+                }
+                
+                // Periodic Jellyfin progress reporting (every 10s)
+                if let track = self.currentTrack, track.metadataSource == .server {
+                    if Int(seconds) / 10 != Int(self.lastJellyfinReportedSeconds) / 10 {
+                        self.lastJellyfinReportedSeconds = seconds
+                        if let match = self.getJellyfinServer(for: track.folderID) {
+                            JellyfinPlaybackReporter.shared.reportPlaybackProgress(
+                                track: track,
+                                positionSeconds: seconds,
+                                isPaused: self.playbackStatus != .playing,
+                                serverLink: match
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -1645,6 +1859,11 @@ public final class AudioPlayerService {
 #if os(iOS)
         beginBackgroundTaskAssertion()
 #endif
+        if let track = currentTrack, track.metadataSource == .server {
+            if let match = getJellyfinServer(for: track.folderID) {
+                JellyfinPlaybackReporter.shared.reportPlaybackStopped(track: track, positionSeconds: duration, serverLink: match)
+            }
+        }
         if !hasCountedCurrentPlay, let track = currentTrack {
             hasCountedCurrentPlay = true
             onTrackPlay?(track.id)
@@ -1683,6 +1902,7 @@ public final class AudioPlayerService {
         guard isCrossfadeEnabled,
               crossfadeDuration >= 0.5,
               !isCrossfading,
+              repeatMode != .one,
               duration > (crossfadeDuration * 1.2),
               playbackStatus == .playing,
               autoPlayNext || repeatMode != .off else { return }
@@ -1690,45 +1910,30 @@ public final class AudioPlayerService {
         // Remaining
         let remaining = duration - currentTime
         if remaining <= crossfadeDuration && remaining > 0 {
-            // Ensure preconditions are met before proceeding
-            guard let idx = currentIndex, !queue.isEmpty else { return }
-            // Next idx
-            let nextIdx: Int
-            if idx + 1 < queue.count {
-                nextIdx = idx + 1
-            } else if repeatMode == .all {
-                nextIdx = 0
-            } else {
+            guard let target = nextPlaybackTarget() else { return }
+            // Do not crossfade into an undownloaded cloud file
+            if !target.track.canReadLocalBytes && target.track.metadataSource != .server {
                 return
             }
-            // Next track
-            let nextTrack = queue[nextIdx]
-            startCrossfade(to: nextTrack, nextIndex: nextIdx)
+            startCrossfade(to: target.track, nextIndex: target.nextIndex, isFromPlayNext: target.isFromPlayNext)
         }
     }
     
     // Start crossfade
-    private func startCrossfade(to nextTrack: Track, nextIndex: Int) {
+    private func startCrossfade(to nextTrack: Track, nextIndex: Int?, isFromPlayNext: Bool = false) {
         // Ensure preconditions are met before proceeding
         guard !isCrossfading else { return }
         saveCurrentPlaybackPositionIfNeeded()
         isCrossfading = true
         crossfadeTask?.cancel()
         
-        // File system location for resolved next url
-        let resolvedNextURL = SecurityScopedBookmark.shared.ensureAccess(for: nextTrack.url, folderID: nextTrack.folderID)
-        _ = resolvedNextURL.startAccessingSecurityScopedResource()
-        if let fID = nextTrack.folderID, let fURL = SecurityScopedBookmark.shared.url(for: fID) {
-            _ = fURL.startAccessingSecurityScopedResource()
+        if isFromPlayNext && !playNextQueue.isEmpty {
+            playNextQueue.removeFirst()
         }
         
-        // Next asset
-        let nextAsset = AVURLAsset(url: resolvedNextURL, options: [AVURLAssetPreferPreciseDurationAndTimingKey: false])
-        // Next item
-        let nextItem = AVPlayerItem(asset: nextAsset)
-        nextItem.audioTimePitchAlgorithm = appropriateTimePitchAlgorithm(for: resolvedNextURL)
+        // Next item using unified makePlayerItem
+        let nextItem = makePlayerItem(for: nextTrack)
         nextItem.preferredForwardBufferDuration = 0.0
-        attachAudioMix(to: nextItem)
         
         // Incoming player
         let incomingPlayer = AVPlayer(playerItem: nextItem)
@@ -1826,6 +2031,7 @@ public final class AudioPlayerService {
             // Attach observers to active player
             self.setupPlayerItemObservers(for: nextItem, track: nextTrack)
             self.setupPeriodicTimeObserver()
+            self.setupPlayerObservers(for: incomingPlayer)
             
             AppLogger.audio.info("Crossfade cleanly completed at exact track position: \(self.currentTime)s")
         }
@@ -1902,23 +2108,14 @@ public final class AudioPlayerService {
         }
         teardownItemObservers()
         
-        // 3. Resolve accessible URL and prepare incoming player item
-        let resolvedURL = SecurityScopedBookmark.shared.ensureAccess(for: nextTrack.url, folderID: nextTrack.folderID)
-        _ = resolvedURL.startAccessingSecurityScopedResource()
-        if let fID = nextTrack.folderID, let fURL = SecurityScopedBookmark.shared.url(for: fID) {
-            _ = fURL.startAccessingSecurityScopedResource()
-        }
-        
+        // 3. Prepare incoming player item using unified makePlayerItem
         let playerItem: AVPlayerItem
         if prewarmedTrackID == nextTrack.id, let prewarmed = prewarmedPlayerItem {
             playerItem = prewarmed
             prewarmedTrackID = nil
             prewarmedPlayerItem = nil
         } else {
-            let asset = AVURLAsset(url: resolvedURL, options: [AVURLAssetPreferPreciseDurationAndTimingKey: false])
-            playerItem = AVPlayerItem(asset: asset)
-            playerItem.audioTimePitchAlgorithm = appropriateTimePitchAlgorithm(for: resolvedURL)
-            attachAudioMix(to: playerItem)
+            playerItem = makePlayerItem(for: nextTrack)
         }
         playerItem.preferredForwardBufferDuration = 0.0
         
@@ -2062,9 +2259,11 @@ public final class AudioPlayerService {
             }
             if let nextPlayer = fadePlayer {
                 player?.pause()
+                teardownPlayerObservers()
                 player = nextPlayer
-                player?.volume = 1.0
-                player?.isMuted = false
+                player?.volume = self.volume
+                player?.isMuted = self.isMuted
+                setupPlayerObservers(for: nextPlayer)
                 fadePlayer = nil
             }
             isCrossfading = false
@@ -2607,7 +2806,7 @@ public final class AudioPlayerService {
             guard let self = self else { return }
             var image: PlatformImage? = nil
             if let artKey = track.artworkKey, !artKey.isEmpty {
-                if let artData = await ArtworkCacheService.shared.loadArtwork(key: artKey) {
+                if let artData = await ArtworkCacheService.shared.loadArtworkAsync(key: artKey) {
                     image = self.platformImage(from: artData)
                 }
             }

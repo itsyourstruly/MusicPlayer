@@ -135,6 +135,20 @@ public final class EqualizerManager {
         savePerTrackEQ()
     }
 
+    /// Remaps track IDs in the per-track EQ map during migration.
+    public func remapTrackIDs(using map: [UUID: UUID]) {
+        var newMap: [String: [Double]] = [:]
+        for (oldIDStr, gains) in perTrackEQMap {
+            if let oldUUID = UUID(uuidString: oldIDStr), let newUUID = map[oldUUID] {
+                newMap[newUUID.uuidString] = gains
+            } else {
+                newMap[oldIDStr] = gains
+            }
+        }
+        perTrackEQMap = newMap
+        savePerTrackEQ()
+    }
+
     /// Automatically invoked when a new track begins playing.
     public func trackWillPlay(track: Track) {
         if let customGains = perTrackEQMap[track.id.uuidString], customGains.count == bands.count {

@@ -103,18 +103,18 @@ public struct TrackInfoSheetView: View {
                 Button("OK", role: .cancel) {}
             }
             .alert(
-                "REMOVE FROM LIBRARY?",
+                currentTrack.isJellyfinItem || currentTrack.metadataSource == .server ? "HIDE TRACK?" : "REMOVE FROM LIBRARY?",
                 isPresented: $showingRemoveConfirmation
             ) {
                 Button("CANCEL", role: .cancel) {}
-                Button("REMOVE", role: .destructive) {
+                Button("HIDE", role: .destructive) {
                     performRemoveFromLibrary()
                 }
             } message: {
-                Text("This track will be removed from your library and will not appear in the app. The audio file itself will remain intact on your device.")
+                Text("This track will be hidden from your library and will not appear in the app. The audio file itself will remain intact.")
             }
             .alert(
-                "DELETE TRACK PERMANENTLY?",
+                currentTrack.isJellyfinItem || currentTrack.metadataSource == .server ? "DELETE FROM JELLYFIN?" : "DELETE TRACK PERMANENTLY?",
                 isPresented: $showingDeleteConfirmation
             ) {
                 Button("CANCEL", role: .cancel) {}
@@ -122,7 +122,11 @@ public struct TrackInfoSheetView: View {
                     performDeleteTrack()
                 }
             } message: {
-                Text("Are you sure you want to permanently delete \"\(currentTrack.title)\" from your device? This will delete the audio file itself and cannot be undone.")
+                if currentTrack.isJellyfinItem || currentTrack.metadataSource == .server {
+                    Text("Are you sure you want to permanently delete \"\(currentTrack.title)\" from your Jellyfin server? This will delete the file on the server.")
+                } else {
+                    Text("Are you sure you want to permanently delete \"\(currentTrack.title)\" from your device? This will delete the audio file itself and cannot be undone.")
+                }
             }
         }
     }
@@ -159,15 +163,30 @@ public struct TrackInfoSheetView: View {
                         .buttonStyle(.plain)
                         .disabled(isSavingTags)
                     } else {
-                        Button("EDIT") {
-                            populateEditFields()
-                            withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
-                                isEditingTags = true
+                        HStack(spacing: 12) {
+                            if let store = libraryStore, store.hasOverride(for: currentTrack.id) {
+                                Button("RESET EDITS") {
+                                    store.resetEdits(for: currentTrack.id)
+                                    if let updated = store.tracks.first(where: { $0.id == currentTrack.id }) {
+                                        currentTrack = updated
+                                    }
+                                    HapticFeedback.notificationSuccess()
+                                }
+                                .font(.system(size: 11, weight: .bold, design: .monospaced))
+                                .foregroundStyle(Color.red)
+                                .buttonStyle(.plain)
                             }
+
+                            Button("EDIT") {
+                                populateEditFields()
+                                withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                                    isEditingTags = true
+                                }
+                            }
+                            .font(.system(size: 11, weight: .bold, design: .monospaced))
+                            .foregroundStyle(Color.blue)
+                            .buttonStyle(.plain)
                         }
-                        .font(.system(size: 11, weight: .bold, design: .monospaced))
-                        .foregroundStyle(Color.blue)
-                        .buttonStyle(.plain)
                     }
                 }
             }
@@ -296,6 +315,18 @@ public struct TrackInfoSheetView: View {
                     infoRow(label: "FILE NAME", value: info.fileName)
                 } else {
                     infoRow(label: "FILE NAME", value: currentTrack.url.lastPathComponent)
+                }
+
+                if currentTrack.isCloudItem {
+                    infoRow(label: "STORAGE TYPE", value: currentTrack.isCloudDownloaded ? "ICLOUD (DOWNLOADED)" : "ICLOUD (ON-DEMAND)")
+                } else if currentTrack.isJellyfinItem {
+                    infoRow(label: "STORAGE TYPE", value: "JELLYFIN REMOTE")
+                } else {
+                    infoRow(label: "STORAGE TYPE", value: "LOCAL STORAGE")
+                }
+
+                if let relPath = currentTrack.relativePath {
+                    infoRow(label: "RELATIVE PATH", value: relPath)
                 }
 
                 if let info = currentTrack.fileInfo {
@@ -470,7 +501,7 @@ public struct TrackInfoSheetView: View {
             Button(action: {
                 showingRemoveConfirmation = true
             }) {
-                Text("REMOVE FROM LIBRARY")
+                Text(currentTrack.isJellyfinItem || currentTrack.metadataSource == .server ? "HIDE TRACK" : "REMOVE FROM LIBRARY")
                     .font(.system(size: 13, weight: .bold, design: .monospaced))
                     .foregroundStyle(Color.red)
             }
@@ -498,7 +529,7 @@ public struct TrackInfoSheetView: View {
         if let player = AudioPlayerService.shared, player.currentTrack?.id == currentTrack.id {
             player.next()
         }
-        libraryStore.removeTrackFromLibrary(track: currentTrack)
+        libraryStore.hideTrack(currentTrack)
         dismiss()
     }
 
@@ -510,7 +541,15 @@ public struct TrackInfoSheetView: View {
             if let player = AudioPlayerService.shared, player.currentTrack?.id == currentTrack.id {
                 player.next()
             }
-            _ = await libraryStore.deleteSingleTrackFile(track: currentTrack)
+            if currentTrack.isJellyfinItem || currentTrack.metadataSource == .server {
+                do {
+                    try await libraryStore.deleteJellyfinTrack(currentTrack)
+                } catch {
+                    AppLogger.library.error("Failed to delete Jellyfin track: \(error.localizedDescription)")
+                }
+            } else {
+                _ = await libraryStore.deleteSingleTrackFile(track: currentTrack)
+            }
             await MainActor.run {
                 dismiss()
             }

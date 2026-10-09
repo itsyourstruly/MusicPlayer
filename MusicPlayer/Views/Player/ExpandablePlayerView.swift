@@ -659,7 +659,9 @@ private struct MorphingPlayerCard: View, Animatable {
                             artworkKey: track.artworkKey,
                             title: track.album,
                             subtitle: track.artist,
-                            cornerRadius: currentArtworkCorner
+                            cornerRadius: currentArtworkCorner,
+                            targetDimension: 1200,
+                            isOriginalResolution: true
                         )
                         .clipShape(RoundedRectangle(cornerRadius: currentArtworkCorner, style: .continuous))
                         .contentShape(RoundedRectangle(cornerRadius: currentArtworkCorner, style: .continuous))
@@ -1243,9 +1245,9 @@ private struct MorphingPlayerCard: View, Animatable {
 
                     // Central Lyrics View (Floating Glass on top when expanded)
                     LyricsPlayerView(
+                        playerService: playerService,
                         rawLyrics: track.lyrics,
                         trackURL: track.url,
-                        currentTime: playerService.currentTime,
                         duration: track.duration,
                         foregroundColor: Color.white,
                         secondaryForegroundColor: Color.white.opacity(0.65),
@@ -1289,6 +1291,14 @@ private struct MorphingPlayerCard: View, Animatable {
                         .foregroundStyle(Color.white)
                         .multilineTextAlignment(.center)
                         .lineLimit(2)
+
+                    if let cloudError = playerService.cloudPlaybackError {
+                        Text(cloudError.uppercased())
+                            .font(.system(size: 11, weight: .bold, design: .monospaced))
+                            .foregroundStyle(Color.red)
+                            .multilineTextAlignment(.center)
+                            .lineLimit(2)
+                    }
 
                     MultiArtistButtonsView(
                         rawArtist: track.artist,

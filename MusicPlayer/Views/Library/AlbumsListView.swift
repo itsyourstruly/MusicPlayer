@@ -11,6 +11,7 @@ public struct AlbumsListView: View {
     ]
 
     @State private var selectedAlbum: Album? = nil
+    @State private var displayLimit: Int = 80
 
     // Initialize with configured properties
     public init(libraryStore: LibraryStore, playerService: AudioPlayerService) {
@@ -20,6 +21,8 @@ public struct AlbumsListView: View {
 
     // Main view layout structure
     public var body: some View {
+        let albums = libraryStore.filteredAlbums
+
         VStack(spacing: 10) {
             // Sort Selector Bar (TITLE, MOST, ARTIST, DURATION) with enlarged hit target and reverse blue toggle
             SortSelectorBar(
@@ -29,18 +32,24 @@ public struct AlbumsListView: View {
                 labelForOption: { $0.label }
             )
 
-            if libraryStore.filteredAlbums.isEmpty {
-                if !libraryStore.isInitialLoading || libraryStore.settings.linkedFolderName == nil {
+            if albums.isEmpty {
+                let hasSources = !libraryStore.settings.linkedFolders.isEmpty || !libraryStore.settings.jellyfinServers.isEmpty
+                if !libraryStore.isInitialLoading || !hasSources {
                     EmptyStateView(
                         title: "NO ALBUMS FOUND",
                         message: libraryStore.searchQuery.isEmpty
-                            ? "Link a music directory in Settings to index albums."
+                            ? (!hasSources
+                                ? "Link a music directory or Jellyfin server in Settings."
+                                : "No albums found in library.")
                             : "No albums match '\(libraryStore.searchQuery)'."
                     )
                 }
             } else {
+                let visibleCount = min(albums.count, displayLimit)
+
                 LazyVGrid(columns: columns, spacing: 18) {
-                    ForEach(libraryStore.filteredAlbums) { album in
+                    ForEach(0..<visibleCount, id: \.self) { index in
+                        let album = albums[index]
                         // Flag indicating if pinned
                         let isPinned = libraryStore.isAlbumPinned(album)
                         Button(action: {
@@ -52,7 +61,8 @@ public struct AlbumsListView: View {
                                         artworkKey: album.artworkKey,
                                         title: album.title,
                                         subtitle: album.artist,
-                                        cornerRadius: 8
+                                        cornerRadius: 8,
+                                        targetDimension: 350
                                     )
                                     .aspectRatio(1.0, contentMode: .fit)
 
@@ -87,12 +97,26 @@ public struct AlbumsListView: View {
                         }
                         .buttonStyle(.plain)
                         .albumContextMenu(album: album, libraryStore: libraryStore, playerService: playerService)
+                        .onAppear {
+                            if index >= visibleCount - 20 && visibleCount < albums.count {
+                                displayLimit = min(albums.count, displayLimit + 80)
+                            }
+                        }
                     }
                 }
                 .padding(.horizontal, 16)
             }
         }
         .padding(.top, 4)
+        .onChange(of: libraryStore.searchQuery) { _, _ in
+            displayLimit = 80
+        }
+        .onChange(of: libraryStore.albumSortOption) { _, _ in
+            displayLimit = 80
+        }
+        .onChange(of: libraryStore.isAlbumSortReversed) { _, _ in
+            displayLimit = 80
+        }
         .navigationDestination(item: $selectedAlbum) { album in
             AlbumDetailView(album: album, libraryStore: libraryStore, playerService: playerService)
         }

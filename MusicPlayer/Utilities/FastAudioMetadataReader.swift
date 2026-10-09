@@ -577,8 +577,8 @@ public struct FastAudioMetadataReader: Sendable {
             guard boxSize >= 8 else { break }
 
             if boxType == "moov" {
-                // Read moov container content
-                let moovDataSize = min(Int(boxSize), 4 * 1024 * 1024)
+                // Read moov container content (expand to 32MB to support high-resolution embedded covers)
+                let moovDataSize = min(Int(boxSize), 32 * 1024 * 1024)
                 if let moovData = try? handle.read(upToCount: moovDataSize) {
                     parseMoovAtom(data: moovData, meta: &meta)
                 }
@@ -844,26 +844,7 @@ public struct FastAudioMetadataReader: Sendable {
                 parseVorbisComment(data: blockData, meta: &meta)
             } else if blockType == 6 && meta.artworkData == nil && blockLength > 32 {
                 // PICTURE
-                var ptr = 0
-                ptr += 4 // picture type (BE)
-                // Mime len
-                let mimeLen = (Int(blockData[ptr]) << 24) | (Int(blockData[ptr+1]) << 16) | (Int(blockData[ptr+2]) << 8) | Int(blockData[ptr+3])
-                ptr += 4 + mimeLen
-                if ptr + 4 <= blockLength {
-                    // Desc len
-                    let descLen = (Int(blockData[ptr]) << 24) | (Int(blockData[ptr+1]) << 16) | (Int(blockData[ptr+2]) << 8) | Int(blockData[ptr+3])
-                    ptr += 4 + descLen + 16
-                    if ptr + 4 <= blockLength {
-                        // Data len
-                        let dataLen = (Int(blockData[ptr]) << 24) | (Int(blockData[ptr+1]) << 16) | (Int(blockData[ptr+2]) << 8) | Int(blockData[ptr+3])
-                        ptr += 4
-                        if ptr + dataLen <= blockLength {
-                            // Img data
-                            let imgData = blockData.subdata(in: ptr..<(ptr + dataLen))
-                            meta.artworkData = extractImageData(from: imgData) ?? imgData
-                        }
-                    }
-                }
+                meta.artworkData = parseFLACPictureBlock(data: blockData)
             }
         }
 
@@ -872,6 +853,24 @@ public struct FastAudioMetadataReader: Sendable {
         }
 
         return meta
+    }
+
+    /// Parses a FLAC / Ogg PICTURE metadata block structure and extracts embedded image bytes.
+    private static func parseFLACPictureBlock(data: Data) -> Data? {
+        guard data.count > 32 else { return nil }
+        var ptr = 4 // Skip picture type (BE 32-bit int)
+        guard ptr + 4 <= data.count else { return nil }
+        let mimeLen = (Int(data[ptr]) << 24) | (Int(data[ptr+1]) << 16) | (Int(data[ptr+2]) << 8) | Int(data[ptr+3])
+        ptr += 4 + mimeLen
+        guard ptr + 4 <= data.count else { return nil }
+        let descLen = (Int(data[ptr]) << 24) | (Int(data[ptr+1]) << 16) | (Int(data[ptr+2]) << 8) | Int(data[ptr+3])
+        ptr += 4 + descLen + 16 // Skip description + width(4) + height(4) + depth(4) + colors(4)
+        guard ptr + 4 <= data.count else { return nil }
+        let dataLen = (Int(data[ptr]) << 24) | (Int(data[ptr+1]) << 16) | (Int(data[ptr+2]) << 8) | Int(data[ptr+3])
+        ptr += 4
+        guard ptr + dataLen <= data.count else { return nil }
+        let imgData = data.subdata(in: ptr..<(ptr + dataLen))
+        return extractImageData(from: imgData) ?? imgData
     }
 
     // Parse vorbis comment
@@ -940,6 +939,14 @@ public struct FastAudioMetadataReader: Sendable {
                     case "DISCNUMBER":
                         if let num = Int(val.split(separator: "/").first ?? "") {
                             meta.discNumber = num
+                        }
+                    case "COVERART", "COVER_ART":
+                        if meta.artworkData == nil, let artData = Data(base64Encoded: val, options: .ignoreUnknownCharacters) {
+                            meta.artworkData = extractImageData(from: artData) ?? artData
+                        }
+                    case "METADATA_BLOCK_PICTURE":
+                        if meta.artworkData == nil, let picBlock = Data(base64Encoded: val, options: .ignoreUnknownCharacters) {
+                            meta.artworkData = parseFLACPictureBlock(data: picBlock)
                         }
                     default:
                         if (key.contains("LYRIC") || key.contains("TEXT") || (val.count > 60 && (val.contains("\n") || val.contains("\r") || val.contains("[0")))) && meta.lyrics == nil {

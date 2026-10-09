@@ -312,6 +312,23 @@ public struct GlobalSearchView: View {
             playlistPickerSheet(for: track)
         }
         .task {
+            // Proactively warm SearchEngine index in the background if not yet populated
+            if await !SearchEngine.shared.isAlreadyIndexed && !libraryStore.tracks.isEmpty {
+                let t = libraryStore.tracks
+                let alb = libraryStore.albums
+                let art = libraryStore.artists
+                let pl = libraryStore.playlists
+                let j = libraryStore.settings.joinedArtists
+                Task.detached(priority: .utility) {
+                    await SearchEngine.shared.updateIndex(
+                        tracks: t,
+                        albums: alb,
+                        artists: art,
+                        playlists: pl,
+                        joinedArtists: j
+                    )
+                }
+            }
             // Allow the push transition to completely settle (380ms) so the search controller is safely mounted
             try? await Task.sleep(nanoseconds: 380_000_000)
             guard !Task.isCancelled else { return }
@@ -328,14 +345,12 @@ public struct GlobalSearchView: View {
         }
         .task(id: "\(searchQuery)_\(isOnlineMode)_\(libraryStore.tracks.count)") {
             let clean = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard clean.count >= 2 else {
+            guard !clean.isEmpty else {
                 if self.results.hasResults || self.isSearching {
-                    withAnimation(.easeInOut(duration: 0.18)) {
-                        self.results = .empty
-                        self.expandedArtistIDs = []
-                        self.expandedAlbumIDs = []
-                        self.isSearching = false
-                    }
+                    self.results = .empty
+                    self.expandedArtistIDs = []
+                    self.expandedAlbumIDs = []
+                    self.isSearching = false
                 }
                 return
             }
@@ -346,13 +361,13 @@ public struct GlobalSearchView: View {
             }
 
             do {
-                // Micro-debounce (30ms) to allow rapid keyboard input buffering without delaying the search
-                try await Task.sleep(nanoseconds: 30_000_000)
+                // Responsive debounce (25ms) allowing instant fluid typing
+                try await Task.sleep(nanoseconds: 25_000_000)
                 guard !Task.isCancelled else { return }
 
                 self.isSearching = true
 
-                // Single in-memory search pass (runs in < 1ms)
+                // Ultra-fast in-memory search pass (runs in ~2-5ms with prioritized artists)
                 let searchResults = await SearchEngine.shared.search(
                     query: clean,
                     tracksFallback: libraryStore.tracks,
@@ -364,7 +379,6 @@ public struct GlobalSearchView: View {
 
                 guard !Task.isCancelled, self.searchQuery.trimmingCharacters(in: .whitespacesAndNewlines) == clean else { return }
 
-                // Automatically pre-expand the topmost artist and album immediately alongside the results
                 let topArtistID = searchResults.artistTreeNodes.first?.id
                 let topAlbumID = searchResults.artistTreeNodes.first?.albums.first?.id ?? searchResults.directMatchedAlbums.first?.album.id
 
@@ -373,12 +387,14 @@ public struct GlobalSearchView: View {
                 if let topArtistID { newExpandedArtists.insert(topArtistID) }
                 if let topAlbumID { newExpandedAlbums.insert(topAlbumID) }
 
-                withAnimation(.easeInOut(duration: 0.15)) {
-                    self.results = searchResults
+                self.results = searchResults
+                if self.expandedArtistIDs.isEmpty {
                     self.expandedArtistIDs = newExpandedArtists
-                    self.expandedAlbumIDs = newExpandedAlbums
-                    self.isSearching = false
                 }
+                if self.expandedAlbumIDs.isEmpty {
+                    self.expandedAlbumIDs = newExpandedAlbums
+                }
+                self.isSearching = false
             } catch {
                 // Preempted by next keystroke: cancelled cleanly with 0 CPU overhead
             }
@@ -389,7 +405,7 @@ public struct GlobalSearchView: View {
 
     @ViewBuilder
     private var libraryContentView: some View {
-        if trimmedQuery.count < 2 {
+        if trimmedQuery.isEmpty {
             ScrollView(.vertical, showsIndicators: false) {
                 recentSearchPlayedTracksSection
                     .frame(maxWidth: .infinity, alignment: .leading)

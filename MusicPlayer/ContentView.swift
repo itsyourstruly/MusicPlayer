@@ -121,6 +121,9 @@ public struct ContentView: View {
         .onChange(of: libraryStore.settings.rememberPlaybackPositionMinMinutes) { _, minMinutes in
             playerService.rememberPlaybackPositionMinMinutes = minMinutes
         }
+        .onChange(of: libraryStore.settings.downloadNextSongOnWiFi) { _, isWiFiDownload in
+            playerService.downloadNextSongOnWiFi = isWiFiDownload
+        }
         .preferredColorScheme(.dark)
         #else
         ZStack(alignment: .bottom) {
@@ -163,19 +166,7 @@ public struct ContentView: View {
 
             // Unified Fluid Expandable Player (Floating Miniplayer -> Full-Screen Player)
             // Only inserted into the hierarchy once a track is loaded to avoid layout overhead
-            if playerService.currentTrack != nil {
-                ExpandablePlayerView(
-                    playerService: playerService,
-                    libraryStore: libraryStore,
-                    isExpanded: $isPlayerExpanded
-                )
-                // High zIndex keeps the player above all tab content and navigation chrome
-                .zIndex(100)
-                .transition(.asymmetric(
-                    insertion: .move(edge: .bottom).combined(with: .opacity),
-                    removal: .move(edge: .bottom).combined(with: .opacity)
-                ))
-            }
+            playerOverlay
         }
         .tint(libraryStore.settings.appTheme.accentColor)
         .environment(\.appTheme, libraryStore.settings.appTheme)
@@ -218,12 +209,36 @@ public struct ContentView: View {
         .onChange(of: libraryStore.settings.rememberPlaybackPositionMinMinutes) { _, minMinutes in
             playerService.rememberPlaybackPositionMinMinutes = minMinutes
         }
+        .onChange(of: libraryStore.settings.downloadNextSongOnWiFi) { _, isWiFiDownload in
+            playerService.downloadNextSongOnWiFi = isWiFiDownload
+        }
+        .onChange(of: libraryStore.settings.jellyfinServers) { _, servers in
+            playerService.jellyfinServers = servers
+        }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
             playerService.refreshAudioSessionAndRoute()
         }
         .preferredColorScheme(.dark)
         #endif
     }
+
+    #if os(iOS)
+    @ViewBuilder
+    private var playerOverlay: some View {
+        if playerService.currentTrack != nil {
+            ExpandablePlayerView(
+                playerService: playerService,
+                libraryStore: libraryStore,
+                isExpanded: $isPlayerExpanded
+            )
+            .zIndex(100)
+            .transition(.asymmetric(
+                insertion: .move(edge: .bottom).combined(with: .opacity),
+                removal: .move(edge: .bottom).combined(with: .opacity)
+            ))
+        }
+    }
+    #endif
 
     // MARK: Setup
 
@@ -239,6 +254,16 @@ public struct ContentView: View {
         playerService.autoPlayNext = libraryStore.settings.autoPlayNext
         playerService.rememberPlaybackPosition = libraryStore.settings.rememberPlaybackPosition
         playerService.rememberPlaybackPositionMinMinutes = libraryStore.settings.rememberPlaybackPositionMinMinutes
+        playerService.downloadNextSongOnWiFi = libraryStore.settings.downloadNextSongOnWiFi
+        playerService.jellyfinServers = libraryStore.settings.jellyfinServers
+        playerService.autoDownloadOnPlay = libraryStore.settings.autoDownloadOnPlay
+        playerService.downloadOnCellular = libraryStore.settings.downloadOnCellular
+        JellyfinDownloadManager.shared.allowsCellularAccess = libraryStore.settings.downloadOnCellular
+
+        CloudDownloadCenter.shared.onTrackDownloaded = { [weak libraryStore] trackID, url in
+            libraryStore?.upgradeTrackAfterDownload(trackID: trackID, fileURL: url)
+        }
+
         // Weak capture prevents a retain cycle between the service and the store
         playerService.onTrackPlay = { [weak libraryStore] trackID in
             libraryStore?.incrementPlayCount(for: trackID)

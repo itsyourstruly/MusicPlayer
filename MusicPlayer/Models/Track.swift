@@ -19,8 +19,47 @@ extension UUID {
     }
 }
 
+/// Origin source of the track's displayed metadata.
+public enum MetadataSource: String, Codable, Sendable, Hashable {
+    case embeddedTags = "embeddedTags"
+    case folderStructure = "folderStructure"
+    case server = "server"
+}
+
+/// Frozen snapshot of genuine embedded ID3/audio tags read from disk, allowing pristine METADATA mode restores.
+public struct TagSnapshot: Codable, Sendable, Hashable {
+    public let title: String
+    public let artist: String
+    public let album: String
+    public let albumArtist: String?
+    public let year: Int?
+    public let trackNumber: Int?
+    public let discNumber: Int?
+
+    public init(
+        title: String,
+        artist: String,
+        album: String,
+        albumArtist: String? = nil,
+        year: Int? = nil,
+        trackNumber: Int? = nil,
+        discNumber: Int? = nil
+    ) {
+        self.title = title
+        self.artist = artist
+        self.album = album
+        self.albumArtist = albumArtist
+        self.year = year
+        self.trackNumber = trackNumber
+        self.discNumber = discNumber
+    }
+}
+
 /// Core immutable audio track entity containing complete metadata and playback specifications.
 public struct Track: Identifiable, Codable, Sendable, Hashable {
+    public typealias MetadataSource = MusicPlayer.MetadataSource
+    public typealias TagSnapshot = MusicPlayer.TagSnapshot
+
     // Unique identifier
     public let id: UUID
     // Display title
@@ -64,6 +103,37 @@ public struct Track: Identifiable, Codable, Sendable, Hashable {
     // Linked folder ID containing this track
     public let folderID: UUID?
 
+    // Path inside the linked folder (e.g. "Artist/Album/01 Title.flac")
+    public let relativePath: String?
+    // Source of the currently active metadata
+    public let metadataSource: MetadataSource?
+    // Original embedded tags snapshot
+    public let tagSnapshot: TagSnapshot?
+
+    // Jellyfin item and album identifiers
+    public let jellyfinItemId: String?
+    public let jellyfinAlbumId: String?
+
+    /// Checks if local bytes can be read without triggering a cloud download or streaming error.
+    public var canReadLocalBytes: Bool {
+        !isJellyfinItem && url.isFileURL && CloudFileAvailability.isLocal(url: url)
+    }
+
+    /// Indicates if the track resides in iCloud Drive.
+    public var isCloudItem: Bool {
+        !isJellyfinItem && CloudFileAvailability.isCloudItem(url: url)
+    }
+
+    /// Indicates if the track is stored in iCloud Drive and is fully downloaded locally.
+    public var isCloudDownloaded: Bool {
+        !isJellyfinItem && CloudFileAvailability.isCloudDownloaded(url: url)
+    }
+
+    /// Indicates if the track is associated with or streamed from a Jellyfin remote server.
+    public var isJellyfinItem: Bool {
+        jellyfinItemId != nil || url.scheme == "jellyfin" || metadataSource == .server
+    }
+
     // Original track number
     public let originalTrackNumber: Int?
     // Deluxe track number
@@ -102,7 +172,12 @@ public struct Track: Identifiable, Codable, Sendable, Hashable {
         fileInfo: AudioFileInfo? = nil,
         lyrics: String? = nil,
         isAlternate: Bool? = nil,
-        folderID: UUID? = nil
+        folderID: UUID? = nil,
+        relativePath: String? = nil,
+        metadataSource: MetadataSource? = nil,
+        tagSnapshot: TagSnapshot? = nil,
+        jellyfinItemId: String? = nil,
+        jellyfinAlbumId: String? = nil
     ) {
         self.id = id
         self.title = title
@@ -127,6 +202,11 @@ public struct Track: Identifiable, Codable, Sendable, Hashable {
         self.lyrics = lyrics
         self.isAlternate = isAlternate
         self.folderID = folderID
+        self.relativePath = relativePath
+        self.metadataSource = metadataSource
+        self.tagSnapshot = tagSnapshot
+        self.jellyfinItemId = jellyfinItemId
+        self.jellyfinAlbumId = jellyfinAlbumId
 
         // N title
         let nTitle = FuzzyMatcher.normalize(title)
@@ -190,6 +270,11 @@ public struct Track: Identifiable, Codable, Sendable, Hashable {
         self.lyrics = try container.decodeIfPresent(String.self, forKey: .lyrics)
         self.isAlternate = try container.decodeIfPresent(Bool.self, forKey: .isAlternate)
         self.folderID = try container.decodeIfPresent(UUID.self, forKey: .folderID)
+        self.relativePath = try container.decodeIfPresent(String.self, forKey: .relativePath)
+        self.metadataSource = try container.decodeIfPresent(MetadataSource.self, forKey: .metadataSource)
+        self.tagSnapshot = try container.decodeIfPresent(TagSnapshot.self, forKey: .tagSnapshot)
+        self.jellyfinItemId = try container.decodeIfPresent(String.self, forKey: .jellyfinItemId)
+        self.jellyfinAlbumId = try container.decodeIfPresent(String.self, forKey: .jellyfinAlbumId)
 
         // Fast-path: deserialize precomputed search tokens if cached, avoiding expensive runtime normalization
         if let nTitle = try container.decodeIfPresent(String.self, forKey: .normalizedTitle),
@@ -217,6 +302,8 @@ public struct Track: Identifiable, Codable, Sendable, Hashable {
     private enum CodingKeys: String, CodingKey {
         // Id option
         case id, title, artist, album, albumArtist, composer, performer, genre, year, trackNumber, originalTrackNumber, deluxeTrackNumber, totalTracks, discNumber, discTotal, duration, url, artworkKey, dateAdded, fileInfo, lyrics, isAlternate, folderID
+        case relativePath, metadataSource, tagSnapshot
+        case jellyfinItemId, jellyfinAlbumId
         case normalizedTitle, normalizedArtist, normalizedAlbum, searchTokens
     }
 
@@ -247,6 +334,11 @@ public struct Track: Identifiable, Codable, Sendable, Hashable {
         try container.encodeIfPresent(lyrics, forKey: .lyrics)
         try container.encodeIfPresent(isAlternate, forKey: .isAlternate)
         try container.encodeIfPresent(folderID, forKey: .folderID)
+        try container.encodeIfPresent(relativePath, forKey: .relativePath)
+        try container.encodeIfPresent(metadataSource, forKey: .metadataSource)
+        try container.encodeIfPresent(tagSnapshot, forKey: .tagSnapshot)
+        try container.encodeIfPresent(jellyfinItemId, forKey: .jellyfinItemId)
+        try container.encodeIfPresent(jellyfinAlbumId, forKey: .jellyfinAlbumId)
         try container.encode(normalizedTitle, forKey: .normalizedTitle)
         try container.encode(normalizedArtist, forKey: .normalizedArtist)
         try container.encode(normalizedAlbum, forKey: .normalizedAlbum)
@@ -328,7 +420,12 @@ public struct Track: Identifiable, Codable, Sendable, Hashable {
             fileInfo: self.fileInfo,
             lyrics: self.lyrics,
             isAlternate: self.isAlternate,
-            folderID: self.folderID
+            folderID: self.folderID,
+            relativePath: self.relativePath,
+            metadataSource: self.metadataSource,
+            tagSnapshot: self.tagSnapshot,
+            jellyfinItemId: self.jellyfinItemId,
+            jellyfinAlbumId: self.jellyfinAlbumId
         )
     }
 
@@ -357,7 +454,12 @@ public struct Track: Identifiable, Codable, Sendable, Hashable {
             fileInfo: self.fileInfo,
             lyrics: self.lyrics,
             isAlternate: self.isAlternate,
-            folderID: self.folderID
+            folderID: self.folderID,
+            relativePath: self.relativePath,
+            metadataSource: self.metadataSource,
+            tagSnapshot: self.tagSnapshot,
+            jellyfinItemId: self.jellyfinItemId,
+            jellyfinAlbumId: self.jellyfinAlbumId
         )
     }
 
@@ -386,7 +488,12 @@ public struct Track: Identifiable, Codable, Sendable, Hashable {
             fileInfo: self.fileInfo,
             lyrics: self.lyrics,
             isAlternate: self.isAlternate,
-            folderID: self.folderID
+            folderID: self.folderID,
+            relativePath: self.relativePath,
+            metadataSource: self.metadataSource,
+            tagSnapshot: self.tagSnapshot,
+            jellyfinItemId: self.jellyfinItemId,
+            jellyfinAlbumId: self.jellyfinAlbumId
         )
     }
 
@@ -415,7 +522,12 @@ public struct Track: Identifiable, Codable, Sendable, Hashable {
             fileInfo: self.fileInfo,
             lyrics: self.lyrics,
             isAlternate: self.isAlternate,
-            folderID: self.folderID
+            folderID: self.folderID,
+            relativePath: self.relativePath,
+            metadataSource: self.metadataSource,
+            tagSnapshot: self.tagSnapshot,
+            jellyfinItemId: self.jellyfinItemId,
+            jellyfinAlbumId: self.jellyfinAlbumId
         )
     }
 
@@ -457,7 +569,49 @@ public struct Track: Identifiable, Codable, Sendable, Hashable {
             fileInfo: self.fileInfo,
             lyrics: self.lyrics,
             isAlternate: self.isAlternate,
-            folderID: self.folderID
+            folderID: self.folderID,
+            relativePath: self.relativePath,
+            metadataSource: self.metadataSource,
+            tagSnapshot: self.tagSnapshot,
+            jellyfinItemId: self.jellyfinItemId,
+            jellyfinAlbumId: self.jellyfinAlbumId
+        )
+    }
+
+    /// Returns a copy of the track with updated metadata source and tag snapshot.
+    public func withUpdatedTags(
+        metadataSource: MetadataSource? = nil,
+        tagSnapshot: TagSnapshot? = nil
+    ) -> Track {
+        Track(
+            id: self.id,
+            title: self.title,
+            artist: self.artist,
+            album: self.album,
+            albumArtist: self.albumArtist,
+            composer: self.composer,
+            performer: self.performer,
+            genre: self.genre,
+            year: self.year,
+            trackNumber: self.trackNumber,
+            originalTrackNumber: self.originalTrackNumber,
+            deluxeTrackNumber: self.deluxeTrackNumber,
+            totalTracks: self.totalTracks,
+            discNumber: self.discNumber,
+            discTotal: self.discTotal,
+            duration: self.duration,
+            url: self.url,
+            artworkKey: self.artworkKey,
+            dateAdded: self.dateAdded,
+            fileInfo: self.fileInfo,
+            lyrics: self.lyrics,
+            isAlternate: self.isAlternate,
+            folderID: self.folderID,
+            relativePath: self.relativePath,
+            metadataSource: metadataSource ?? self.metadataSource,
+            tagSnapshot: tagSnapshot ?? self.tagSnapshot,
+            jellyfinItemId: self.jellyfinItemId,
+            jellyfinAlbumId: self.jellyfinAlbumId
         )
     }
 
@@ -486,7 +640,12 @@ public struct Track: Identifiable, Codable, Sendable, Hashable {
             fileInfo: self.fileInfo,
             lyrics: self.lyrics,
             isAlternate: isAlternate,
-            folderID: self.folderID
+            folderID: self.folderID,
+            relativePath: self.relativePath,
+            metadataSource: self.metadataSource,
+            tagSnapshot: self.tagSnapshot,
+            jellyfinItemId: self.jellyfinItemId,
+            jellyfinAlbumId: self.jellyfinAlbumId
         )
     }
 
@@ -515,7 +674,12 @@ public struct Track: Identifiable, Codable, Sendable, Hashable {
             fileInfo: self.fileInfo,
             lyrics: self.lyrics,
             isAlternate: isAlternate ?? self.isAlternate,
-            folderID: self.folderID
+            folderID: self.folderID,
+            relativePath: self.relativePath,
+            metadataSource: self.metadataSource,
+            tagSnapshot: self.tagSnapshot,
+            jellyfinItemId: self.jellyfinItemId,
+            jellyfinAlbumId: self.jellyfinAlbumId
         )
     }
 
@@ -544,7 +708,128 @@ public struct Track: Identifiable, Codable, Sendable, Hashable {
             fileInfo: self.fileInfo,
             lyrics: self.lyrics,
             isAlternate: self.isAlternate,
-            folderID: newFolderID
+            folderID: newFolderID,
+            relativePath: self.relativePath,
+            metadataSource: self.metadataSource,
+            tagSnapshot: self.tagSnapshot,
+            jellyfinItemId: self.jellyfinItemId,
+            jellyfinAlbumId: self.jellyfinAlbumId
+        )
+    }
+
+    /// Returns a copy of the track with organized metadata (e.g. for METADATA vs FOLDER mode).
+    public func withOrganizedMetadata(
+        title: String,
+        artist: String,
+        album: String,
+        albumArtist: String?,
+        year: Int?,
+        trackNumber: Int?,
+        discNumber: Int?
+    ) -> Track {
+        Track(
+            id: self.id,
+            title: title,
+            artist: artist,
+            album: album,
+            albumArtist: albumArtist,
+            composer: self.composer,
+            performer: self.performer,
+            genre: self.genre,
+            year: year,
+            trackNumber: trackNumber,
+            originalTrackNumber: self.originalTrackNumber,
+            deluxeTrackNumber: self.deluxeTrackNumber,
+            totalTracks: self.totalTracks,
+            discNumber: discNumber,
+            discTotal: self.discTotal,
+            duration: self.duration,
+            url: self.url,
+            artworkKey: self.artworkKey,
+            dateAdded: self.dateAdded,
+            fileInfo: self.fileInfo,
+            lyrics: self.lyrics,
+            isAlternate: self.isAlternate,
+            folderID: self.folderID,
+            relativePath: self.relativePath,
+            metadataSource: self.metadataSource,
+            tagSnapshot: self.tagSnapshot,
+            jellyfinItemId: self.jellyfinItemId,
+            jellyfinAlbumId: self.jellyfinAlbumId
+        )
+    }
+
+    /// Returns a copy of the track with updated identity identifiers.
+    public func withIdentity(
+        id: UUID,
+        relativePath: String? = nil,
+        folderID: UUID? = nil,
+        metadataSource: MetadataSource? = nil,
+        tagSnapshot: TagSnapshot? = nil
+    ) -> Track {
+        Track(
+            id: id,
+            title: self.title,
+            artist: self.artist,
+            album: self.album,
+            albumArtist: self.albumArtist,
+            composer: self.composer,
+            performer: self.performer,
+            genre: self.genre,
+            year: self.year,
+            trackNumber: self.trackNumber,
+            originalTrackNumber: self.originalTrackNumber,
+            deluxeTrackNumber: self.deluxeTrackNumber,
+            totalTracks: self.totalTracks,
+            discNumber: self.discNumber,
+            discTotal: self.discTotal,
+            duration: self.duration,
+            url: self.url,
+            artworkKey: self.artworkKey,
+            dateAdded: self.dateAdded,
+            fileInfo: self.fileInfo,
+            lyrics: self.lyrics,
+            isAlternate: self.isAlternate,
+            folderID: folderID ?? self.folderID,
+            relativePath: relativePath ?? self.relativePath,
+            metadataSource: metadataSource ?? self.metadataSource,
+            tagSnapshot: tagSnapshot ?? self.tagSnapshot,
+            jellyfinItemId: self.jellyfinItemId,
+            jellyfinAlbumId: self.jellyfinAlbumId
+        )
+    }
+
+    /// Returns a copy of the track with updated Jellyfin identifiers.
+    public func withJellyfinIds(itemId: String?, albumId: String?) -> Track {
+        Track(
+            id: self.id,
+            title: self.title,
+            artist: self.artist,
+            album: self.album,
+            albumArtist: self.albumArtist,
+            composer: self.composer,
+            performer: self.performer,
+            genre: self.genre,
+            year: self.year,
+            trackNumber: self.trackNumber,
+            originalTrackNumber: self.originalTrackNumber,
+            deluxeTrackNumber: self.deluxeTrackNumber,
+            totalTracks: self.totalTracks,
+            discNumber: self.discNumber,
+            discTotal: self.discTotal,
+            duration: self.duration,
+            url: self.url,
+            artworkKey: self.artworkKey,
+            dateAdded: self.dateAdded,
+            fileInfo: self.fileInfo,
+            lyrics: self.lyrics,
+            isAlternate: self.isAlternate,
+            folderID: self.folderID,
+            relativePath: self.relativePath,
+            metadataSource: self.metadataSource,
+            tagSnapshot: self.tagSnapshot,
+            jellyfinItemId: itemId ?? self.jellyfinItemId,
+            jellyfinAlbumId: albumId ?? self.jellyfinAlbumId
         )
     }
 
@@ -638,5 +923,9 @@ public struct Track: Identifiable, Codable, Sendable, Hashable {
 public enum TagCompletenessStatus: String, Sendable, Codable {
     case looksGood = "Looks Good"
     case readyToEnrich = "Ready to Enrich"
+}
+
+extension Notification.Name {
+    public static let hideTrackRequested = Notification.Name("MusicPlayer.hideTrackRequested")
 }
 

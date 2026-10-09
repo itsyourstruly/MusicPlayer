@@ -37,6 +37,8 @@ public struct TrackRowView: View {
     public let onSelectAlbum: (() -> Void)?
     // On remove from playlist
     public let onRemoveFromPlaylist: (() -> Void)?
+    // On hide track
+    public let onHideTrack: (() -> Void)?
     // Flag indicating if swipe disabled
     public let isSwipeDisabled: Bool
     // Trailing text
@@ -83,7 +85,8 @@ public struct TrackRowView: View {
         onRemoveFromPlaylist: (() -> Void)? = nil,
         onShowInfo: @escaping () -> Void = {},
         onSelectArtist: ((String) -> Void)? = nil,
-        onSelectAlbum: (() -> Void)? = nil
+        onSelectAlbum: (() -> Void)? = nil,
+        onHideTrack: (() -> Void)? = nil
     ) {
         self.track = track
         self.indexNumber = indexNumber
@@ -104,6 +107,7 @@ public struct TrackRowView: View {
         self.onShowInfo = onShowInfo
         self.onSelectArtist = onSelectArtist
         self.onSelectAlbum = onSelectAlbum
+        self.onHideTrack = onHideTrack
     }
 
     private var currentOffset: CGFloat {
@@ -250,15 +254,19 @@ public struct TrackRowView: View {
 
                 Spacer(minLength: 8)
 
-                // Track Duration or Custom Trailing Label (e.g. Play Count)
-                if let customText = trailingText {
-                    Text(customText)
-                        .font(.system(size: 11, weight: .bold, design: .monospaced))
-                        .foregroundStyle(isCurrentTrack ? appTheme.accentColor : .secondary)
-                } else {
-                    Text(TimeFormatting.format(seconds: track.duration))
-                        .font(.system(size: 12, weight: .regular, design: .monospaced))
-                        .foregroundStyle(isCurrentTrack ? appTheme.accentColor : .secondary)
+                // Track Duration or Custom Trailing Label (e.g. Play Count) with Cloud Status Badge
+                HStack(spacing: 5) {
+                    CloudStatusBadge(track: track, tintColor: isCurrentTrack ? appTheme.accentColor : .secondary)
+
+                    if let customText = trailingText {
+                        Text(customText)
+                            .font(.system(size: 11, weight: .bold, design: .monospaced))
+                            .foregroundStyle(isCurrentTrack ? appTheme.accentColor : .secondary)
+                    } else {
+                        Text(TimeFormatting.format(seconds: track.duration))
+                            .font(.system(size: 12, weight: .regular, design: .monospaced))
+                            .foregroundStyle(isCurrentTrack ? appTheme.accentColor : .secondary)
+                    }
                 }
             }
             .padding(.vertical, 6)
@@ -401,6 +409,54 @@ public struct TrackRowView: View {
 
             Button(action: onShowInfo) {
                 Text("FILE INFO")
+            }
+
+            if track.canReadLocalBytes && track.metadataSource != .server {
+                let isUbiquitous = (try? track.url.resourceValues(forKeys: [.isUbiquitousItemKey]))?.isUbiquitousItem == true
+                if isUbiquitous {
+                    Button(role: .destructive) {
+                        try? FileManager.default.evictUbiquitousItem(at: track.url)
+                    } label: {
+                        Text("REMOVE DOWNLOAD")
+                    }
+                }
+            } else if track.isJellyfinItem || track.metadataSource == .server {
+                if JellyfinDownloadManager.shared.isDownloaded(trackId: track.id) {
+                    Button(role: .destructive) {
+                        HapticFeedback.selectionChanged()
+                        JellyfinDownloadManager.shared.deleteDownload(trackId: track.id)
+                    } label: {
+                        Text("REMOVE DOWNLOAD")
+                    }
+                } else {
+                    let state = JellyfinDownloadManager.shared.downloadStates[track.id, default: .notDownloaded]
+                    if state.isDownloading {
+                        Button {
+                            HapticFeedback.selectionChanged()
+                            JellyfinDownloadManager.shared.cancelDownload(trackId: track.id)
+                        } label: {
+                            Text("CANCEL DOWNLOAD")
+                        }
+                    } else {
+                        Button {
+                            HapticFeedback.selectionChanged()
+                            JellyfinDownloadManager.shared.download(track: track)
+                        } label: {
+                            Text("DOWNLOAD TRACK")
+                        }
+                    }
+                }
+            }
+
+            Button(role: .destructive) {
+                HapticFeedback.notificationWarning()
+                if let onHideTrack = onHideTrack {
+                    onHideTrack()
+                } else {
+                    NotificationCenter.default.post(name: .hideTrackRequested, object: nil, userInfo: ["track": track])
+                }
+            } label: {
+                Text("HIDE TRACK")
             }
         }
     }

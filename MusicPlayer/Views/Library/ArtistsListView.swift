@@ -13,6 +13,7 @@ public struct ArtistsListView: View {
     ]
 
     @State private var selectedArtist: Artist? = nil
+    @State private var displayLimit: Int = 80
 
     // Initialize with configured properties
     public init(libraryStore: LibraryStore, playerService: AudioPlayerService) {
@@ -22,6 +23,8 @@ public struct ArtistsListView: View {
 
     // Main view layout structure
     public var body: some View {
+        let artists = libraryStore.filteredArtists
+
         VStack(spacing: 10) {
             // Sort Selector Bar (NAME, MOST) with enlarged hit target and reverse blue toggle
             SortSelectorBar(
@@ -31,19 +34,25 @@ public struct ArtistsListView: View {
                 labelForOption: { $0.label }
             )
 
-            if libraryStore.filteredArtists.isEmpty {
-                if !libraryStore.isInitialLoading || libraryStore.settings.linkedFolderName == nil {
+            if artists.isEmpty {
+                let hasSources = !libraryStore.settings.linkedFolders.isEmpty || !libraryStore.settings.jellyfinServers.isEmpty
+                if !libraryStore.isInitialLoading || !hasSources {
                     EmptyStateView(
                         title: "NO ARTISTS FOUND",
                         message: libraryStore.searchQuery.isEmpty
-                            ? "Link a music directory in Settings to index artists."
+                            ? (!hasSources
+                                ? "Link a music directory or Jellyfin server in Settings."
+                                : "No artists found in library.")
                             : "No artists match '\(libraryStore.searchQuery)'."
                     )
                     .padding(.top, 24)
                 }
             } else {
+                let visibleCount = min(artists.count, displayLimit)
+
                 LazyVGrid(columns: columns, spacing: 10) {
-                    ForEach(libraryStore.filteredArtists) { artist in
+                    ForEach(0..<visibleCount, id: \.self) { index in
+                        let artist = artists[index]
                         Button(action: {
                             selectedArtist = artist
                         }) {
@@ -77,12 +86,26 @@ public struct ArtistsListView: View {
                             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                         }
                         .buttonStyle(.plain)
+                        .onAppear {
+                            if index >= visibleCount - 20 && visibleCount < artists.count {
+                                displayLimit = min(artists.count, displayLimit + 80)
+                            }
+                        }
                     }
                 }
                 .padding(.horizontal, 16)
             }
         }
         .padding(.top, 4)
+        .onChange(of: libraryStore.searchQuery) { _, _ in
+            displayLimit = 80
+        }
+        .onChange(of: libraryStore.artistSortOption) { _, _ in
+            displayLimit = 80
+        }
+        .onChange(of: libraryStore.isArtistSortReversed) { _, _ in
+            displayLimit = 80
+        }
         .navigationDestination(item: $selectedArtist) { artist in
             ArtistDetailView(artist: artist, libraryStore: libraryStore, playerService: playerService)
         }

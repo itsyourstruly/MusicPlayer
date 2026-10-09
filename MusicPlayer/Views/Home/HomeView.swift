@@ -37,8 +37,8 @@ public struct HomeView: View {
     public var body: some View {
         ScrollView(.vertical, showsIndicators: false) {
             VStack(alignment: .leading, spacing: 24) {
-                // Unlinked Folder Banner or Quick Action Deck
-                if libraryStore.tracks.isEmpty && !libraryStore.isInitialLoading && libraryStore.settings.linkedFolderName == nil {
+                // Unlinked Source Banner or Quick Action Deck
+                if libraryStore.tracks.isEmpty && !libraryStore.isInitialLoading && libraryStore.settings.linkedFolders.isEmpty && libraryStore.settings.jellyfinServers.isEmpty {
                     emptyLibraryBanner
                 } else {
                     quickActionsDeck
@@ -170,18 +170,18 @@ public struct HomeView: View {
 
     private var emptyLibraryBanner: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("NO MUSIC DIRECTORY LINKED")
+            Text("NO MUSIC SOURCE LINKED")
                 .font(.system(size: 14, weight: .bold, design: .monospaced))
                 .foregroundStyle(Color.primary)
 
-            Text("Link a folder on this device to scan and automatically categorize all your audio tracks, albums, and artists.")
+            Text("Link a folder or connect a Jellyfin server to scan and automatically categorize all your audio tracks, albums, and artists.")
                 .font(.system(size: 13))
                 .foregroundStyle(.secondary)
                 .lineSpacing(3)
 
             HStack(spacing: 8) {
                 Button(action: onOpenSettings) {
-                    Text("LINK FOLDER")
+                    Text("ADD SOURCE")
                 }
                 .buttonStyle(TypographicButtonStyle(variant: .primary, size: .small))
             }

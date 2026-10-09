@@ -57,15 +57,24 @@ public struct PlayerControlsView: View {
                 // Play / Pause prominent text button
                 Button(action: {
                     guard canTriggerButtonPress else { return }
+                    if playerService.cloudWaitTrackID != nil { return }
                     HapticFeedback.playPause(isPlaying: !playerService.playbackStatus.isPlaying)
                     playerService.togglePlayPause()
                 }) {
-                    Text(playerService.playbackStatus.isPlaying ? "PAUSE" : "PLAY")
-                        .font(.system(size: 34, weight: .black, design: .monospaced))
-                        .foregroundStyle(foregroundColor)
-                        .contentTransition(.interpolate)
-                        .frame(width: 136, height: 52, alignment: .center)
-                        .contentShape(Rectangle())
+                    Group {
+                        if playerService.cloudWaitTrackID != nil {
+                            ProgressView()
+                                .progressViewStyle(CircularProgressViewStyle(tint: foregroundColor))
+                                .scaleEffect(1.3)
+                        } else {
+                            Text(playerService.playbackStatus.isPlaying ? "PAUSE" : "PLAY")
+                                .font(.system(size: 34, weight: .black, design: .monospaced))
+                                .foregroundStyle(foregroundColor)
+                                .contentTransition(.interpolate)
+                        }
+                    }
+                    .frame(width: 136, height: 52, alignment: .center)
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
 

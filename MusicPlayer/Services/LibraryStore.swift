@@ -251,7 +251,7 @@ public final class LibraryStore {
     }
 
     // Fast O(1) index mapping normalized artist name variants and IDs to Artist entities
-    @ObservationIgnored private var artistLookupIndex: [String: Artist] = [:]
+    @ObservationIgnored public private(set) var artistLookupIndex: [String: Artist] = [:]
 
     // MARK: - Scanning & Loading State
 
@@ -264,6 +264,10 @@ public final class LibraryStore {
     public private(set) var scanProgress: Double = 0.0
     // Human-readable status text for scanner UI
     public private(set) var scanStatusText: String = ""
+    // Errors encountered per Jellyfin server ID
+    public private(set) var jellyfinServerErrors: [UUID: String] = [:]
+    // Last successful sync date per Jellyfin server ID
+    public private(set) var jellyfinLastSyncDates: [UUID: Date] = [:]
 
     // MARK: - UI & Filter State
 
@@ -316,6 +320,15 @@ public final class LibraryStore {
     @ObservationIgnored private var albumsByID: [String: Album] = [:]
     @ObservationIgnored private var albumsByNormalizedKey: [String: Album] = [:]
 
+    @ObservationIgnored private var cachedFilteredTracksKey: String? = nil
+    @ObservationIgnored private var cachedFilteredTracksResult: [Track]? = nil
+    @ObservationIgnored private var cachedFilteredAlbumsKey: String? = nil
+    @ObservationIgnored private var cachedFilteredAlbumsResult: [Album]? = nil
+    @ObservationIgnored private var cachedFilteredArtistsKey: String? = nil
+    @ObservationIgnored private var cachedFilteredArtistsResult: [Artist]? = nil
+    @ObservationIgnored private var cachedFilteredPlaylistsKey: String? = nil
+    @ObservationIgnored private var cachedFilteredPlaylistsResult: [Playlist]? = nil
+
     /// Rebuilds fast O(1) indexed lookup tables for albums
     private func rebuildAlbumLookups() {
         var byID: [String: Album] = [:]
@@ -353,9 +366,30 @@ public final class LibraryStore {
         cachedActiveTracks = nil
         cachedActiveAlbums = nil
         cachedActiveArtists = nil
+        cachedFilteredTracksKey = nil
+        cachedFilteredTracksResult = nil
+        cachedFilteredAlbumsKey = nil
+        cachedFilteredAlbumsResult = nil
+        cachedFilteredArtistsKey = nil
+        cachedFilteredArtistsResult = nil
+        cachedFilteredPlaylistsKey = nil
+        cachedFilteredPlaylistsResult = nil
     }
 
-    // MARK: - File Paths
+    // MARK: - File Paths & Persistence Coordination
+
+    @ObservationIgnored private var saveLibraryDebounceTask: Task<Void, Never>? = nil
+    @ObservationIgnored private var savePlayCountsDebounceTask: Task<Void, Never>? = nil
+    @ObservationIgnored private var warmSearchIndexDebounceTask: Task<Void, Never>? = nil
+    @ObservationIgnored private var fileGenerations: [URL: Int] = [:]
+
+    private func bumpGeneration(for url: URL) -> Int {
+        let next = (fileGenerations[url] ?? 0) + 1
+        fileGenerations[url] = next
+        return next
+    }
+
+    public var organizationModesContainer = OrganizationModesContainer()
 
     // File manager
     private let fileManager = FileManager.default
@@ -373,6 +407,16 @@ public final class LibraryStore {
             try? fileManager.createDirectory(at: storageDirectoryURL, withIntermediateDirectories: true)
         }
 
+        // Wire bookmark stale updates
+        SecurityScopedBookmark.shared.onBookmarkUpdated = { [weak self] folderID, newBookmarkData in
+            guard let self = self else { return }
+            if let idx = self.settings.linkedFolders.firstIndex(where: { $0.id == folderID }) {
+                self.settings.linkedFolders[idx].bookmarkData = newBookmarkData
+                self.saveSettings()
+                AppLogger.storage.info("Updated stale bookmark for folder: \(folderID)")
+            }
+        }
+
         // 1. Instant sync load of lightweight preferences for immediate frame 1 paint
         loadLightweightPreferences()
 
@@ -381,6 +425,16 @@ public final class LibraryStore {
         Task.detached(priority: .userInitiated) {
             _ = SecurityScopedBookmark.shared.resolveAndAccessBookmark()
             SecurityScopedBookmark.shared.resolveAndAccessAllBookmarks(folders: folders)
+        }
+
+        // Wire remote artwork loader for Jellyfin images
+        ArtworkCacheService.remoteArtworkLoader = { key, fullResolution in
+            await JellyfinArtworkRegistry.shared.fetchArtworkData(for: key, fullResolution: fullResolution)
+        }
+
+        NotificationCenter.default.addObserver(forName: .hideTrackRequested, object: nil, queue: .main) { [weak self] note in
+            guard let track = note.userInfo?["track"] as? Track else { return }
+            self?.hideTrack(track)
         }
 
         // 2. Load cached library data asynchronously off main thread at maximum speed
@@ -513,6 +567,11 @@ public final class LibraryStore {
             return sorted
         }
 
+        let cacheKey = "\(cleanQuery)_\(trackSortOption.rawValue)_\(isTrackSortReversed)_\(settings.autoHideDuplicates)"
+        if cachedFilteredTracksKey == cacheKey, let cached = cachedFilteredTracksResult {
+            return cached
+        }
+
         let sourceList: [Track]
         if settings.autoHideDuplicates && !duplicateGroups.isEmpty {
             let hiddenTrackIDs = Set(duplicateGroups.flatMap { $0.duplicateCandidates.map { $0.track.id } })
@@ -521,20 +580,41 @@ public final class LibraryStore {
             sourceList = activeTracks
         }
 
+        let queryCount = cleanQuery.count
         let scored: [(Track, Int)] = sourceList.compactMap { track in
+            let normTitle = track.normalizedTitle
+            let normArtist = track.normalizedArtist
+            let normAlbum = track.normalizedAlbum
+
+            let quickMatch = normTitle.contains(cleanQuery) ||
+                             normArtist.contains(cleanQuery) ||
+                             normAlbum.contains(cleanQuery) ||
+                             track.searchTokens.contains(cleanQuery)
+
+            if !quickMatch && queryCount >= 2 {
+                let p2 = cleanQuery.prefix(2)
+                if !track.searchTokens.contains(p2) {
+                    return nil
+                }
+            }
+
             let score = FuzzyMatcher.scoreTrack(
-                normalizedTitle: track.normalizedTitle,
-                normalizedArtist: track.normalizedArtist,
-                normalizedAlbum: track.normalizedAlbum,
+                normalizedTitle: normTitle,
+                normalizedArtist: normArtist,
+                normalizedAlbum: normAlbum,
                 searchTokens: track.searchTokens,
                 cleanQuery: cleanQuery
             )
             return score > 0 ? (track, score) : nil
         }
-        return scored.sorted {
+        let result = scored.sorted {
             if $0.1 != $1.1 { return $0.1 > $1.1 }
             return $0.0.title.localizedCaseInsensitiveCompare($1.0.title) == .orderedAscending
         }.map { $0.0 }
+
+        cachedFilteredTracksKey = cacheKey
+        cachedFilteredTracksResult = result
+        return result
     }
 
     /// Standardized, high-performance album search scoring title, artist, and track titles.
@@ -548,16 +628,22 @@ public final class LibraryStore {
                 normalizedArtist: album.normalizedArtist,
                 cleanQuery: cleanQuery
             )
-            for track in album.tracks {
-                let trackScore = FuzzyMatcher.scoreTrack(
-                    normalizedTitle: track.normalizedTitle,
-                    normalizedArtist: track.normalizedArtist,
-                    normalizedAlbum: track.normalizedAlbum,
-                    searchTokens: track.searchTokens,
-                    cleanQuery: cleanQuery
-                )
-                if trackScore > maxScore {
-                    maxScore = trackScore
+            if maxScore < 40 {
+                for track in album.tracks {
+                    if cleanQuery.count >= 2 && !track.searchTokens.contains(cleanQuery) && !track.normalizedTitle.contains(cleanQuery) {
+                        continue
+                    }
+                    let trackScore = FuzzyMatcher.scoreTrack(
+                        normalizedTitle: track.normalizedTitle,
+                        normalizedArtist: track.normalizedArtist,
+                        normalizedAlbum: track.normalizedAlbum,
+                        searchTokens: track.searchTokens,
+                        cleanQuery: cleanQuery
+                    )
+                    if trackScore > maxScore {
+                        maxScore = trackScore
+                    }
+                    if maxScore >= 80 { break }
                 }
             }
             return maxScore > 0 ? (album, maxScore) : nil
@@ -578,7 +664,14 @@ public final class LibraryStore {
             cachedSortedAlbums = sorted
             return sorted
         }
-        return searchAlbums(query: trimmed)
+        let cacheKey = "\(trimmed)_\(albumSortOption.rawValue)_\(isAlbumSortReversed)"
+        if cachedFilteredAlbumsKey == cacheKey, let cached = cachedFilteredAlbumsResult {
+            return cached
+        }
+        let result = searchAlbums(query: trimmed)
+        cachedFilteredAlbumsKey = cacheKey
+        cachedFilteredAlbumsResult = result
+        return result
     }
 
     public var filteredArtists: [Artist] {
@@ -591,14 +684,21 @@ public final class LibraryStore {
             cachedSortedArtists = sorted
             return sorted
         }
+        let cacheKey = "\(cleanQuery)_\(artistSortOption.rawValue)_\(isArtistSortReversed)"
+        if cachedFilteredArtistsKey == cacheKey, let cached = cachedFilteredArtistsResult {
+            return cached
+        }
         let scored: [(Artist, Int)] = activeArtists.compactMap { artist in
             let score = FuzzyMatcher.scoreArtist(normalizedName: artist.normalizedName, cleanQuery: cleanQuery)
             return score > 0 ? (artist, score) : nil
         }
-        return scored.sorted {
+        let result = scored.sorted {
             if $0.1 != $1.1 { return $0.1 > $1.1 }
             return $0.0.name.localizedCaseInsensitiveCompare($1.0.name) == .orderedAscending
         }.map { $0.0 }
+        cachedFilteredArtistsKey = cacheKey
+        cachedFilteredArtistsResult = result
+        return result
     }
 
     public var filteredPlaylists: [Playlist] {
@@ -611,16 +711,23 @@ public final class LibraryStore {
             cachedSortedPlaylists = sorted
             return sorted
         }
+        let cacheKey = "\(cleanQuery)_\(playlistSortOption.rawValue)_\(isPlaylistSortReversed)"
+        if cachedFilteredPlaylistsKey == cacheKey, let cached = cachedFilteredPlaylistsResult {
+            return cached
+        }
         let scored: [(Playlist, Int)] = playlists.compactMap { playlist in
             let nameScore = FuzzyMatcher.evaluateScore(cleanText: playlist.normalizedName, cleanQuery: cleanQuery)
             let tokenScore = FuzzyMatcher.evaluateScore(cleanText: playlist.searchTokens, cleanQuery: cleanQuery)
             let maxScore = max(nameScore * 2, tokenScore)
             return maxScore > 0 ? (playlist, maxScore) : nil
         }
-        return scored.sorted {
+        let result = scored.sorted {
             if $0.1 != $1.1 { return $0.1 > $1.1 }
             return $0.0.name.localizedCaseInsensitiveCompare($1.0.name) == .orderedAscending
         }.map { $0.0 }
+        cachedFilteredPlaylistsKey = cacheKey
+        cachedFilteredPlaylistsResult = result
+        return result
     }
 
     public var totalLibraryDuration: TimeInterval {
@@ -652,6 +759,22 @@ public final class LibraryStore {
     /// Finds an Album matching the specified title and optional artist name.
     public func findAlbum(title: String, artist: String? = nil) -> Album? {
         let cleanTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanTitle.isEmpty else { return nil }
+
+        // Fast O(1) indexed check by artist + title
+        if let artist = artist {
+            let normArtist = FuzzyMatcher.normalize(artist)
+            let normTitle = FuzzyMatcher.normalize(cleanTitle)
+            if let indexed = album(normalizedArtist: normArtist, normalizedTitle: normTitle) {
+                return indexed
+            }
+        }
+
+        // Fast O(1) indexed check by ID
+        if let directID = albumsByID[cleanTitle] {
+            return directID
+        }
+
         if let direct = albums.first(where: {
             guard $0.title.localizedCaseInsensitiveCompare(cleanTitle) == .orderedSame else { return false }
             if let artist {
@@ -761,10 +884,13 @@ public final class LibraryStore {
 
     /// Returns the linked folder entity that owns this track, if matched.
     public func folder(for track: Track) -> LinkedFolder? {
+        if track.isJellyfinItem || track.metadataSource == .server {
+            return nil
+        }
         if let folderID = track.folderID, let match = settings.linkedFolders.first(where: { $0.id == folderID }) {
             return match
         }
-        if settings.linkedFolders.count == 1 {
+        if settings.linkedFolders.count == 1 && settings.jellyfinServers.isEmpty {
             return settings.linkedFolders.first
         }
         let trackCanonical = track.url.resolvingSymlinksInPath().standardizedFileURL.path
@@ -836,7 +962,7 @@ public final class LibraryStore {
 
     /// Track count for an individual linked folder (O(1) indexed).
     public func trackCount(for folder: LinkedFolder) -> Int {
-        if settings.linkedFolders.count <= 1 {
+        if settings.linkedFolders.count <= 1 && settings.jellyfinServers.isEmpty {
             return tracks.count
         }
         if let stats = cachedFolderStats[folder.id] {
@@ -848,7 +974,7 @@ public final class LibraryStore {
 
     /// Album count for an individual linked folder (O(1) indexed).
     public func albumCount(for folder: LinkedFolder) -> Int {
-        if settings.linkedFolders.count <= 1 {
+        if settings.linkedFolders.count <= 1 && settings.jellyfinServers.isEmpty {
             return albums.count
         }
         if let stats = cachedFolderStats[folder.id] {
@@ -860,7 +986,7 @@ public final class LibraryStore {
 
     /// Artist count for an individual linked folder (O(1) indexed).
     public func artistCount(for folder: LinkedFolder) -> Int {
-        if settings.linkedFolders.count <= 1 {
+        if settings.linkedFolders.count <= 1 && settings.jellyfinServers.isEmpty {
             return artists.count
         }
         if let stats = cachedFolderStats[folder.id] {
@@ -870,14 +996,45 @@ public final class LibraryStore {
         return cachedFolderStats[folder.id]?.artistCount ?? 0
     }
 
+    /// Track count for a Jellyfin server (O(1) indexed).
+    public func trackCount(for server: JellyfinServerLink) -> Int {
+        if let stats = cachedFolderStats[server.id] {
+            return stats.trackCount
+        }
+        rebuildFolderStats()
+        return cachedFolderStats[server.id]?.trackCount ?? 0
+    }
+
+    /// Album count for a Jellyfin server (O(1) indexed).
+    public func albumCount(for server: JellyfinServerLink) -> Int {
+        if let stats = cachedFolderStats[server.id] {
+            return stats.albumCount
+        }
+        rebuildFolderStats()
+        return cachedFolderStats[server.id]?.albumCount ?? 0
+    }
+
+    /// Artist count for a Jellyfin server (O(1) indexed).
+    public func artistCount(for server: JellyfinServerLink) -> Int {
+        if let stats = cachedFolderStats[server.id] {
+            return stats.artistCount
+        }
+        rebuildFolderStats()
+        return cachedFolderStats[server.id]?.artistCount ?? 0
+    }
+
     /// Non-isolated folder stats calculator that runs safely in background tasks.
     nonisolated public static func computeFolderStats(
         tracks: [Track],
-        linkedFolders: [LinkedFolder]
+        linkedFolders: [LinkedFolder],
+        jellyfinServers: [JellyfinServerLink] = []
     ) -> [UUID: FolderStats] {
         var statsMap: [UUID: (tracks: Int, albums: Set<String>, artists: Set<String>)] = [:]
         for folder in linkedFolders {
             statsMap[folder.id] = (0, Set<String>(), Set<String>())
+        }
+        for server in jellyfinServers {
+            statsMap[server.id] = (0, Set<String>(), Set<String>())
         }
 
         let folderLookups: [(id: UUID, path: String)] = linkedFolders.compactMap { folder in
@@ -885,17 +1042,19 @@ public final class LibraryStore {
             return (folder.id, URL(fileURLWithPath: p).standardizedFileURL.path)
         }
 
-        let singleFolderID = linkedFolders.count == 1 ? linkedFolders.first?.id : nil
+        let singleFolderID = (linkedFolders.count == 1 && jellyfinServers.isEmpty) ? linkedFolders.first?.id : nil
 
         for track in tracks {
             let matchedFolderID: UUID?
             if let fID = track.folderID {
                 matchedFolderID = fID
-            } else if let sID = singleFolderID {
+            } else if !track.isJellyfinItem && track.metadataSource != .server, let sID = singleFolderID {
                 matchedFolderID = sID
-            } else {
+            } else if !track.isJellyfinItem && track.metadataSource != .server {
                 let trackPath = track.url.standardizedFileURL.path
                 matchedFolderID = folderLookups.first(where: { trackPath.hasPrefix($0.path) })?.id
+            } else {
+                matchedFolderID = nil
             }
 
             if let fID = matchedFolderID, var cur = statsMap[fID] {
@@ -913,9 +1072,13 @@ public final class LibraryStore {
         return result
     }
 
-    /// Rebuilds cached statistics for all linked folders in a single O(N) pass.
+    /// Rebuilds cached statistics for all linked folders and servers in a single O(N) pass.
     public func rebuildFolderStats() {
-        self.cachedFolderStats = Self.computeFolderStats(tracks: self.tracks, linkedFolders: self.settings.linkedFolders)
+        self.cachedFolderStats = Self.computeFolderStats(
+            tracks: self.tracks,
+            linkedFolders: self.settings.linkedFolders,
+            jellyfinServers: self.settings.jellyfinServers
+        )
     }
 
     /// Adds a new music directory, creates a security bookmark, and initiates indexing for that folder.
@@ -983,7 +1146,7 @@ public final class LibraryStore {
         settings.linkedFolderName = settings.linkedFolders.first?.name
 
         // Remove tracks belonging to this folder
-        self.tracks.removeAll { self.folder(for: $0)?.id == id }
+        self.tracks.removeAll { $0.folderID == id || (!($0.isJellyfinItem || $0.metadataSource == .server) && self.folder(for: $0)?.id == id) }
         rebuildAlbumsAndArtists()
 
         self.settings.totalScannedFiles = self.tracks.count
@@ -1017,20 +1180,182 @@ public final class LibraryStore {
         AppLogger.library.info("Unlinked folder [\(id)] successfully.")
     }
 
-    /// Rescans all linked directories.
-    public func rescanCurrentDirectory() async {
-        guard !isScanning else { return }
-        if settings.linkedFolders.isEmpty {
-            guard let url = SecurityScopedBookmark.shared.resolveAndAccessBookmark() else {
-                AppLogger.library.warning("No active security-scoped directory available to rescan.")
-                return
+    /// Replaces or adds tracks from a Jellyfin server sync.
+    public func updateJellyfinTracks(_ serverTracks: [Track], for serverID: UUID) async {
+        let removedIDs = self.settings.removedJellyfinItemIDs
+        let filteredServerTracks = removedIDs.isEmpty ? serverTracks : serverTracks.filter { track in
+            let itemId = track.jellyfinItemId ?? JellyfinPlaybackReporter.extractItemId(from: track)
+            if let id = itemId, removedIDs.contains(id) {
+                return false
             }
-            await addAndScanFolder(url: url)
+            return true
+        }
+        let freshOtherTracks = self.tracks.filter { $0.folderID != serverID }
+        let combinedTracks = freshOtherTracks + filteredServerTracks
+
+        let joined = self.settings.joinedArtists
+        let manualCollab = self.settings.manualCollaborativeAlbumIDs
+        let origAlbumArtists = self.settings.originalAlbumArtistsByTrackID
+        let goodDiffs = self.verifiedGoodDiffs
+        let metaCache = self.downloadedMetadataCache
+        let scanMethod = self.settings.libraryScanMethod
+
+        let albumsRes = await Task.detached(priority: .userInitiated) {
+            Self.buildAlbumsAndArtists(
+                tracks: combinedTracks,
+                joinedArtists: joined,
+                manualCollaborativeAlbumIDs: manualCollab,
+                originalAlbumArtistsByTrackID: origAlbumArtists,
+                verifiedGoodDiffs: goodDiffs,
+                downloadedMetadataCache: metaCache,
+                scanMethod: scanMethod
+            )
+        }.value
+
+        self.tracks = albumsRes.tracks
+        self.albums = albumsRes.albums
+        self.artists = albumsRes.artists
+        self.artistLookupIndex = albumsRes.artistLookupIndex
+        self.invalidateSortedCaches()
+        self.cachedFolderStats = Self.computeFolderStats(
+            tracks: self.tracks,
+            linkedFolders: self.settings.linkedFolders,
+            jellyfinServers: self.settings.jellyfinServers
+        )
+        self.settings.totalScannedFiles = self.tracks.count
+
+        saveLibrary()
+        JellyfinArtworkRegistry.shared.populateFromTracks(self.tracks, servers: self.settings.jellyfinServers)
+
+        let currentTracks = self.tracks
+        let currentAlbums = self.albums
+        let currentArtists = self.artists
+        let currentPlaylists = self.playlists
+        let currentJoined = self.settings.joinedArtists
+        Task.detached(priority: .userInitiated) {
+            await SearchEngine.shared.updateIndex(
+                tracks: currentTracks,
+                albums: currentAlbums,
+                artists: currentArtists,
+                playlists: currentPlaylists,
+                joinedArtists: currentJoined
+            )
+        }
+    }
+
+    /// Removes all tracks for a linked Jellyfin server and updates settings and storage.
+    public func removeJellyfinServer(id: UUID) {
+        settings.jellyfinServers.removeAll { $0.id == id }
+        jellyfinServerErrors.removeValue(forKey: id)
+        jellyfinLastSyncDates.removeValue(forKey: id)
+        saveJellyfinLastSyncDates()
+        saveSettings()
+        self.tracks.removeAll { $0.folderID == id }
+        rebuildAlbumsAndArtists()
+        saveLibrary()
+    }
+
+    /// Syncs tracks from a Jellyfin server, updating scan progress and surfacing any errors.
+    public func syncJellyfinServer(_ serverLink: JellyfinServerLink) async {
+        self.isScanning = true
+        self.currentlyScanningFolderID = serverLink.id
+        self.scanProgress = 0.0
+        self.scanStatusText = "SYNCING JELLYFIN (\(serverLink.serverName.uppercased()))..."
+
+        #if os(macOS)
+        let activity = ProcessInfo.processInfo.beginActivity(
+            options: [.userInitiated, .idleSystemSleepDisabled, .suddenTerminationDisabled],
+            reason: "Syncing Jellyfin - \(serverLink.serverName)"
+        )
+        #elseif os(iOS)
+        var bgTaskID: UIBackgroundTaskIdentifier = .invalid
+        bgTaskID = UIApplication.shared.beginBackgroundTask(withName: "JellyfinSync") {
+            UIApplication.shared.endBackgroundTask(bgTaskID)
+            bgTaskID = .invalid
+        }
+        #endif
+
+        defer {
+            #if os(macOS)
+            ProcessInfo.processInfo.endActivity(activity)
+            #elseif os(iOS)
+            if bgTaskID != .invalid {
+                UIApplication.shared.endBackgroundTask(bgTaskID)
+                bgTaskID = .invalid
+            }
+            #endif
+            self.isScanning = false
+            self.currentlyScanningFolderID = nil
+            self.scanProgress = 1.0
+            self.scanStatusText = ""
+        }
+
+        guard let token = JellyfinKeychain.getToken(forServerId: serverLink.serverId, userId: serverLink.userId) else {
+            let errorMsg = "TOKEN MISSING: PLEASE SIGN IN AGAIN"
+            self.jellyfinServerErrors[serverLink.id] = errorMsg
+            AppLogger.library.error("Jellyfin sync failed: token missing for server \(serverLink.serverName)")
             return
         }
 
-        for folder in settings.linkedFolders {
-            await rescanFolder(id: folder.id)
+        do {
+            let existingServerTracks = self.tracks.filter { $0.folderID == serverLink.id }
+            let lastSync = self.jellyfinLastSyncDates[serverLink.id]
+            nonisolated(unsafe) var lastUIUpdateTime = Date.distantPast
+
+            let syncStartTime = Date()
+            let serverTracks = try await JellyfinSyncService.shared.fetchAudioTracks(
+                for: serverLink,
+                token: token,
+                existingTracks: existingServerTracks,
+                lastSyncDate: lastSync,
+                statusHandler: { [weak self] status in
+                    Task { @MainActor [weak self] in
+                        guard let self = self else { return }
+                        self.scanStatusText = "SYNCING JELLYFIN (\(serverLink.serverName.uppercased())): \(status)"
+                    }
+                },
+                progressHandler: { [weak self] current, total in
+                    let now = Date()
+                    guard now.timeIntervalSince(lastUIUpdateTime) >= 0.25 || current == total else { return }
+                    lastUIUpdateTime = now
+                    Task { @MainActor [weak self] in
+                        guard let self = self else { return }
+                        if total > 0 {
+                            self.scanProgress = Double(current) / Double(total)
+                            self.scanStatusText = "SYNCING JELLYFIN (\(serverLink.serverName.uppercased())): \(current)/\(total)"
+                        }
+                    }
+                }
+            )
+
+            self.jellyfinServerErrors.removeValue(forKey: serverLink.id)
+            self.jellyfinLastSyncDates[serverLink.id] = syncStartTime
+            self.saveJellyfinLastSyncDates()
+            await self.updateJellyfinTracks(serverTracks, for: serverLink.id)
+            AppLogger.library.info("Jellyfin sync succeeded: \(serverTracks.count) tracks from \(serverLink.serverName)")
+        } catch {
+            let mappedErr = JellyfinClient.mapNetworkError(error)
+            let errorMsg = mappedErr.localizedDescription.uppercased()
+            self.jellyfinServerErrors[serverLink.id] = errorMsg
+            AppLogger.library.error("Jellyfin sync failed: \(errorMsg)")
+        }
+    }
+
+    /// Rescans all linked directories and Jellyfin servers.
+    public func rescanCurrentDirectory() async {
+        guard !isScanning else { return }
+        if !settings.linkedFolders.isEmpty {
+            for folder in settings.linkedFolders {
+                await rescanFolder(id: folder.id)
+            }
+        } else if let url = SecurityScopedBookmark.shared.resolveAndAccessBookmark() {
+            await addAndScanFolder(url: url)
+        } else {
+            AppLogger.library.warning("No active security-scoped directory available to rescan.")
+        }
+
+        for server in settings.jellyfinServers {
+            await syncJellyfinServer(server)
         }
     }
 
@@ -1102,6 +1427,7 @@ public final class LibraryStore {
         let goodDiffs = self.verifiedGoodDiffs
         let currentTracks = self.tracks
         let currentLinkedFolders = self.settings.linkedFolders
+        let currentJellyfinServers = self.settings.jellyfinServers
 
         let folderCanonical = url.standardizedFileURL.path
         let folderPathCanonical = (folderPath.map { URL(fileURLWithPath: $0).standardizedFileURL.path }) ?? folderCanonical
@@ -1213,7 +1539,11 @@ public final class LibraryStore {
                 downloadedMetadataCache: metadataCache
             )
 
-            let stats = Self.computeFolderStats(tracks: albumsRes.tracks, linkedFolders: currentLinkedFolders)
+            let stats = Self.computeFolderStats(
+                tracks: albumsRes.tracks,
+                linkedFolders: currentLinkedFolders,
+                jellyfinServers: currentJellyfinServers
+            )
 
             return (
                 allTracks: albumsRes.tracks,
@@ -1223,11 +1553,15 @@ public final class LibraryStore {
             )
         }.value
 
-        self.tracks = scanResult.allTracks
-        self.albums = scanResult.albumsResult.albums
-        self.artists = scanResult.albumsResult.artists
-        self.artistLookupIndex = scanResult.albumsResult.artistLookupIndex
-        self.cachedFolderStats = scanResult.folderStats
+        // Re-read self.tracks to ensure concurrent Jellyfin sync or other folder scans are preserved
+        let freshOtherTracks = self.tracks.filter { !isFolderTrack($0) }
+        self.tracks = freshOtherTracks + scanResult.filteredTracks
+        self.rebuildAlbumsAndArtists()
+        self.cachedFolderStats = Self.computeFolderStats(
+            tracks: self.tracks,
+            linkedFolders: self.settings.linkedFolders,
+            jellyfinServers: self.settings.jellyfinServers
+        )
         self.invalidateSortedCaches()
 
         // Cache baseline metadata for newly indexed tracks non-blockingly
@@ -1633,7 +1967,8 @@ public final class LibraryStore {
         manualCollaborativeAlbumIDs: Set<String>,
         originalAlbumArtistsByTrackID: [String: String],
         verifiedGoodDiffs: [MetadataDiff],
-        downloadedMetadataCache: PersistentDownloadedMetadataCache
+        downloadedMetadataCache: PersistentDownloadedMetadataCache,
+        scanMethod: LibraryScanMethod = .id3Tags
     ) -> AlbumsAndArtistsResult {
         var workingTracks = tracks
         let trackIndexByID: [UUID: Int] = Dictionary(workingTracks.enumerated().map { ($0.element.id, $0.offset) }, uniquingKeysWith: { first, _ in first })
@@ -1644,6 +1979,20 @@ public final class LibraryStore {
         var standaloneSingleTracks: [Track] = []
 
         for track in tracks {
+            if scanMethod == .folderHierarchy, let relPath = track.relativePath {
+                let parsed = FolderPathMetadataParser.parse(relativePath: relPath)
+                let folderKey = (track.folderID?.uuidString ?? "") + "_" + parsed.albumDirectory
+                let item = TrackClusterItem(
+                    track: track,
+                    canonicalArtists: Set(ArtistParser.parseArtists(from: track.artist).map { ArtistParser.canonicalArtistKey($0) }),
+                    canonicalAlbumArtist: track.albumArtist.flatMap { ArtistParser.canonicalArtistKey($0) },
+                    cleanFolder: folderKey,
+                    artworkKey: track.artworkKey
+                )
+                albumTitleBuckets[folderKey, default: []].append(item)
+                continue
+            }
+
             let trimmedAlbum = track.album.trimmingCharacters(in: .whitespacesAndNewlines)
 
             if trimmedAlbum.isEmpty || trimmedAlbum.lowercased() == "unknown album" || trimmedAlbum.lowercased() == "unknown" {
@@ -1652,11 +2001,17 @@ public final class LibraryStore {
             }
 
             let baseNormAlbum = normalizeAlbumTitleForClustering(trimmedAlbum)
+            let cleanFolder: String
+            if track.isJellyfinItem || track.metadataSource == .server {
+                cleanFolder = "jf_album_\(track.jellyfinAlbumId ?? track.jellyfinItemId ?? "")"
+            } else {
+                cleanFolder = cleanFolderForTrack(url: track.url)
+            }
             let item = TrackClusterItem(
                 track: track,
                 canonicalArtists: Set(ArtistParser.parseArtists(from: track.artist).map { ArtistParser.canonicalArtistKey($0) }),
                 canonicalAlbumArtist: track.albumArtist.flatMap { ArtistParser.canonicalArtistKey($0) },
-                cleanFolder: cleanFolderForTrack(url: track.url),
+                cleanFolder: cleanFolder,
                 artworkKey: track.artworkKey
             )
             albumTitleBuckets[baseNormAlbum, default: []].append(item)
@@ -1819,13 +2174,31 @@ public final class LibraryStore {
                 return t1.title.localizedCaseInsensitiveCompare(t2.title) == .orderedAscending
             }
 
+            let groupKey: String? = {
+                if first.isJellyfinItem || first.metadataSource == .server {
+                    if let albumId = first.jellyfinAlbumId, !albumId.isEmpty {
+                        return "jf_album_\(albumId)"
+                    }
+                    if let itemId = first.jellyfinItemId, !itemId.isEmpty {
+                        return "jf_album_\(itemId)"
+                    }
+                    return "jf_album_\(first.folderID?.uuidString ?? "")_\(first.album)"
+                }
+                if scanMethod == .folderHierarchy, let firstRel = first.relativePath {
+                    let parsed = FolderPathMetadataParser.parse(relativePath: firstRel)
+                    return (first.folderID?.uuidString ?? "") + "_" + parsed.albumDirectory
+                }
+                return nil
+            }()
+
             let album = Album(
                 title: albumTitle,
                 artist: displayArtist.isEmpty ? "Unknown Artist" : displayArtist,
                 year: consensusYear,
                 genre: first.genre,
                 artworkKey: albumArtworkKey,
-                tracks: sortedAlbumTracks
+                tracks: sortedAlbumTracks,
+                groupKey: groupKey
             )
             newAlbums.append(album)
         }
@@ -2047,13 +2420,41 @@ public final class LibraryStore {
             manualCollaborativeAlbumIDs: self.settings.manualCollaborativeAlbumIDs,
             originalAlbumArtistsByTrackID: self.settings.originalAlbumArtistsByTrackID,
             verifiedGoodDiffs: self.verifiedGoodDiffs,
-            downloadedMetadataCache: self.downloadedMetadataCache
+            downloadedMetadataCache: self.downloadedMetadataCache,
+            scanMethod: self.settings.libraryScanMethod
         )
         self.tracks = res.tracks
         self.albums = res.albums
         self.artists = res.artists
         self.artistLookupIndex = res.artistLookupIndex
         invalidateSortedCaches()
+        warmSearchIndex()
+    }
+
+    /// Asynchronously warms and refreshes the search engine index in the background with debouncing.
+    public func warmSearchIndex() {
+        warmSearchIndexDebounceTask?.cancel()
+        let currentTracks = self.tracks
+        let currentAlbums = self.albums
+        let currentArtists = self.artists
+        let currentPlaylists = self.playlists
+        let currentJoined = self.settings.joinedArtists
+        guard !currentTracks.isEmpty else { return }
+
+        warmSearchIndexDebounceTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 400_000_000)
+            guard !Task.isCancelled else { return }
+
+            Task.detached(priority: .utility) {
+                await SearchEngine.shared.updateIndex(
+                    tracks: currentTracks,
+                    albums: currentAlbums,
+                    artists: currentArtists,
+                    playlists: currentPlaylists,
+                    joinedArtists: currentJoined
+                )
+            }
+        }
     }
 
     // Extract primary artist name
@@ -2241,6 +2642,16 @@ public final class LibraryStore {
         var deletedIDs = Set<UUID>()
 
         for track in tracksToDelete {
+            if track.isJellyfinItem || track.metadataSource == .server {
+                if let itemId = track.jellyfinItemId ?? JellyfinPlaybackReporter.extractItemId(from: track) {
+                    self.settings.removedJellyfinItemIDs.insert(itemId)
+                }
+                JellyfinDownloadManager.shared.deleteDownload(trackId: track.id)
+                deletedIDs.insert(track.id)
+                successCount += 1
+                continue
+            }
+
             // File system location for file url
             let fileURL = track.url
             // Deleted
@@ -2276,7 +2687,9 @@ public final class LibraryStore {
 
         if !deletedIDs.isEmpty {
             for track in tracksToDelete {
-                self.settings.removedTrackPaths.insert(track.url.standardizedFileURL.path)
+                if !track.isJellyfinItem && track.metadataSource != .server {
+                    self.settings.removedTrackPaths.insert(track.url.standardizedFileURL.path)
+                }
             }
             self.tracks.removeAll { deletedIDs.contains($0.id) }
             for i in 0..<playlists.count {
@@ -2300,10 +2713,17 @@ public final class LibraryStore {
         return res.successCount > 0
     }
 
-    /// Removes a track from the app's library and hides it, while leaving the audio file intact on disk.
+    /// Removes a track from the app's library and hides it, while leaving the audio file intact on disk or server.
     public func removeTrackFromLibrary(track: Track) {
-        let path = track.url.standardizedFileURL.path
-        self.settings.removedTrackPaths.insert(path)
+        if track.isJellyfinItem || track.metadataSource == .server {
+            if let itemId = track.jellyfinItemId ?? JellyfinPlaybackReporter.extractItemId(from: track) {
+                self.settings.removedJellyfinItemIDs.insert(itemId)
+            }
+            JellyfinDownloadManager.shared.deleteDownload(trackId: track.id)
+        } else {
+            let path = track.url.standardizedFileURL.path
+            self.settings.removedTrackPaths.insert(path)
+        }
         self.tracks.removeAll { $0.id == track.id }
         for i in 0..<playlists.count {
             playlists[i].trackIDs.removeAll { $0 == track.id }
@@ -2312,6 +2732,31 @@ public final class LibraryStore {
         Task {
             await recalculateDuplicates()
         }
+        self.settings.totalScannedFiles = self.tracks.count
+        saveLibrary()
+        savePlaylists()
+        saveSettings()
+    }
+
+    /// Hides a track from the library and persists its exclusion so it does not reappear on scans.
+    public func hideTrack(_ track: Track) {
+        removeTrackFromLibrary(track: track)
+    }
+
+    /// Permanently deletes a track from the remote Jellyfin server, removes local downloads, and purges it from the library.
+    public func deleteJellyfinTrack(_ track: Track) async throws {
+        if let server = settings.jellyfinServers.first(where: { $0.id == track.folderID }) ?? settings.jellyfinServers.first,
+           let itemId = track.jellyfinItemId ?? JellyfinPlaybackReporter.extractItemId(from: track) {
+            try await JellyfinClient.shared.deleteItem(itemId: itemId, serverLink: server)
+            self.settings.removedJellyfinItemIDs.insert(itemId)
+        }
+        JellyfinDownloadManager.shared.deleteDownload(trackId: track.id)
+        self.tracks.removeAll { $0.id == track.id }
+        for i in 0..<playlists.count {
+            playlists[i].trackIDs.removeAll { $0 == track.id }
+        }
+        rebuildAlbumsAndArtists()
+        await recalculateDuplicates()
         self.settings.totalScannedFiles = self.tracks.count
         saveLibrary()
         savePlaylists()
@@ -2791,7 +3236,9 @@ rebuildAlbumsAndArtists()
             tracks[trackIndex] = updatedTrack
             processedTrackIDs.insert(existingTrack.id)
 
-            fileTaggingQueue.append((url: existingTrack.url, track: updatedTrack, artworkData: artworkData))
+            if existingTrack.canReadLocalBytes && existingTrack.url.isFileURL && !existingTrack.isJellyfinItem {
+                fileTaggingQueue.append((url: existingTrack.url, track: updatedTrack, artworkData: artworkData))
+            }
 
             let synthesizedMetadata = OnlineTrackMetadata(
                 id: cut.id,
@@ -2896,7 +3343,9 @@ rebuildAlbumsAndArtists()
                         lyrics: existingTrack.lyrics,
                         isAlternate: true
                     )
-                    fileTaggingQueue.append((url: existingTrack.url, track: updatedTrack, artworkData: artworkData))
+                    if existingTrack.canReadLocalBytes && existingTrack.url.isFileURL && !existingTrack.isJellyfinItem {
+                        fileTaggingQueue.append((url: existingTrack.url, track: updatedTrack, artworkData: artworkData))
+                    }
 
                 case .moveToAlbum(
                     let targetAlbumTitle,
@@ -2970,7 +3419,9 @@ rebuildAlbumsAndArtists()
                         lyrics: existingTrack.lyrics,
                         isAlternate: isAlt
                     )
-                    fileTaggingQueue.append((url: existingTrack.url, track: updatedTrack, artworkData: targetArtworkData))
+                    if existingTrack.canReadLocalBytes && existingTrack.url.isFileURL && !existingTrack.isJellyfinItem {
+                        fileTaggingQueue.append((url: existingTrack.url, track: updatedTrack, artworkData: targetArtworkData))
+                    }
 
                 case .keepInMain:
                     let rawAlbum = onlineAlbum.title
@@ -3014,7 +3465,9 @@ rebuildAlbumsAndArtists()
                         lyrics: existingTrack.lyrics,
                         isAlternate: false
                     )
-                    fileTaggingQueue.append((url: existingTrack.url, track: updatedTrack, artworkData: artworkData))
+                    if existingTrack.canReadLocalBytes && existingTrack.url.isFileURL && !existingTrack.isJellyfinItem {
+                        fileTaggingQueue.append((url: existingTrack.url, track: updatedTrack, artworkData: artworkData))
+                    }
                 }
 
                 tracks[trackIndex] = updatedTrack
@@ -3360,7 +3813,9 @@ rebuildAlbumsAndArtists()
             tracks[trackIndex] = updatedTrack
             processedTrackIDs.insert(diff.localTrack.id)
             enrichedCount += 1
-            fileTaggingQueue.append((url: existingTrack.url, track: updatedTrack, artworkKey: artworkKeyForTagging))
+            if existingTrack.canReadLocalBytes && existingTrack.url.isFileURL && !existingTrack.isJellyfinItem {
+                fileTaggingQueue.append((url: existingTrack.url, track: updatedTrack, artworkKey: artworkKeyForTagging))
+            }
 
             // In-memory cache update only (autoSave: false)
             self.cacheDownloadedMetadata(
@@ -4336,6 +4791,8 @@ rebuildAlbumsAndArtists()
     private var unmatchedFileURL: URL { storageDirectoryURL.appendingPathComponent("unmatched_tracks.json") }
     // File path location for persistent downloaded metadata cache
     private var downloadedMetadataCacheFileURL: URL { storageDirectoryURL.appendingPathComponent("downloaded_metadata_cache.json") }
+    // File path location for multi-mode organization state (METADATA vs FOLDER)
+    private var organizationModesFileURL: URL { storageDirectoryURL.appendingPathComponent("organization_modes.json") }
 
     // Fast-boot binary PropertyList cache URLs (up to 10x faster deserialization than JSON)
     private var libraryBinaryCacheURL: URL { storageDirectoryURL.appendingPathComponent("library.cache") }
@@ -4857,8 +5314,12 @@ rebuildAlbumsAndArtists()
         }
     }
 
-    // Save library tracks, albums, and artists asynchronously
+    // Save library tracks, albums, and artists asynchronously with generation tracking & debouncing
     public func saveLibrary() {
+        guard !isInitialLoading else { return }
+
+        saveLibraryDebounceTask?.cancel()
+
         let tracksToSave = self.tracks
         let albumsToSave = self.albums
         let artistsToSave = self.artists
@@ -4872,20 +5333,54 @@ rebuildAlbumsAndArtists()
 
         let previewTracks = Array(tracksToSave.prefix(150))
 
-        Task.detached(priority: .utility) {
-            Self.saveFast(tracksToSave, to: trackBinUrl, jsonURL: trackUrl)
-            Self.saveFast(albumsToSave, to: albumBinUrl, jsonURL: albumUrl)
-            Self.saveFast(artistsToSave, to: artistBinUrl, jsonURL: artistUrl)
+        let genTrack = bumpGeneration(for: trackUrl)
+        let genTrackBin = bumpGeneration(for: trackBinUrl)
+        let genPreviewBin = bumpGeneration(for: previewBinUrl)
+        let genAlbum = bumpGeneration(for: albumUrl)
+        let genAlbumBin = bumpGeneration(for: albumBinUrl)
+        let genArtist = bumpGeneration(for: artistUrl)
+        let genArtistBin = bumpGeneration(for: artistBinUrl)
 
-            let plist = PropertyListEncoder()
-            plist.outputFormat = .binary
-            if let binData = try? plist.encode(previewTracks) {
-                try? binData.write(to: previewBinUrl, options: .atomic)
+        saveLibraryDebounceTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 400_000_000)
+            guard !Task.isCancelled else { return }
+
+            Task.detached(priority: .utility) {
+                var items: [(data: Data, url: URL, generation: Int)] = []
+
+                if let trackJson = try? JSONEncoder().encode(tracksToSave) {
+                    items.append((trackJson, trackUrl, genTrack))
+                }
+                let plistEncoder = PropertyListEncoder()
+                plistEncoder.outputFormat = .binary
+                if let trackBin = try? plistEncoder.encode(tracksToSave) {
+                    items.append((trackBin, trackBinUrl, genTrackBin))
+                }
+                if let binData = try? plistEncoder.encode(previewTracks) {
+                    items.append((binData, previewBinUrl, genPreviewBin))
+                }
+
+                if let albumJson = try? JSONEncoder().encode(albumsToSave) {
+                    items.append((albumJson, albumUrl, genAlbum))
+                }
+                if let albumBin = try? plistEncoder.encode(albumsToSave) {
+                    items.append((albumBin, albumBinUrl, genAlbumBin))
+                }
+
+                if let artistJson = try? JSONEncoder().encode(artistsToSave) {
+                    items.append((artistJson, artistUrl, genArtist))
+                }
+                if let artistBin = try? plistEncoder.encode(artistsToSave) {
+                    items.append((artistBin, artistBinUrl, genArtistBin))
+                }
+
+                await PersistenceWriter.shared.writeBatch(items)
             }
         }
     }
 
-    /// Writes new tag metadata to the underlying audio file on disk, updates memory and cache records, and persists changes.
+    /// Writes new tag metadata to the underlying audio file on disk (if local in METADATA mode),
+    /// stores mode overrides, updates memory and cache records, and persists changes.
     public func updateTrackMetadata(
         for trackID: UUID,
         title: String,
@@ -4904,23 +5399,42 @@ rebuildAlbumsAndArtists()
         guard let index = tracks.firstIndex(where: { $0.id == trackID }) else { return false }
         let existingTrack = tracks[index]
 
-        let success = await AudioFileMetadataWriter.shared.writeMetadata(
-            to: existingTrack.url,
+        // 1. Record override for current organization mode
+        let currentMode = settings.libraryScanMethod
+        var modeState = organizationModesContainer.state(for: currentMode)
+        let override = TrackMetadataOverride(
             title: title,
             artist: artist,
             album: album,
             albumArtist: albumArtist,
             composer: composer,
-            performer: performer,
-            year: year,
             genre: genre,
+            year: year,
             trackNumber: trackNumber,
-            totalTracks: totalTracks,
-            discNumber: discNumber,
-            discTotal: discTotal
+            discNumber: discNumber
         )
+        modeState.overrides[trackID] = override
+        organizationModesContainer.update(state: modeState, for: currentMode)
+        saveOrganizationModes()
 
-        guard success else { return false }
+        // 2. Write to disk only if file is local and we are in METADATA mode
+        if existingTrack.canReadLocalBytes && existingTrack.url.isFileURL && !existingTrack.isJellyfinItem && settings.libraryScanMethod == .id3Tags {
+            _ = await AudioFileMetadataWriter.shared.writeMetadata(
+                to: existingTrack.url,
+                title: title,
+                artist: artist,
+                album: album,
+                albumArtist: albumArtist,
+                composer: composer,
+                performer: performer,
+                year: year,
+                genre: genre,
+                trackNumber: trackNumber,
+                totalTracks: totalTracks,
+                discNumber: discNumber,
+                discTotal: discTotal
+            )
+        }
 
         let updatedTrack = existingTrack.withUpdatedTags(
             title: title,
@@ -4964,6 +5478,240 @@ rebuildAlbumsAndArtists()
         return true
     }
 
+    /// Returns true if manual metadata edits exist for a specific track in the active organization mode.
+    public func hasOverride(for trackID: UUID) -> Bool {
+        organizationModesContainer.state(for: settings.libraryScanMethod).overrides[trackID] != nil
+    }
+
+    /// Returns true if any tracks in the given album have manual metadata edits in the active organization mode.
+    public func hasOverrides(forAlbum album: Album) -> Bool {
+        let overrides = organizationModesContainer.state(for: settings.libraryScanMethod).overrides
+        return album.trackIDs.contains { overrides[$0] != nil }
+    }
+
+    /// Resets manual metadata edits for a specific track, restoring its original organized metadata.
+    public func resetEdits(for trackID: UUID) {
+        let currentMode = settings.libraryScanMethod
+        var modeState = organizationModesContainer.state(for: currentMode)
+        modeState.overrides.removeValue(forKey: trackID)
+        organizationModesContainer.update(state: modeState, for: currentMode)
+        saveOrganizationModes()
+
+        if let idx = tracks.firstIndex(where: { $0.id == trackID }) {
+            tracks[idx] = LibraryOrganizer.organize(track: tracks[idx], mode: currentMode, override: nil)
+            rebuildAlbumsAndArtists()
+            saveLibrary()
+        }
+    }
+
+    /// Resets manual metadata edits for all tracks in an album, restoring their original organized metadata.
+    public func resetEdits(forAlbum album: Album) {
+        let currentMode = settings.libraryScanMethod
+        var modeState = organizationModesContainer.state(for: currentMode)
+        var changed = false
+
+        for trackID in album.trackIDs {
+            if modeState.overrides.removeValue(forKey: trackID) != nil {
+                changed = true
+                if let idx = tracks.firstIndex(where: { $0.id == trackID }) {
+                    tracks[idx] = LibraryOrganizer.organize(track: tracks[idx], mode: currentMode, override: nil)
+                }
+            }
+        }
+
+        if changed {
+            organizationModesContainer.update(state: modeState, for: currentMode)
+            saveOrganizationModes()
+            rebuildAlbumsAndArtists()
+            saveLibrary()
+        }
+    }
+
+    /// Switches library organization mode (METADATA vs FOLDER) without disk rescan.
+    public func setLibraryOrganization(_ method: LibraryScanMethod) {
+        guard settings.libraryScanMethod != method else { return }
+
+        // 1. Snapshot current mode state
+        let currentMode = settings.libraryScanMethod
+        var currentModeState = organizationModesContainer.state(for: currentMode)
+        currentModeState.pinnedItemIDs = self.pinnedItemIDs
+        currentModeState.recentAlbumIDs = self.recentAlbumIDs
+        organizationModesContainer.update(state: currentModeState, for: currentMode)
+
+        // 2. Switch setting
+        settings.libraryScanMethod = method
+        saveSettings()
+
+        // 3. Restore target mode state
+        let targetState = organizationModesContainer.state(for: method)
+        self.pinnedItemIDs = targetState.pinnedItemIDs
+        self.pinnedAlbumIDs = Set(targetState.pinnedItemIDs.filter { $0.type == PinnedItemType.album }.map { $0.targetID })
+        self.recentAlbumIDs = targetState.recentAlbumIDs
+
+        // 4. In-memory re-organization of tracks without rescanning disk
+        let mode: LibraryScanMethod = method
+        self.tracks = LibraryOrganizer.organizeBatch(tracks: self.tracks, mode: mode, overrides: targetState.overrides)
+
+        // 5. Rebuild albums and artists
+        rebuildAlbumsAndArtists()
+
+        // 6. Persist mode state and collections
+        saveOrganizationModes()
+        saveLibrary()
+        savePins()
+        saveRecentAlbums()
+    }
+
+    /// Persists multi-mode organization state asynchronously
+    public func saveOrganizationModes() {
+        let container = self.organizationModesContainer
+        let url = self.organizationModesFileURL
+        let gen = bumpGeneration(for: url)
+        Task.detached(priority: .utility) {
+            if let data = try? JSONEncoder().encode(container) {
+                await PersistenceWriter.shared.write(data: data, to: url, generation: gen)
+            }
+        }
+    }
+
+    /// Upgrades in-memory placeholder track after on-demand cloud download finishes.
+    public func upgradeTrackAfterDownload(trackID: UUID, fileURL: URL) {
+        guard let idx = tracks.firstIndex(where: { $0.id == trackID }) else { return }
+        let current = tracks[idx]
+
+        Task.detached(priority: .utility) { [weak self] in
+            let scanner = AudioScannerService()
+            guard let scanned = await scanner.parseAudioTrack(at: fileURL, folderID: current.folderID) else { return }
+
+            await MainActor.run { [weak self] in
+                guard let self = self, let currentIndex = self.tracks.firstIndex(where: { $0.id == trackID }) else { return }
+                let cur = self.tracks[currentIndex]
+
+                let snapshot = TagSnapshot(
+                    title: scanned.title,
+                    artist: scanned.artist,
+                    album: scanned.album,
+                    albumArtist: scanned.albumArtist,
+                    year: scanned.year,
+                    trackNumber: scanned.trackNumber,
+                    discNumber: scanned.discNumber
+                )
+
+                let isTagsMode = self.settings.libraryScanMethod == .id3Tags
+                let upgraded = cur
+                    .withOrganizedMetadata(
+                        title: isTagsMode ? scanned.title : cur.title,
+                        artist: isTagsMode ? scanned.artist : cur.artist,
+                        album: isTagsMode ? scanned.album : cur.album,
+                        albumArtist: isTagsMode ? scanned.albumArtist : cur.albumArtist,
+                        year: scanned.year ?? cur.year,
+                        trackNumber: scanned.trackNumber ?? cur.trackNumber,
+                        discNumber: scanned.discNumber ?? cur.discNumber
+                    )
+                    .withUpdatedTags(
+                        metadataSource: .embeddedTags,
+                        tagSnapshot: snapshot
+                    )
+                    .withArtworkKey(scanned.artworkKey ?? cur.artworkKey ?? "")
+
+                self.tracks[currentIndex] = upgraded
+                self.rebuildAlbumsAndArtists()
+                self.saveLibrary()
+            }
+        }
+    }
+
+    /// One-time deterministic Track ID scheme migration from sandbox path hash (v1) to relative path UUID (v2).
+    public func migrateTrackIDsToV2() {
+        guard settings.trackIDSchemeVersion < 2 else { return }
+        AppLogger.storage.info("Starting one-time Track ID Scheme v2 migration...")
+
+        var oldToNewIDMap: [UUID: UUID] = [:]
+        var newTracks: [Track] = []
+        var seenNewIDs = Set<UUID>()
+
+        for track in self.tracks {
+            if track.isJellyfinItem || track.metadataSource == .server {
+                if !seenNewIDs.contains(track.id) {
+                    seenNewIDs.insert(track.id)
+                    newTracks.append(track)
+                }
+                continue
+            }
+
+            let relativePath = track.relativePath ?? {
+                if let folderID = track.folderID,
+                   let folderURL = SecurityScopedBookmark.shared.url(for: folderID) {
+                    return TrackIdentity.computeRelativePath(fileURL: track.url, folderURL: folderURL)
+                }
+                return track.url.lastPathComponent
+            }()
+
+            let newID = TrackIdentity.localTrackID(folderID: track.folderID, relativePath: relativePath)
+            if seenNewIDs.contains(newID) {
+                // Collision: keep first entry
+                continue
+            }
+            seenNewIDs.insert(newID)
+            oldToNewIDMap[track.id] = newID
+
+            let migratedTrack = track.withIdentity(
+                id: newID,
+                relativePath: relativePath,
+                metadataSource: track.metadataSource ?? .embeddedTags,
+                tagSnapshot: track.tagSnapshot
+            )
+            newTracks.append(migratedTrack)
+        }
+
+        self.tracks = newTracks
+
+        // Remap playlists
+        for i in 0..<self.playlists.count {
+            self.playlists[i].trackIDs = self.playlists[i].trackIDs.map { oldID in
+                oldToNewIDMap[oldID] ?? oldID
+            }
+        }
+
+        // Remap play counts
+        var newPlayCounts: [UUID: Int] = [:]
+        for (oldID, count) in self.playCounts {
+            let targetID = oldToNewIDMap[oldID] ?? oldID
+            newPlayCounts[targetID] = count
+        }
+        self.playCounts = newPlayCounts
+
+        // Remap playback positions
+        var newPositions: [UUID: TimeInterval] = [:]
+        for (oldID, pos) in self.playbackPositions {
+            let targetID = oldToNewIDMap[oldID] ?? oldID
+            newPositions[targetID] = pos
+        }
+        self.playbackPositions = newPositions
+
+        // Remap recent search tracks
+        self.recentSearchPlayedTrackIDs = self.recentSearchPlayedTrackIDs.map { oldID in
+            oldToNewIDMap[oldID] ?? oldID
+        }
+
+        // Remap EqualizerManager.perTrackEQMap
+        EqualizerManager.shared.remapTrackIDs(using: oldToNewIDMap)
+
+        // Remap active player queues
+        AudioPlayerService.shared?.remapTrackIDs(using: oldToNewIDMap)
+
+        self.settings.trackIDSchemeVersion = 2
+        saveSettings()
+        rebuildAlbumsAndArtists()
+        saveLibrary()
+        savePlaylists()
+        savePlayCounts()
+        savePlaybackPositions()
+        saveRecentSearchPlayedTracks()
+
+        AppLogger.storage.info("Track ID Scheme v2 migration complete. Remapped \(oldToNewIDMap.count) tracks.")
+    }
+
     // Save playlists asynchronously
     public func savePlaylists() {
         let playlistsToSave = self.playlists
@@ -4974,14 +5722,32 @@ rebuildAlbumsAndArtists()
         }
     }
 
-    // Save play counts asynchronously
+    // Save play counts asynchronously with debouncing & generation tracking
     public func savePlayCounts() {
+        savePlayCountsDebounceTask?.cancel()
         let counts = self.playCounts
         let url = self.playCountsFileURL
         let binUrl = self.playCountsBinaryCacheURL
-        Task.detached(priority: .utility) {
-            let stringKeyed = Dictionary(counts.map { ($0.key.uuidString, $0.value) }, uniquingKeysWith: { first, _ in first })
-            Self.saveFast(stringKeyed, to: binUrl, jsonURL: url)
+        let genJson = bumpGeneration(for: url)
+        let genBin = bumpGeneration(for: binUrl)
+
+        savePlayCountsDebounceTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 400_000_000)
+            guard !Task.isCancelled else { return }
+
+            Task.detached(priority: .utility) {
+                let stringKeyed = Dictionary(counts.map { ($0.key.uuidString, $0.value) }, uniquingKeysWith: { first, _ in first })
+                var items: [(data: Data, url: URL, generation: Int)] = []
+                if let json = try? JSONEncoder().encode(stringKeyed) {
+                    items.append((json, url, genJson))
+                }
+                let plist = PropertyListEncoder()
+                plist.outputFormat = .binary
+                if let bin = try? plist.encode(stringKeyed) {
+                    items.append((bin, binUrl, genBin))
+                }
+                await PersistenceWriter.shared.writeBatch(items)
+            }
         }
     }
 
@@ -5086,6 +5852,23 @@ rebuildAlbumsAndArtists()
            let lastID = UUID(uuidString: lastIDStr) {
             self.lastAddedPlaylistID = lastID
         }
+
+        if let data = try? Data(contentsOf: organizationModesFileURL),
+           let loadedModes = try? JSONDecoder().decode(OrganizationModesContainer.self, from: data) {
+            self.organizationModesContainer = loadedModes
+        }
+
+        if let data = UserDefaults.standard.data(forKey: "jellyfin_last_sync_dates_v1"),
+           let loadedSyncDates = try? JSONDecoder().decode([UUID: Date].self, from: data) {
+            self.jellyfinLastSyncDates = loadedSyncDates
+        }
+    }
+
+    /// Persists last sync timestamps per Jellyfin server ID to UserDefaults.
+    public func saveJellyfinLastSyncDates() {
+        if let data = try? JSONEncoder().encode(jellyfinLastSyncDates) {
+            UserDefaults.standard.set(data, forKey: "jellyfin_last_sync_dates_v1")
+        }
     }
 
     // Rebuilds fast lookup index from loaded artist entities
@@ -5144,7 +5927,16 @@ rebuildAlbumsAndArtists()
 
             guard let tracks = loadedTracks, !tracks.isEmpty else {
                 await MainActor.run { [weak self] in
-                    self?.isInitialLoading = false
+                    guard let self = self else { return }
+                    self.isInitialLoading = false
+                    if !self.settings.jellyfinServers.isEmpty {
+                        Task { [weak self] in
+                            guard let self = self else { return }
+                            for server in self.settings.jellyfinServers {
+                                await self.syncJellyfinServer(server)
+                            }
+                        }
+                    }
                 }
                 return
             }
@@ -5163,6 +5955,15 @@ rebuildAlbumsAndArtists()
                 }
             }
 
+            var didBackfillArtwork = false
+            for i in 0..<tracksWithFolder.count {
+                if tracksWithFolder[i].isJellyfinItem && (tracksWithFolder[i].artworkKey == nil || tracksWithFolder[i].artworkKey?.isEmpty == true) {
+                    let artKey = ArtworkCacheService.albumArtworkKey(artist: tracksWithFolder[i].artist, album: tracksWithFolder[i].album)
+                    tracksWithFolder[i] = tracksWithFolder[i].withArtworkKey(artKey)
+                    didBackfillArtwork = true
+                }
+            }
+
             // Pre-sort in background so MainActor does zero sorting work on frame 1
             let preSorted = Self.sortTracks(tracksWithFolder, by: activeSort, isReversed: activeSortReversed)
 
@@ -5173,10 +5974,13 @@ rebuildAlbumsAndArtists()
                 self.cachedActiveTracks = tracksWithFolder
                 self.cachedSortedTracks = preSorted
                 self.rebuildFolderStats()
+                if !self.settings.jellyfinServers.isEmpty {
+                    JellyfinArtworkRegistry.shared.populateFromTracks(tracksWithFolder, servers: self.settings.jellyfinServers)
+                }
                 AppLogger.storage.info("Core tracks loaded instantly from cache: \(tracksWithFolder.count) tracks.")
             }
 
-            if didBackfillFolderID {
+            if didBackfillFolderID || didBackfillArtwork {
                 await MainActor.run { [weak self] in
                     self?.saveLibrary()
                 }
@@ -5270,6 +6074,7 @@ rebuildAlbumsAndArtists()
                     self.artists = ar
                     self.rebuildArtistLookupIndex()
                     self.invalidateSortedCaches()
+                    self.warmSearchIndex()
                     AppLogger.storage.info("Albums and artists loaded instantly from cache: \(a.count) albums, \(ar.count) artists.")
 
                     // Reconcile and warm recentAlbumsCache & pinnedItemsCache
@@ -5305,6 +6110,25 @@ rebuildAlbumsAndArtists()
                     self.saveLibrary()
                 }
 
+                // Rebuild albums if any Jellyfin album lacks artworkKey
+                let hasJellyfinAlbumsNeedingArtwork = self.albums.contains { album in
+                    album.artworkKey == nil && album.tracks.contains { $0.isJellyfinItem }
+                }
+                if hasJellyfinAlbumsNeedingArtwork {
+                    self.rebuildAlbumsAndArtists()
+                    self.saveLibrary()
+                }
+
+                // Populate Jellyfin artwork registry
+                if !self.tracks.isEmpty && !self.settings.jellyfinServers.isEmpty {
+                    JellyfinArtworkRegistry.shared.populateFromTracks(self.tracks, servers: self.settings.jellyfinServers)
+                }
+
+                // Check and run one-time track ID scheme v2 migration
+                if self.settings.trackIDSchemeVersion < 2 {
+                    self.migrateTrackIDsToV2()
+                }
+
                 // Proactively warm and update search index in background
                 let currentTracks = self.tracks
                 let currentAlbums = self.albums
@@ -5319,6 +6143,15 @@ rebuildAlbumsAndArtists()
                         playlists: currentPlaylists,
                         joinedArtists: currentJoined
                     )
+                }
+                // Sync Jellyfin servers once at launch after library has loaded
+                if !self.settings.jellyfinServers.isEmpty {
+                    Task { [weak self] in
+                        guard let self = self else { return }
+                        for server in self.settings.jellyfinServers {
+                            await self.syncJellyfinServer(server)
+                        }
+                    }
                 }
             }
         }
@@ -5373,3 +6206,4 @@ rebuildAlbumsAndArtists()
         }
     }
 }
+

@@ -2,15 +2,13 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoads</key>
+		<true/>
+	</dict>
 	<key>NSBonjourServices</key>
 	<array>
-		<string>_googlecast._tcp</string>
-		<string>_airplay._tcp</string>
-		<string>_raop._tcp</string>
-		<string>_sonos._tcp</string>
-		<string>_mediaremotetv._tcp</string>
-		<string>_dial-multiscreen-org._tcp</string>
-		<string>_roku-rcp._tcp</string>
 		<string>_http._tcp</string>
 	</array>
 	<key>UIBackgroundModes</key>

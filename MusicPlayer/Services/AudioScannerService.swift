@@ -42,8 +42,94 @@ public struct AudioScannerService: Sendable {
     private let supportedExtensions: Set<String> = [
         "mp3", "m4a", "m4b", "m4p", "m4r", "mp4", "mpeg", "mpg", "mp2", "mpa",
         "aac", "flac", "wav", "wave", "aiff", "aif", "aifc", "caf", "alac",
-        "ogg", "oga", "opus", "wma", "webm", "3gp", "dsf", "dff"
+        "ogg", "oga", "opus", "3gp"
     ]
+
+    private static let commonArtworkFilenames: [String] = [
+        "cover.jpg", "Cover.jpg", "COVER.JPG",
+        "cover.png", "Cover.png", "COVER.PNG",
+        "cover.jpeg", "Cover.jpeg", "COVER.JPEG",
+        "folder.jpg", "Folder.jpg", "FOLDER.JPG",
+        "folder.png", "Folder.png", "FOLDER.PNG",
+        "folder.jpeg", "Folder.jpeg", "FOLDER.JPEG",
+        "album.jpg", "Album.jpg", "ALBUM.JPG",
+        "album.png", "Album.png", "ALBUM.PNG",
+        "front.jpg", "Front.jpg", "FRONT.JPG",
+        "front.png", "Front.png", "FRONT.PNG",
+        "artwork.jpg", "Artwork.jpg", "ARTWORK.JPG",
+        "artwork.png", "Artwork.png", "ARTWORK.PNG"
+    ]
+    private static let folderArtworkCache = NSCache<NSURL, NSData>()
+    private static let discRegex = try? NSRegularExpression(pattern: #"^(?:cd|disc|disk)\s*(\d+)$"#, options: .caseInsensitive)
+
+    /// Scans the folder containing the audio file (and grandparent if inside a CD/Disc subfolder) for cover images.
+    private func findFolderArtwork(for fileURL: URL) -> Data? {
+        let parentDir = fileURL.deletingLastPathComponent()
+        if let cached = Self.folderArtworkCache.object(forKey: parentDir as NSURL) {
+            return cached as Data
+        }
+
+        let fm = FileManager.default
+
+        // Check parent directory
+        for artName in Self.commonArtworkFilenames {
+            let artURL = parentDir.appendingPathComponent(artName)
+            if CloudFileAvailability.isLocal(url: artURL),
+               fm.fileExists(atPath: artURL.path),
+               let data = try? Data(contentsOf: artURL), !data.isEmpty {
+                Self.folderArtworkCache.setObject(data as NSData, forKey: parentDir as NSURL)
+                return data
+            }
+        }
+
+        // If parent is a CD/Disc directory, check grandparent (the actual album directory)
+        let parentName = parentDir.lastPathComponent
+        if let regex = Self.discRegex,
+           regex.firstMatch(in: parentName, options: [], range: NSRange(location: 0, length: parentName.utf16.count)) != nil {
+            let grandParentDir = parentDir.deletingLastPathComponent()
+            if let cached = Self.folderArtworkCache.object(forKey: grandParentDir as NSURL) {
+                return cached as Data
+            }
+
+            for artName in Self.commonArtworkFilenames {
+                let artURL = grandParentDir.appendingPathComponent(artName)
+                if CloudFileAvailability.isLocal(url: artURL),
+                   fm.fileExists(atPath: artURL.path),
+                   let data = try? Data(contentsOf: artURL), !data.isEmpty {
+                    Self.folderArtworkCache.setObject(data as NSData, forKey: parentDir as NSURL)
+                    Self.folderArtworkCache.setObject(data as NSData, forKey: grandParentDir as NSURL)
+                    return data
+                }
+            }
+        }
+
+        return nil
+    }
+
+    private func isAudioFile(url: URL) -> Bool {
+        let ext = url.pathExtension.lowercased()
+        if ext == "icloud" {
+            let filename = url.lastPathComponent
+            let parts = filename.split(separator: ".")
+            if parts.count >= 2 {
+                let realExt = String(parts[parts.count - 2]).lowercased()
+                return supportedExtensions.contains(realExt)
+            }
+            return false
+        }
+        return supportedExtensions.contains(ext)
+    }
+
+    private func isHiddenNonICloud(url: URL) -> Bool {
+        let name = url.lastPathComponent
+        if name.hasPrefix(".") {
+            if name.hasSuffix(".icloud") {
+                return false
+            }
+            return true
+        }
+        return false
+    }
 
     // Initialize with configured properties
     public init() {}
@@ -51,6 +137,7 @@ public struct AudioScannerService: Sendable {
     /// Scans a directory URL recursively in parallel with smart differential caching and returns parsed Track objects.
     public func scanDirectory(
         at folderURL: URL,
+        folderID: UUID? = nil,
         existingTracks: [Track] = [],
         scanMethod: LibraryScanMethod = .id3Tags,
         onProgress: (@Sendable (Int, Int, String) -> Void)? = nil
@@ -59,7 +146,6 @@ public struct AudioScannerService: Sendable {
 
         // Ensure security-scoped root folder access is active
         _ = await SecurityScopedBookmark.shared.resolveAndAccessBookmark()
-        _ = folderURL.startAccessingSecurityScopedResource()
 
         // Build fast path-based lookup map for differential scan
         var existingTrackMap: [String: Track] = [:]
@@ -87,8 +173,7 @@ public struct AudioScannerService: Sendable {
         if fileManager.fileExists(atPath: folderURL.path, isDirectory: &isDir) {
             if !isDir.boolValue {
                 // User linked a single audio file directly
-                let ext = folderURL.pathExtension.lowercased()
-                if supportedExtensions.contains(ext) {
+                if isAudioFile(url: folderURL) {
                     let res = try? folderURL.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey, .creationDateKey])
                     let size = Int64(res?.fileSize ?? 0)
                     audioFiles.append(AudioFileStat(
@@ -102,14 +187,25 @@ public struct AudioScannerService: Sendable {
                 // Recursive directory enumeration with cycle & symlink loop protection
                 if let enumerator = fileManager.enumerator(
                     at: folderURL,
-                    includingPropertiesForKeys: [.isRegularFileKey, .isDirectoryKey, .isSymbolicLinkKey, .fileSizeKey, .contentModificationDateKey, .creationDateKey],
-                    options: [.skipsHiddenFiles, .skipsPackageDescendants]
+                    includingPropertiesForKeys: [
+                        .isRegularFileKey, .isDirectoryKey, .isSymbolicLinkKey,
+                        .fileSizeKey, .contentModificationDateKey, .creationDateKey,
+                        .isUbiquitousItemKey, .ubiquitousItemDownloadingStatusKey, .ubiquitousItemIsDownloadingKey
+                    ],
+                    options: [.skipsPackageDescendants]
                 ) {
                     while let fileURL = enumerator.nextObject() as? URL {
                         // Safety ceiling to prevent runaway allocations on corrupted filesystems
                         if audioFiles.count >= 200_000 {
                             AppLogger.scanner.warning("Reached safety limit of 200,000 files during scanning.")
                             break
+                        }
+
+                        if isHiddenNonICloud(url: fileURL) {
+                            if (try? fileURL.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true {
+                                enumerator.skipDescendants()
+                            }
+                            continue
                         }
 
                         // Cycle detection for directories & symbolic links (only resolve symlinks if actually a symlink)
@@ -131,8 +227,7 @@ public struct AudioScannerService: Sendable {
                             }
                         }
 
-                        let ext = fileURL.pathExtension.lowercased()
-                        if supportedExtensions.contains(ext) {
+                        if isAudioFile(url: fileURL) {
                             let path = fileURL.standardizedFileURL.path
                             if seenAudioFilePaths.insert(path).inserted {
                                 let res = try? fileURL.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey, .creationDateKey])
@@ -189,7 +284,13 @@ public struct AudioScannerService: Sendable {
             let stdPath = fileStat.url.standardizedFileURL.path
             let cachedTrack = existingTrackMap[stdPath] ?? existingTrackMap[stdPath.lowercased()] ?? existingTrackMap[fileStat.url.path]
 
-            if let cached = cachedTrack {
+            if !CloudFileAvailability.isLocal(url: fileStat.url) {
+                // If cloud-only file is already in cache with real tags, keep it!
+                if let cached = cachedTrack, cached.tagSnapshot != nil || cached.metadataSource == .embeddedTags {
+                    scannedTracks.append(cached)
+                    continue
+                }
+            } else if let cached = cachedTrack {
                 let cachedSize = cached.fileInfo?.fileSizeBytes ?? 0
                 let currentSize = fileStat.size
 
@@ -238,7 +339,7 @@ public struct AudioScannerService: Sendable {
                         if scanMethod == .folderHierarchy {
                             return await FolderHierarchyScanner.shared.parseAudioTrack(at: fileStat.url, rootFolderURL: folderURL, knownStat: fileStat, artworkDeduplicator: artworkDeduplicator)
                         } else {
-                            return await self.parseAudioTrack(at: fileStat.url, rootFolderURL: folderURL, knownStat: fileStat, artworkDeduplicator: artworkDeduplicator)
+                            return await self.parseAudioTrack(at: fileStat.url, folderID: folderID, rootFolderURL: folderURL, knownStat: fileStat, artworkDeduplicator: artworkDeduplicator)
                         }
                     }
                 }
@@ -260,7 +361,7 @@ public struct AudioScannerService: Sendable {
                             if scanMethod == .folderHierarchy {
                                 return await FolderHierarchyScanner.shared.parseAudioTrack(at: fileStat.url, rootFolderURL: folderURL, knownStat: fileStat, artworkDeduplicator: artworkDeduplicator)
                             } else {
-                                return await self.parseAudioTrack(at: fileStat.url, rootFolderURL: folderURL, knownStat: fileStat, artworkDeduplicator: artworkDeduplicator)
+                                return await self.parseAudioTrack(at: fileStat.url, folderID: folderID, rootFolderURL: folderURL, knownStat: fileStat, artworkDeduplicator: artworkDeduplicator)
                             }
                         }
                     }
@@ -285,23 +386,40 @@ public struct AudioScannerService: Sendable {
     /// Parses an audio file with pure-Swift binary extraction and lightweight fallback.
     public func parseAudioTrack(
         at url: URL,
+        folderID: UUID? = nil,
         rootFolderURL: URL? = nil,
         knownStat: AudioFileStat? = nil,
         artworkDeduplicator: ArtworkKeyDeduplicator? = nil
     ) async -> Track? {
+        let relativePath = TrackIdentity.computeRelativePath(fileURL: url, folderURL: rootFolderURL)
+        let trackID = TrackIdentity.localTrackID(folderID: folderID, relativePath: relativePath)
+
+        if !CloudFileAvailability.isLocal(url: url) {
+            let parsed = FolderPathMetadataParser.parse(relativePath: relativePath)
+            return Track(
+                id: trackID,
+                title: parsed.title,
+                artist: parsed.artist,
+                album: parsed.album,
+                albumArtist: parsed.albumArtist,
+                year: parsed.year,
+                trackNumber: parsed.trackNumber,
+                discNumber: parsed.discNumber,
+                duration: 0,
+                url: url,
+                dateAdded: knownStat?.creationDate ?? Date(),
+                folderID: folderID,
+                relativePath: relativePath,
+                metadataSource: .folderStructure,
+                tagSnapshot: nil
+            )
+        }
+
         let isFileAccessing = url.startAccessingSecurityScopedResource()
         defer {
             if isFileAccessing {
                 url.stopAccessingSecurityScopedResource()
             }
-        }
-
-        // Trigger background download if file is an undownloaded iCloud ubiquitous item and skip to avoid hang
-        if let values = try? url.resourceValues(forKeys: [.isUbiquitousItemKey, .ubiquitousItemDownloadingStatusKey]),
-           values.isUbiquitousItem == true,
-           values.ubiquitousItemDownloadingStatus != .current {
-            try? FileManager.default.startDownloadingUbiquitousItem(at: url)
-            return nil
         }
 
         // Read file system attributes
@@ -451,9 +569,13 @@ public struct AudioScannerService: Sendable {
 
         let finalTrackNumber = meta.trackNumber ?? fnMetadata.trackNumber
 
-        // Attach embedded artwork and cache raw bytes deduplicated by album
+        // Attach embedded artwork or folder artwork and cache raw bytes deduplicated by album
         var artworkKey: String?
-        if let art = meta.artworkData, !art.isEmpty {
+        var artworkData: Data? = meta.artworkData
+        if artworkData == nil || artworkData?.isEmpty == true {
+            artworkData = findFolderArtwork(for: url)
+        }
+        if let art = artworkData, !art.isEmpty {
             if finalArtist != "Unknown Artist" || finalAlbum != "Unknown Album" {
                 artworkKey = ArtworkCacheService.albumArtworkKey(artist: finalArtist, album: finalAlbum)
             } else {
@@ -488,9 +610,18 @@ public struct AudioScannerService: Sendable {
             modificationDate: modificationDate
         )
 
-        let deterministicID = UUID.deterministic(from: url.standardizedFileURL.path.lowercased())
+        let tagSnap = TagSnapshot(
+            title: finalTitle,
+            artist: finalArtist,
+            album: finalAlbum,
+            albumArtist: meta.albumArtist,
+            year: meta.year,
+            trackNumber: finalTrackNumber,
+            discNumber: meta.discNumber
+        )
+
         return Track(
-            id: deterministicID,
+            id: trackID,
             title: finalTitle,
             artist: finalArtist,
             album: finalAlbum,
@@ -505,7 +636,11 @@ public struct AudioScannerService: Sendable {
             artworkKey: artworkKey,
             dateAdded: creationDate ?? Date(),
             fileInfo: audioFileInfo,
-            lyrics: meta.lyrics
+            lyrics: meta.lyrics,
+            folderID: folderID,
+            relativePath: relativePath,
+            metadataSource: .embeddedTags,
+            tagSnapshot: tagSnap
         )
     }
 

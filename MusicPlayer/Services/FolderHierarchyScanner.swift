@@ -46,12 +46,27 @@ public struct FolderHierarchyScanner: Sendable {
             }
         }
 
-        // Trigger background download if file is an undownloaded iCloud ubiquitous item
-        if let values = try? url.resourceValues(forKeys: [.isUbiquitousItemKey, .ubiquitousItemDownloadingStatusKey]),
-           values.isUbiquitousItem == true,
-           values.ubiquitousItemDownloadingStatus != .current {
-            try? FileManager.default.startDownloadingUbiquitousItem(at: url)
-            return nil
+        let relativePath = TrackIdentity.computeRelativePath(fileURL: url, folderURL: rootFolderURL)
+        let trackID = TrackIdentity.localTrackID(folderID: nil, relativePath: relativePath)
+
+        if !CloudFileAvailability.isLocal(url: url) {
+            let parsed = FolderPathMetadataParser.parse(relativePath: relativePath)
+            return Track(
+                id: trackID,
+                title: parsed.title,
+                artist: parsed.artist,
+                album: parsed.album,
+                albumArtist: parsed.albumArtist,
+                year: parsed.year,
+                trackNumber: parsed.track,
+                discNumber: parsed.disc,
+                duration: 0,
+                url: url,
+                dateAdded: knownStat?.creationDate ?? Date(),
+                relativePath: relativePath,
+                metadataSource: .folderStructure,
+                tagSnapshot: nil
+            )
         }
 
         // Read filesystem attributes
@@ -206,9 +221,18 @@ public struct FolderHierarchyScanner: Sendable {
             modificationDate: modificationDate
         )
 
-        let deterministicID = UUID.deterministic(from: url.standardizedFileURL.path.lowercased())
+        let tagSnap = TagSnapshot(
+            title: finalTitle,
+            artist: finalArtist,
+            album: finalAlbum,
+            albumArtist: hierarchy.artist ?? binaryMeta?.albumArtist,
+            year: hierarchy.year ?? binaryMeta?.year,
+            trackNumber: finalTrackNumber,
+            discNumber: finalDiscNumber
+        )
+
         return Track(
-            id: deterministicID,
+            id: trackID,
             title: finalTitle,
             artist: finalArtist,
             album: finalAlbum,
@@ -223,7 +247,10 @@ public struct FolderHierarchyScanner: Sendable {
             artworkKey: artworkKey,
             dateAdded: creationDate ?? Date(),
             fileInfo: audioFileInfo,
-            lyrics: binaryMeta?.lyrics
+            lyrics: binaryMeta?.lyrics,
+            relativePath: relativePath,
+            metadataSource: .folderStructure,
+            tagSnapshot: tagSnap
         )
     }
 
@@ -352,7 +379,8 @@ public struct FolderHierarchyScanner: Sendable {
         // Check parent directory
         for artName in Self.commonArtworkFilenames {
             let artURL = parentDir.appendingPathComponent(artName)
-            if fm.fileExists(atPath: artURL.path),
+            if CloudFileAvailability.isLocal(url: artURL),
+               fm.fileExists(atPath: artURL.path),
                let data = try? Data(contentsOf: artURL), !data.isEmpty {
                 Self.folderArtworkCache.setObject(data as NSData, forKey: parentDir as NSURL)
                 return data
@@ -370,7 +398,8 @@ public struct FolderHierarchyScanner: Sendable {
 
             for artName in Self.commonArtworkFilenames {
                 let artURL = grandParentDir.appendingPathComponent(artName)
-                if fm.fileExists(atPath: artURL.path),
+                if CloudFileAvailability.isLocal(url: artURL),
+                   fm.fileExists(atPath: artURL.path),
                    let data = try? Data(contentsOf: artURL), !data.isEmpty {
                     Self.folderArtworkCache.setObject(data as NSData, forKey: parentDir as NSURL)
                     Self.folderArtworkCache.setObject(data as NSData, forKey: grandParentDir as NSURL)

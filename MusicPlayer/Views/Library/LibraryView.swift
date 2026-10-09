@@ -75,14 +75,33 @@ public struct LibraryView: View {
             }
         }
         .onAppear {
-            if libraryStore.selectedCategory == .folders && libraryStore.settings.linkedFolders.count <= 1 {
+            if libraryStore.selectedCategory == .folders && totalSourcesCount <= 1 {
                 libraryStore.selectedCategory = .tracks
             }
         }
     }
 
+    private var totalSourcesCount: Int {
+        libraryStore.settings.linkedFolders.count + libraryStore.settings.jellyfinServers.count
+    }
+
+    private var hasMultipleSources: Bool {
+        totalSourcesCount > 1
+    }
+
+    private var hasAnyServers: Bool {
+        !libraryStore.settings.jellyfinServers.isEmpty
+    }
+
+    private func title(for category: LibraryCategory) -> String {
+        if category == .folders {
+            return (hasMultipleSources || hasAnyServers) ? "SOURCES" : "FOLDERS"
+        }
+        return category.title
+    }
+
     private var visibleCategories: [LibraryCategory] {
-        if libraryStore.settings.linkedFolders.count > 1 {
+        if totalSourcesCount > 1 {
             return [.artists, .albums, .playlists, .tracks, .folders]
         } else {
             return [.artists, .albums, .playlists, .tracks]
@@ -108,8 +127,10 @@ public struct LibraryView: View {
             let count = libraryStore.tracks.count
             return "FIND \(count) \(count == 1 ? "TRACK" : "TRACKS")"
         case .folders:
-            let count = libraryStore.settings.linkedFolders.count
-            return "FIND \(count) \(count == 1 ? "FOLDER" : "FOLDERS")"
+            let count = totalSourcesCount
+            let isSources = hasMultipleSources || hasAnyServers
+            let word = isSources ? (count == 1 ? "SOURCE" : "SOURCES") : (count == 1 ? "FOLDER" : "FOLDERS")
+            return "FIND \(count) \(word)"
         }
     }
 
@@ -161,7 +182,7 @@ public struct LibraryView: View {
                         libraryStore.selectedCategory = category
                     }
                 }) {
-                    Text(category.title)
+                    Text(title(for: category))
                         .font(.system(size: 13, weight: isSelected ? .bold : .regular, design: .monospaced))
                         .foregroundStyle(isSelected ? Color.primary : .secondary)
                         .lineLimit(1)

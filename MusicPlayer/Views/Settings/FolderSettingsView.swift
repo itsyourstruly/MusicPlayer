@@ -10,12 +10,17 @@ public struct FolderSettingsView: View {
     @Environment(\.appTheme) private var appTheme
 
     @State private var showingFolderPicker: Bool = false
+    @State private var pendingOpenFolderPicker: Bool = false
     @State private var folderToChange: LinkedFolder? = nil
     @State private var folderToUnlink: LinkedFolder? = nil
     @State private var showingUnlinkAlert: Bool = false
+    @State private var showingAddSourceSheet: Bool = false
+    @State private var serverToUnlink: JellyfinServerLink? = nil
+    @State private var showingUnlinkServerAlert: Bool = false
     @State private var showingTagFinderSheet: Bool = false
     @State private var showingClearMetadataAlert: Bool = false
     @State private var showingClearArtworkAlert: Bool = false
+    @State private var showingClearDownloadsAlert: Bool = false
     @State private var showingCloudWarningAlert: Bool = false
     @State private var cloudWarningMessage: String = ""
     @State private var artworkCacheSizeBytes: Int64 = 0
@@ -43,6 +48,9 @@ public struct FolderSettingsView: View {
                 // MARK: - 3. Disk Write Toggle
                 diskWriteToggleSection
 
+                // MARK: - 3B. Downloads Section
+                downloadsSection
+
                 Divider()
                     .overlay(appTheme.separatorColor.opacity(0.4))
 
@@ -64,7 +72,7 @@ public struct FolderSettingsView: View {
         .navigationBarTitleDisplayMode(.inline)
         .fileImporter(
             isPresented: $showingFolderPicker,
-            allowedContentTypes: [.folder, .audio, .item],
+            allowedContentTypes: [.folder],
             allowsMultipleSelection: false
         ) { result in
             switch result {
@@ -74,10 +82,12 @@ public struct FolderSettingsView: View {
                     if let folder = folderToChange {
                         Task {
                             await libraryStore.changeFolder(id: folder.id, newURL: selectedURL)
+                            selectedURL.stopAccessingSecurityScopedResource()
                         }
                     } else {
                         Task {
                             await libraryStore.addAndScanFolder(url: selectedURL)
+                            selectedURL.stopAccessingSecurityScopedResource()
                         }
                     }
                 }
@@ -121,10 +131,50 @@ public struct FolderSettingsView: View {
         } message: {
             Text("THIS WILL REMOVE ALL CACHED COVER ARTWORKS FROM DISK. ARTWORKS WILL BE RE-EXTRACTED AS NEEDED.")
         }
+        .alert("CLEAR ALL DOWNLOADS?", isPresented: $showingClearDownloadsAlert) {
+            Button("CANCEL", role: .cancel) {}
+            Button("CLEAR", role: .destructive) {
+                JellyfinDownloadManager.shared.deleteAllDownloads()
+            }
+        } message: {
+            Text("THIS WILL REMOVE ALL DOWNLOADED JELLYFIN TRACKS FROM DEVICE STORAGE. TRACKS WILL REMAIN IN YOUR LIBRARY AND CAN STILL BE STREAMED.")
+        }
         .alert("ICLOUD STORAGE DETECTED", isPresented: $showingCloudWarningAlert) {
             Button("OK", role: .cancel) {}
         } message: {
             Text(cloudWarningMessage)
+        }
+        .sheet(isPresented: $showingAddSourceSheet, onDismiss: {
+            if pendingOpenFolderPicker {
+                pendingOpenFolderPicker = false
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                    folderToChange = nil
+                    showingFolderPicker = true
+                }
+            }
+        }) {
+            AddLibrarySourceSheet(
+                onSelectLocalFolder: {
+                    pendingOpenFolderPicker = true
+                },
+                onJellyfinConnected: { serverLink in
+                    handleJellyfinConnected(serverLink)
+                }
+            )
+            .environment(\.appTheme, appTheme)
+        }
+        .alert("REMOVE JELLYFIN SERVER?", isPresented: $showingUnlinkServerAlert) {
+            Button("CANCEL", role: .cancel) {
+                serverToUnlink = nil
+            }
+            Button("REMOVE", role: .destructive) {
+                if let server = serverToUnlink {
+                    removeJellyfinServer(server)
+                    serverToUnlink = nil
+                }
+            }
+        } message: {
+            Text("THIS WILL REMOVE TRACKS FROM THIS JELLYFIN SERVER FROM YOUR LIBRARY.")
         }
         .sheet(isPresented: $showingTagFinderSheet) {
             TrackTagFinderSheetView(libraryStore: libraryStore)
@@ -141,16 +191,18 @@ public struct FolderSettingsView: View {
         }
     }
 
-    // MARK: - 1. Linked Folder Header Section (Top of Sheet, No Background)
+    // MARK: - 1. Linked Folder & Server Sources Header Section (Top of Sheet, No Background)
     private var linkedFolderHeaderSection: some View {
         VStack(alignment: .leading, spacing: 14) {
-            if libraryStore.settings.linkedFolders.isEmpty {
+            let hasFolders = !libraryStore.settings.linkedFolders.isEmpty
+            let hasServers = !libraryStore.settings.jellyfinServers.isEmpty
+
+            if !hasFolders && !hasServers {
                 HStack(alignment: .center) {
                     Button(action: {
-                        folderToChange = nil
-                        showingFolderPicker = true
+                        showingAddSourceSheet = true
                     }) {
-                        Text("LINK FOLDER")
+                        Text("ADD SOURCE")
                             .font(.system(size: 14, weight: .bold, design: .monospaced))
                             .foregroundStyle(libraryStore.settings.appTheme.accentColor)
                     }
@@ -163,16 +215,93 @@ public struct FolderSettingsView: View {
                     linkedFolderRow(folder: folder)
                 }
 
+                ForEach(libraryStore.settings.jellyfinServers) { server in
+                    jellyfinServerRow(server: server)
+                }
+
                 Button(action: {
-                    folderToChange = nil
-                    showingFolderPicker = true
+                    showingAddSourceSheet = true
                 }) {
-                    Text("ADD ANOTHER FOLDER")
+                    Text("ADD ANOTHER SOURCE")
                         .font(.system(size: 13, weight: .bold, design: .monospaced))
                         .foregroundStyle(libraryStore.settings.appTheme.accentColor)
                 }
                 .buttonStyle(.plain)
                 .padding(.top, 2)
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    private func jellyfinServerRow(server: JellyfinServerLink) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .center) {
+                Text("JELLYFIN: \(server.serverName.uppercased())")
+                    .font(.system(size: 14, weight: .bold, design: .monospaced))
+                    .foregroundStyle(Color.white)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+
+                Spacer()
+
+                Button {
+                    HapticFeedback.selectionChanged()
+                    rescanJellyfinServer(server)
+                } label: {
+                    Text("RESCAN")
+                        .font(.system(size: 13, weight: .bold, design: .monospaced))
+                        .foregroundStyle(libraryStore.settings.appTheme.accentColor)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+
+                Menu {
+                    Button(role: .destructive) {
+                        serverToUnlink = server
+                        showingUnlinkServerAlert = true
+                    } label: {
+                        Label("REMOVE SERVER", systemImage: "trash")
+                    }
+                } label: {
+                    Image(systemName: "gearshape.fill")
+                        .font(.system(size: 15))
+                        .foregroundStyle(appTheme.accentColor)
+                        .padding(.leading, 8)
+                        .contentShape(Rectangle())
+                }
+            }
+
+            let serverTrackCount = libraryStore.trackCount(for: server)
+            Text("USER: \(server.username.uppercased()) • \(serverTrackCount) TRACKS")
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundStyle(.secondary)
+
+            if let error = libraryStore.jellyfinServerErrors[server.id] {
+                HStack(spacing: 8) {
+                    Text(error)
+                        .font(.system(size: 10, weight: .bold, design: .monospaced))
+                        .foregroundStyle(.red)
+
+                    if error.contains("LOCAL NETWORK ACCESS IS OFF") {
+                        #if os(iOS)
+                        Button {
+                            if let url = URL(string: UIApplication.openSettingsURLString),
+                               UIApplication.shared.canOpenURL(url) {
+                                UIApplication.shared.open(url)
+                            }
+                        } label: {
+                            Text("OPEN SETTINGS")
+                                .font(.system(size: 9, weight: .bold, design: .monospaced))
+                                .foregroundStyle(Color.white)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 3)
+                                .background(Color.red.opacity(0.85))
+                                .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+                        }
+                        .buttonStyle(.plain)
+                        #endif
+                    }
+                }
             }
         }
         .padding(.vertical, 4)
@@ -339,6 +468,80 @@ public struct FolderSettingsView: View {
         )
     }
 
+    // MARK: - 3B. Downloads Section
+    private var downloadsSection: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("DOWNLOADS & OFFLINE")
+                .font(.system(size: 11, weight: .bold, design: .monospaced))
+                .foregroundStyle(.secondary)
+
+            TypographicToggleRow(
+                title: "DOWNLOAD NEXT SONG ON WI-FI",
+                subtitle: "PRE-FETCHES UPCOMING QUEUE TRACKS SILENTLY WHEN CONNECTED TO WI-FI",
+                isOn: Binding(
+                    get: { libraryStore.settings.downloadNextSongOnWiFi },
+                    set: {
+                        libraryStore.settings.downloadNextSongOnWiFi = $0
+                        libraryStore.saveSettings()
+                    }
+                )
+            )
+
+            TypographicToggleRow(
+                title: "AUTO-DOWNLOAD ON PLAY",
+                subtitle: "AUTOMATICALLY SAVES PLAYED JELLYFIN TRACKS TO DEVICE STORAGE",
+                isOn: Binding(
+                    get: { libraryStore.settings.autoDownloadOnPlay },
+                    set: {
+                        libraryStore.settings.autoDownloadOnPlay = $0
+                        libraryStore.saveSettings()
+                    }
+                )
+            )
+
+            TypographicToggleRow(
+                title: "DOWNLOAD OVER CELLULAR",
+                subtitle: "ALLOW OFFLINE JELLYFIN DOWNLOADS WHEN NOT ON WI-FI",
+                isOn: Binding(
+                    get: { libraryStore.settings.downloadOnCellular },
+                    set: {
+                        libraryStore.settings.downloadOnCellular = $0
+                        libraryStore.saveSettings()
+                        JellyfinDownloadManager.shared.allowsCellularAccess = $0
+                    }
+                )
+            )
+
+            // Storage summary row & clear button
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("JELLYFIN OFFLINE STORAGE")
+                        .font(.system(size: 12, weight: .bold, design: .monospaced))
+                        .foregroundStyle(Color.primary)
+
+                    Text("\(JellyfinDownloadManager.shared.downloadRecords.count) TRACKS • \(JellyfinDownloadManager.shared.formattedTotalSize.uppercased())")
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+
+                if !JellyfinDownloadManager.shared.downloadRecords.isEmpty {
+                    Button(role: .destructive) {
+                        HapticFeedback.notificationWarning()
+                        showingClearDownloadsAlert = true
+                    } label: {
+                        Text("CLEAR ALL")
+                            .font(.system(size: 11, weight: .bold, design: .monospaced))
+                            .foregroundStyle(Color.red)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.top, 4)
+        }
+    }
+
     // MARK: - 5. Clean Library Scan Method Selector (METADATA vs FOLDER)
     private var scanMethodSelectorSection: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -352,8 +555,7 @@ public struct FolderSettingsView: View {
                 Button(action: {
                     HapticFeedback.selectionChanged()
                     withAnimation(.easeInOut(duration: 0.15)) {
-                        libraryStore.settings.libraryScanMethod = .id3Tags
-                        libraryStore.saveSettings()
+                        libraryStore.setLibraryOrganization(.id3Tags)
                     }
                 }) {
                     Text("METADATA")
@@ -374,8 +576,7 @@ public struct FolderSettingsView: View {
                 Button(action: {
                     HapticFeedback.selectionChanged()
                     withAnimation(.easeInOut(duration: 0.15)) {
-                        libraryStore.settings.libraryScanMethod = .folderHierarchy
-                        libraryStore.saveSettings()
+                        libraryStore.setLibraryOrganization(.folderHierarchy)
                     }
                 }) {
                     Text("FOLDER")
@@ -400,6 +601,42 @@ public struct FolderSettingsView: View {
                 .lineSpacing(3)
                 .padding(.top, 2)
                 .padding(.horizontal, 2)
+        }
+    }
+
+    private func handleJellyfinConnected(_ serverLink: JellyfinServerLink) {
+        var linkToUse = serverLink
+        if let existingIndex = libraryStore.settings.jellyfinServers.firstIndex(where: {
+            $0.serverId == serverLink.serverId && $0.userId == serverLink.userId
+        }) {
+            let existing = libraryStore.settings.jellyfinServers[existingIndex]
+            linkToUse = JellyfinServerLink(
+                id: existing.id,
+                serverId: serverLink.serverId,
+                serverName: serverLink.serverName,
+                userId: serverLink.userId,
+                userName: serverLink.username,
+                serverURL: serverLink.serverURL
+            )
+            libraryStore.settings.jellyfinServers[existingIndex] = linkToUse
+            libraryStore.saveSettings()
+        } else {
+            libraryStore.settings.jellyfinServers.append(linkToUse)
+            libraryStore.saveSettings()
+        }
+        rescanJellyfinServer(linkToUse)
+    }
+
+    private func rescanJellyfinServer(_ serverLink: JellyfinServerLink) {
+        Task { @MainActor in
+            await libraryStore.syncJellyfinServer(serverLink)
+        }
+    }
+
+    private func removeJellyfinServer(_ serverLink: JellyfinServerLink) {
+        libraryStore.removeJellyfinServer(id: serverLink.id)
+        Task {
+            await JellyfinClient.shared.logout(link: serverLink)
         }
     }
 

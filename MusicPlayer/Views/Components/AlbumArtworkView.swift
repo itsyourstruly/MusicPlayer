@@ -9,6 +9,7 @@ import AppKit
 /// High-performance asynchronous album artwork view with decoded image caching and typographic fallback.
 public struct AlbumArtworkView: View {
     @Environment(LibraryStore.self) private var libraryStore: LibraryStore?
+    @Environment(\.displayScale) private var displayScale: CGFloat
 
     // Artwork key
     public let artworkKey: String?
@@ -18,6 +19,7 @@ public struct AlbumArtworkView: View {
     public let subtitle: String?
     public var cornerRadius: CGFloat = 8
     public var targetDimension: CGFloat = 128
+    public var isOriginalResolution: Bool = false
     public var isArtworkRounded: Bool? = nil
 
     @State private var loadedImage: Image?
@@ -30,6 +32,7 @@ public struct AlbumArtworkView: View {
         subtitle: String? = nil,
         cornerRadius: CGFloat = 8,
         targetDimension: CGFloat = 128,
+        isOriginalResolution: Bool = false,
         isArtworkRounded: Bool? = nil
     ) {
         self.artworkKey = artworkKey
@@ -37,15 +40,26 @@ public struct AlbumArtworkView: View {
         self.subtitle = subtitle
         self.cornerRadius = cornerRadius
         self.targetDimension = targetDimension
+        self.isOriginalResolution = isOriginalResolution
         self.isArtworkRounded = isArtworkRounded
 
-        if let key = artworkKey, !key.isEmpty,
-           let cached = ArtworkCacheService.shared.cachedImage(key: key, maxDimension: targetDimension) {
-            #if canImport(UIKit)
-            _loadedImage = State(initialValue: Image(uiImage: cached))
-            #elseif canImport(AppKit)
-            _loadedImage = State(initialValue: Image(nsImage: cached))
-            #endif
+        if let key = artworkKey, !key.isEmpty {
+            if let cached = ArtworkCacheService.shared.cachedImage(key: key, maxDimension: targetDimension, isOriginal: isOriginalResolution) {
+                #if canImport(UIKit)
+                _loadedImage = State(initialValue: Image(uiImage: cached))
+                #elseif canImport(AppKit)
+                _loadedImage = State(initialValue: Image(nsImage: cached))
+                #endif
+            } else if (isOriginalResolution || targetDimension >= 1200),
+                      let thumb = ArtworkCacheService.shared.cachedImage(key: key, maxDimension: 128) ?? ArtworkCacheService.shared.cachedImage(key: key, maxDimension: 350) {
+                #if canImport(UIKit)
+                _loadedImage = State(initialValue: Image(uiImage: thumb))
+                #elseif canImport(AppKit)
+                _loadedImage = State(initialValue: Image(nsImage: thumb))
+                #endif
+            } else {
+                _loadedImage = State(initialValue: nil)
+            }
         } else {
             _loadedImage = State(initialValue: nil)
         }
@@ -80,7 +94,7 @@ public struct AlbumArtworkView: View {
         }
         .clipShape(RoundedRectangle(cornerRadius: effectiveCornerRadius, style: .continuous))
         .contentShape(RoundedRectangle(cornerRadius: effectiveCornerRadius, style: .continuous))
-        .task(id: artworkKey) {
+        .task(id: "\(artworkKey ?? "")_\(isOriginalResolution ? "orig" : "\(Int(targetDimension))")") {
             await loadArtwork()
         }
     }
@@ -145,8 +159,11 @@ public struct AlbumArtworkView: View {
             return
         }
 
-        // Fast synchronous memory cache check
-        if let cached = ArtworkCacheService.shared.cachedImage(key: key, maxDimension: targetDimension) {
+        let dimensionToRequest = isOriginalResolution ? targetDimension : max(targetDimension, targetDimension * displayScale)
+
+        // Fast synchronous memory cache check for requested dimension
+        if let cached = ArtworkCacheService.shared.cachedImage(key: key, maxDimension: dimensionToRequest, isOriginal: isOriginalResolution) ??
+                         ArtworkCacheService.shared.cachedImage(key: key, maxDimension: targetDimension, isOriginal: isOriginalResolution) {
             #if canImport(UIKit)
             self.loadedImage = Image(uiImage: cached)
             #elseif canImport(AppKit)
@@ -155,8 +172,19 @@ public struct AlbumArtworkView: View {
             return
         }
 
-        // Load full native quality decoded artwork from cache
-        let platformImg = await ArtworkCacheService.shared.loadDecodedArtwork(key: key, maxDimension: targetDimension)
+        // If full resolution is requested and no image is shown yet, display thumbnail as interim state
+        if (isOriginalResolution || targetDimension >= 1200) && loadedImage == nil {
+            if let thumb = ArtworkCacheService.shared.cachedImage(key: key, maxDimension: 128) ?? ArtworkCacheService.shared.cachedImage(key: key, maxDimension: 350) {
+                #if canImport(UIKit)
+                self.loadedImage = Image(uiImage: thumb)
+                #elseif canImport(AppKit)
+                self.loadedImage = Image(nsImage: thumb)
+                #endif
+            }
+        }
+
+        // Load full native quality decoded artwork from cache / remote
+        let platformImg = await ArtworkCacheService.shared.loadDecodedArtwork(key: key, maxDimension: dimensionToRequest, isOriginal: isOriginalResolution)
         guard !Task.isCancelled else { return }
 
         if let platformImg = platformImg {
@@ -165,8 +193,10 @@ public struct AlbumArtworkView: View {
             #elseif canImport(AppKit)
             let img = Image(nsImage: platformImg)
             #endif
-            self.loadedImage = img
-        } else {
+            withAnimation(.easeIn(duration: 0.15)) {
+                self.loadedImage = img
+            }
+        } else if loadedImage == nil {
             self.loadedImage = nil
         }
     }

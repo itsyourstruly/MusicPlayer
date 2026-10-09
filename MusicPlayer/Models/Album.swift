@@ -8,7 +8,11 @@ public struct Album: Identifiable, Codable, Sendable, Hashable {
     // MARK: - Identity
 
     /// Stable ID derived from artist + title + year so albums with the same name by different artists don't collide.
+    /// In folder mode, groupKey disambiguates distinct folders that share the same album title.
     public var id: String {
+        if let key = groupKey, !key.isEmpty {
+            return key
+        }
         // Clean artist
         let cleanArtist = artist.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         // Clean title
@@ -21,6 +25,8 @@ public struct Album: Identifiable, Codable, Sendable, Hashable {
 
     // MARK: - Stored Properties
 
+    // Disambiguation key for folder-mode hierarchy grouping
+    public let groupKey: String?
     // Display title
     public let title: String
     // Primary artist name
@@ -33,6 +39,11 @@ public struct Album: Identifiable, Codable, Sendable, Hashable {
     public let artworkKey: String?
     // Tracks
     public let tracks: [Track]
+
+    /// Unique identifiers of all tracks contained in this album.
+    public var trackIDs: [UUID] {
+        tracks.map { $0.id }
+    }
 
     // Pre-normalized forms used by fuzzy search — computed once at init to avoid repeated lowercasing.
     public let normalizedTitle: String
@@ -59,7 +70,8 @@ public struct Album: Identifiable, Codable, Sendable, Hashable {
         year: Int? = nil,
         genre: String? = nil,
         artworkKey: String? = nil,
-        tracks: [Track] = []
+        tracks: [Track] = [],
+        groupKey: String? = nil
     ) {
         var cleanTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
         if cleanTitle.hasSuffix(" (Alternates)") {
@@ -68,6 +80,7 @@ public struct Album: Identifiable, Codable, Sendable, Hashable {
             cleanTitle = String(cleanTitle.dropLast("(Alternates)".count)).trimmingCharacters(in: .whitespacesAndNewlines)
         }
 
+        self.groupKey = groupKey
         self.title = cleanTitle
         self.artist = artist
         self.year = year
@@ -122,13 +135,14 @@ public struct Album: Identifiable, Codable, Sendable, Hashable {
     // Defines CodingKeys cases
     private enum CodingKeys: String, CodingKey {
         // Title option
-        case title, artist, year, genre, artworkKey, tracks
+        case groupKey, title, artist, year, genre, artworkKey, tracks
     }
 
     /// Custom decoder so we can recompute normalised fields after decoding stored data.
     public init(from decoder: Decoder) throws {
         // Container
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.groupKey = try container.decodeIfPresent(String.self, forKey: .groupKey)
         self.title = try container.decodeIfPresent(String.self, forKey: .title) ?? "Unknown Album"
         self.artist = try container.decodeIfPresent(String.self, forKey: .artist) ?? "Unknown Artist"
         self.year = try container.decodeIfPresent(Int.self, forKey: .year)
@@ -178,6 +192,7 @@ public struct Album: Identifiable, Codable, Sendable, Hashable {
     public func encode(to encoder: Encoder) throws {
         // Container
         var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(groupKey, forKey: .groupKey)
         try container.encode(title, forKey: .title)
         try container.encode(artist, forKey: .artist)
         try container.encodeIfPresent(year, forKey: .year)

@@ -9,6 +9,7 @@ public struct PlaylistDetailView: View {
     @Bindable var libraryStore: LibraryStore
     @Bindable var playerService: AudioPlayerService
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.appTheme) private var appTheme
 
     @State private var isSearching: Bool = false
     @State private var searchQuery: String = ""
@@ -167,6 +168,76 @@ public struct PlaylistDetailView: View {
                             .disabled(playlistTracks.isEmpty)
 
                             Spacer()
+
+                            let jellyfinTracks = playlistTracks.filter { $0.isJellyfinItem || $0.metadataSource == .server }
+                            let isJellyfinPlaylist = !jellyfinTracks.isEmpty
+                            let downloadedCount = jellyfinTracks.filter { JellyfinDownloadManager.shared.isDownloaded(trackId: $0.id) }.count
+                            let isAllDownloaded = isJellyfinPlaylist && downloadedCount == jellyfinTracks.count
+                            let isAnyDownloading = jellyfinTracks.contains { JellyfinDownloadManager.shared.downloadStates[$0.id]?.isDownloading == true }
+
+                            if isJellyfinPlaylist {
+                                Button {
+                                    HapticFeedback.selectionChanged()
+                                    if isAllDownloaded {
+                                        for track in jellyfinTracks {
+                                            JellyfinDownloadManager.shared.deleteDownload(trackId: track.id)
+                                        }
+                                    } else if isAnyDownloading {
+                                        for track in jellyfinTracks {
+                                            JellyfinDownloadManager.shared.cancelDownload(trackId: track.id)
+                                        }
+                                    } else {
+                                        JellyfinDownloadManager.shared.download(tracks: jellyfinTracks)
+                                    }
+                                } label: {
+                                    HStack(spacing: 5) {
+                                        if isAllDownloaded {
+                                            Image(systemName: "arrow.down.circle.fill")
+                                                .font(.system(size: 16))
+                                                .foregroundStyle(appTheme.accentColor)
+                                        } else if isAnyDownloading {
+                                            ProgressView()
+                                                .controlSize(.small)
+                                                .tint(appTheme.accentColor)
+                                        } else {
+                                            Image(systemName: "arrow.down.circle")
+                                                .font(.system(size: 16))
+                                                .foregroundStyle(Color.primary)
+                                        }
+                                    }
+                                    .frame(width: 38, height: 38)
+                                    .contentShape(Rectangle())
+                                }
+                                .buttonStyle(.plain)
+                                .contextMenu {
+                                    if isAllDownloaded {
+                                        Button(role: .destructive) {
+                                            HapticFeedback.selectionChanged()
+                                            for track in jellyfinTracks {
+                                                JellyfinDownloadManager.shared.deleteDownload(trackId: track.id)
+                                            }
+                                        } label: {
+                                            Text("DELETE PLAYLIST DOWNLOADS")
+                                        }
+                                    } else if isAnyDownloading {
+                                        Button {
+                                            HapticFeedback.selectionChanged()
+                                            for track in jellyfinTracks {
+                                                JellyfinDownloadManager.shared.cancelDownload(trackId: track.id)
+                                            }
+                                        } label: {
+                                            Text("CANCEL DOWNLOADS")
+                                        }
+                                    } else {
+                                        Button {
+                                            HapticFeedback.selectionChanged()
+                                            JellyfinDownloadManager.shared.download(tracks: jellyfinTracks)
+                                        } label: {
+                                            Text("DOWNLOAD PLAYLIST (\(jellyfinTracks.count - downloadedCount))")
+                                        }
+                                    }
+                                }
+                            }
 
                             // Pencil icon button with no background to toggle edit mode
                             Button(action: {

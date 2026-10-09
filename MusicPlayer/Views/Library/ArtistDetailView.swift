@@ -15,6 +15,7 @@ public struct ArtistDetailView: View {
     @State private var showingOnlineDiscovery: Bool = false
     @State private var showingDiscographyReviewSheet: Bool = false
     @State private var selectedSectionDestination: ArtistSectionDestination? = nil
+    @Environment(\.appTheme) private var appTheme
 
     private struct ArtistSectionDestination: Identifiable, Hashable {
         var id: String { title }
@@ -33,10 +34,17 @@ public struct ArtistDetailView: View {
         self.playerService = playerService
     }
 
-    /// Dynamically resolves the latest artist state from the library store to react to real-time metadata changes.
+    /// Dynamically resolves the latest artist state from the library store with O(1) indexed lookup.
     private var currentArtist: Artist {
-        if let direct = libraryStore.artists.first(where: { $0.id == artist.id }) {
+        if let direct = libraryStore.artistLookupIndex[artist.id] {
             return direct
+        }
+        let rawKey = artist.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if let directByName = libraryStore.artistLookupIndex[rawKey] {
+            return directByName
+        }
+        if let canon = libraryStore.artistLookupIndex[ArtistParser.canonicalArtistKey(artist.name)] {
+            return canon
         }
         if let found = libraryStore.findArtist(name: artist.name) {
             return found
@@ -80,6 +88,8 @@ public struct ArtistDetailView: View {
                         Text("SHUFFLE")
                     }
                     .buttonStyle(TypographicButtonStyle(variant: .secondary, size: .regular))
+
+                    Spacer()
                 }
 
                 // 1. Studio Albums Section (Lead Artist, Pristine Studio Releases)
@@ -319,33 +329,11 @@ public struct ArtistDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
-                Menu {
-                    Menu {
-                        ForEach(MetadataAPIOption.allCases) { source in
-                            Button(action: {
-                                HapticFeedback.lightImpact()
-                                libraryStore.scanArtistDiscographyMetadata(artistName: currentArtist.name, source: source)
-                            }) {
-                                Text(source.displayName)
-                            }
-                        }
-                    } label: {
-                        Label("FIND METADATA (DISCOGRAPHY)...", systemImage: "arrow.triangle.2.circlepath")
-                    }
-
-                    Button(action: {
-                        HapticFeedback.lightImpact()
-                        showingOnlineDiscovery = true
-                    }) {
-                        Label("FIND ONLINE", systemImage: "network")
-                    }
-                } label: {
-                    Image(systemName: "globe")
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(Color.primary)
-                        .padding(.horizontal, 4)
-                        .padding(.vertical, 4)
-                }
+                ArtistDetailToolbarMenuView(
+                    currentArtist: currentArtist,
+                    libraryStore: libraryStore,
+                    showingOnlineDiscovery: $showingOnlineDiscovery
+                )
             }
         }
         // Modal presentation sheet
@@ -448,7 +436,8 @@ public struct ArtistDetailView: View {
                     artworkKey: activeArtist.mostRecentArtworkKey,
                     title: activeArtist.name,
                     subtitle: activeArtist.discographySummary,
-                    cornerRadius: 12
+                    cornerRadius: 12,
+                    targetDimension: 300
                 )
                 .frame(width: 88, height: 88)
                 .shadow(color: Color.black.opacity(0.18), radius: 8, x: 0, y: 4)
@@ -575,8 +564,16 @@ public struct ArtistDetailView: View {
         var featuredAlbums: [Album] = []
     }
 
+    @MainActor private static var discographyCache: [String: (version: Int, discography: CategorizedDiscography)] = [:]
+
     private func categorizeDiscography(for activeArtist: Artist) -> CategorizedDiscography {
         let joined = libraryStore.settings.joinedArtists
+        let versionKey = activeArtist.albums.count ^ (activeArtist.tracks.count << 4) ^ joined.hashValue
+
+        if let cached = Self.discographyCache[activeArtist.id], cached.version == versionKey {
+            return cached.discography
+        }
+
         var result = CategorizedDiscography()
         for album in activeArtist.albums {
             if album.isFeaturedAlbum(for: activeArtist.name, joinedArtists: joined) {
@@ -601,6 +598,8 @@ public struct ArtistDetailView: View {
         result.singles.sort(by: sortBlock)
         result.alternates.sort(by: sortBlock)
         result.featuredAlbums.sort(by: sortBlock)
+
+        Self.discographyCache[activeArtist.id] = (versionKey, result)
         return result
     }
 
@@ -611,7 +610,8 @@ public struct ArtistDetailView: View {
                 artworkKey: album.artworkKey,
                 title: album.title,
                 subtitle: album.artist,
-                cornerRadius: 8
+                cornerRadius: 8,
+                targetDimension: 256
             )
             .frame(width: 110, height: 110)
 
@@ -637,7 +637,8 @@ public struct ArtistDetailView: View {
                 artworkKey: album.artworkKey,
                 title: album.title,
                 subtitle: album.artist,
-                cornerRadius: 8
+                cornerRadius: 8,
+                targetDimension: 256
             )
             .frame(width: 110, height: 110)
 
@@ -661,4 +662,79 @@ public struct ArtistDetailView: View {
         }
     }
 }
+
+// MARK: - Dedicated Toolbar Menu Component
+
+private struct ArtistDetailToolbarMenuView: View {
+    let currentArtist: Artist
+    @Bindable var libraryStore: LibraryStore
+    @Binding var showingOnlineDiscovery: Bool
+
+    var body: some View {
+        Menu {
+            let jellyfinTracks = currentArtist.tracks.filter { $0.isJellyfinItem || $0.metadataSource == .server }
+            if !jellyfinTracks.isEmpty {
+                let downloadedCount = jellyfinTracks.filter { JellyfinDownloadManager.shared.isDownloaded(trackId: $0.id) }.count
+                let isAllDownloaded = downloadedCount == jellyfinTracks.count
+                let isAnyDownloading = jellyfinTracks.contains { JellyfinDownloadManager.shared.downloadStates[$0.id]?.isDownloading == true }
+
+                if isAllDownloaded {
+                    Button(role: .destructive) {
+                        HapticFeedback.selectionChanged()
+                        for track in jellyfinTracks {
+                            JellyfinDownloadManager.shared.deleteDownload(trackId: track.id)
+                        }
+                    } label: {
+                        Label("REMOVE DISCOGRAPHY DOWNLOADS", systemImage: "trash")
+                    }
+                } else if isAnyDownloading {
+                    Button {
+                        HapticFeedback.selectionChanged()
+                        for track in jellyfinTracks {
+                            JellyfinDownloadManager.shared.cancelDownload(trackId: track.id)
+                        }
+                    } label: {
+                        Label("CANCEL DOWNLOADS", systemImage: "xmark.circle")
+                    }
+                } else {
+                    Button {
+                        HapticFeedback.selectionChanged()
+                        JellyfinDownloadManager.shared.download(tracks: jellyfinTracks)
+                    } label: {
+                        Label("DOWNLOAD AVAILABLE DISCOGRAPHY", systemImage: "arrow.down.circle")
+                    }
+                }
+
+                Divider()
+            }
+
+            Menu {
+                ForEach(MetadataAPIOption.allCases) { source in
+                    Button(action: {
+                        HapticFeedback.lightImpact()
+                        libraryStore.scanArtistDiscographyMetadata(artistName: currentArtist.name, source: source)
+                    }) {
+                        Text(source.displayName)
+                    }
+                }
+            } label: {
+                Label("FIND METADATA (DISCOGRAPHY)...", systemImage: "arrow.triangle.2.circlepath")
+            }
+
+            Button(action: {
+                HapticFeedback.lightImpact()
+                showingOnlineDiscovery = true
+            }) {
+                Label("FIND ONLINE", systemImage: "network")
+            }
+        } label: {
+            Image(systemName: "globe")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(Color.primary)
+                .padding(.horizontal, 4)
+                .padding(.vertical, 4)
+        }
+    }
+}
+
 

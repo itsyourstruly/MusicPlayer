@@ -53,17 +53,26 @@ public struct MiniPlayerView: View {
 
                 // Play / Pause Pure Text Button
                 Button(action: {
+                    if playerService.cloudWaitTrackID != nil { return }
                     HapticFeedback.lightImpact()
                     withAnimation(.spring(response: 0.46, dampingFraction: 0.72)) {
                         playerService.togglePlayPause()
                     }
                 }) {
-                    Text(playerService.playbackStatus.isPlaying ? "PAUSE" : "PLAY")
-                        .font(.system(size: 12, weight: .black, design: .monospaced))
-                        .foregroundStyle(palette.foregroundColor)
-                        .contentTransition(.interpolate)
-                        .frame(width: 58, height: 36, alignment: .center)
-                        .contentShape(Rectangle())
+                    Group {
+                        if playerService.cloudWaitTrackID != nil {
+                            ProgressView()
+                                .progressViewStyle(CircularProgressViewStyle(tint: palette.foregroundColor))
+                                .scaleEffect(0.9)
+                        } else {
+                            Text(playerService.playbackStatus.isPlaying ? "PAUSE" : "PLAY")
+                                .font(.system(size: 12, weight: .black, design: .monospaced))
+                                .foregroundStyle(palette.foregroundColor)
+                                .contentTransition(.interpolate)
+                        }
+                    }
+                    .frame(width: 58, height: 36, alignment: .center)
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
             }

@@ -43,7 +43,7 @@ public struct MacHomeView: View {
         ScrollView(.vertical, showsIndicators: true) {
             LazyVStack(alignment: .leading, spacing: 24) {
                 // Top Hero / Header
-                if libraryStore.tracks.isEmpty && !libraryStore.isInitialLoading && libraryStore.settings.linkedFolderName == nil {
+                if libraryStore.tracks.isEmpty && !libraryStore.isInitialLoading && libraryStore.settings.linkedFolders.isEmpty && libraryStore.settings.jellyfinServers.isEmpty {
                     unlinkedFolderBanner
                 } else if !libraryStore.tracks.isEmpty {
                     desktopQuickActionsDeck
@@ -69,18 +69,18 @@ public struct MacHomeView: View {
 
     private var unlinkedFolderBanner: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("NO MUSIC FOLDER LINKED")
+            Text("NO MUSIC SOURCE LINKED")
                 .font(.system(size: 14, weight: .black, design: .monospaced))
                 .tracking(1.5)
                 .foregroundStyle(appTheme.primaryTextColor)
 
-            Text("Link a local music folder to index, organize, and play your audio library.")
+            Text("Link a music folder or connect a Jellyfin server to index, organize, and play your audio library.")
                 .font(.system(size: 12))
                 .foregroundStyle(.secondary)
 
             HStack(spacing: 10) {
                 Button(action: onOpenSettings) {
-                    Text("LINK FOLDER")
+                    Text("ADD SOURCE")
                         .font(.system(size: 10, weight: .bold, design: .monospaced))
                         .foregroundStyle(Color.appInvertedBackground)
                         .padding(.horizontal, 14)

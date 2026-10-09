@@ -14,6 +14,9 @@ public final class SecurityScopedBookmark: @unchecked Sendable {
     private var resolvedURLCache: [URL: URL] = [:]
     private let lock = NSLock()
 
+    /// Notified when a stale bookmark is refreshed with updated bookmark data.
+    public var onBookmarkUpdated: ((UUID, Data) -> Void)?
+
     public static let shared = SecurityScopedBookmark()
 
     // Initialize with configured properties
@@ -174,6 +177,25 @@ public final class SecurityScopedBookmark: @unchecked Sendable {
                 relativeTo: nil,
                 bookmarkDataIsStale: &isStale
             )
+
+            if isStale {
+                AppLogger.storage.warning("Bookmark for folder [\(folderID)] is stale. Recreating bookmark.")
+                #if os(macOS)
+                let creationOptions: URL.BookmarkCreationOptions = .withSecurityScope
+                #else
+                let creationOptions: URL.BookmarkCreationOptions = []
+                #endif
+                if let newBookmark = try? resolvedURL.bookmarkData(
+                    options: creationOptions,
+                    includingResourceValuesForKeys: nil,
+                    relativeTo: nil
+                ) {
+                    var map = UserDefaults.standard.dictionary(forKey: multiBookmarksKey) as? [String: Data] ?? [:]
+                    map[folderID.uuidString] = newBookmark
+                    UserDefaults.standard.set(map, forKey: multiBookmarksKey)
+                    self.onBookmarkUpdated?(folderID, newBookmark)
+                }
+            }
 
             let didAccess = resolvedURL.startAccessingSecurityScopedResource()
             activeFolders[folderID] = (url: resolvedURL, isAccessActive: didAccess)

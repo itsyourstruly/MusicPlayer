@@ -519,7 +519,9 @@ public struct FullScreenPlayerView: View {
                     artworkKey: track.artworkKey,
                     title: track.album,
                     subtitle: track.artist,
-                    cornerRadius: isArtworkRounded ? 22 : 0
+                    cornerRadius: isArtworkRounded ? 22 : 0,
+                    targetDimension: 1200,
+                    isOriginalResolution: true
                 )
                 .clipShape(RoundedRectangle(cornerRadius: isArtworkRounded ? 22 : 0, style: .continuous))
                 .frame(width: dimension, height: dimension)

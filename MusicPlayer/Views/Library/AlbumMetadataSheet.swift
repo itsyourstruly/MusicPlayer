@@ -952,6 +952,22 @@ public struct AlbumMetadataSheet: View {
                 )
             )
 
+            // Reset Edits Button
+            if libraryStore.hasOverrides(forAlbum: album) {
+                Button(action: {
+                    libraryStore.resetEdits(forAlbum: album)
+                    HapticFeedback.notificationSuccess()
+                    dismiss()
+                }) {
+                    Text("RESET EDITS")
+                        .font(.system(size: 12, weight: .bold, design: .monospaced))
+                        .foregroundStyle(Color.red)
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(TypographicButtonStyle(variant: .secondary, size: .regular))
+                .padding(.top, 2)
+            }
+
             // Apply Button
             if let selectedAlbum = selectedOnlineAlbum {
                 Button(action: {

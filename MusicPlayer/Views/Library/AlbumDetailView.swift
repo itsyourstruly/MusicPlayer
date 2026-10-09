@@ -16,6 +16,7 @@ public struct AlbumDetailView: View {
     @State private var selectedTrackForPlaylist: Track? = nil
     @State private var showingAlbumMetadataSheet: Bool = false
     @State private var navigateToOnlineSearch: Bool = false
+    @Environment(\.appTheme) private var appTheme
 
     // Initialize with configured properties
     public init(
@@ -34,10 +35,6 @@ public struct AlbumDetailView: View {
         }
         if let normMatch = libraryStore.album(normalizedArtist: album.normalizedArtist, normalizedTitle: album.normalizedTitle) {
             return normMatch
-        }
-        if let firstTrackID = album.tracks.first?.id,
-           let matched = libraryStore.albums.first(where: { $0.tracks.contains(where: { $0.id == firstTrackID }) }) {
-            return matched
         }
         return album
     }
@@ -148,8 +145,45 @@ public struct AlbumDetailView: View {
 
                         Spacer()
 
+                        let jellyfinTracks = activeAlbum.tracks.filter { $0.isJellyfinItem || $0.metadataSource == .server }
+                        let isJellyfinAlbum = !jellyfinTracks.isEmpty
+                        let downloadedCount = jellyfinTracks.filter { JellyfinDownloadManager.shared.isDownloaded(trackId: $0.id) }.count
+                        let isAllDownloaded = isJellyfinAlbum && downloadedCount == jellyfinTracks.count
+                        let isAnyDownloading = jellyfinTracks.contains { JellyfinDownloadManager.shared.downloadStates[$0.id]?.isDownloading == true }
+
                         // Music note icon button with Album Metadata, Search Online & Playlist Actions
                         Menu {
+                            if isJellyfinAlbum {
+                                if isAllDownloaded {
+                                    Button(role: .destructive) {
+                                        HapticFeedback.selectionChanged()
+                                        for track in jellyfinTracks {
+                                            JellyfinDownloadManager.shared.deleteDownload(trackId: track.id)
+                                        }
+                                    } label: {
+                                        Text("REMOVE ALBUM DOWNLOADS")
+                                    }
+                                } else if isAnyDownloading {
+                                    Button {
+                                        HapticFeedback.selectionChanged()
+                                        for track in jellyfinTracks {
+                                            JellyfinDownloadManager.shared.cancelDownload(trackId: track.id)
+                                        }
+                                    } label: {
+                                        Text("CANCEL DOWNLOADS")
+                                    }
+                                } else {
+                                    Button {
+                                        HapticFeedback.selectionChanged()
+                                        JellyfinDownloadManager.shared.download(tracks: jellyfinTracks)
+                                    } label: {
+                                        Text("DOWNLOAD ALBUM")
+                                    }
+                                }
+
+                                Divider()
+                            }
+
                             Button(action: {
                                 showingAlbumMetadataSheet = true
                             }) {
@@ -459,7 +493,8 @@ public struct AlbumDetailView: View {
                 artworkKey: activeAlbum.artworkKey,
                 title: activeAlbum.title,
                 subtitle: activeAlbum.artist,
-                cornerRadius: 10
+                cornerRadius: 10,
+                targetDimension: 600
             )
             .frame(width: 124, height: 124)
             .shadow(color: Color.black.opacity(0.12), radius: 8, x: 0, y: 4)
