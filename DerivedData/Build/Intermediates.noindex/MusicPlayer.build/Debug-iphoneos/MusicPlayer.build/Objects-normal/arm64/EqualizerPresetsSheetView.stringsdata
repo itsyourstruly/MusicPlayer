@@ -1,0 +1,72 @@
+{
+  "source": "/Users/apollo/Desktop/apollo air/seaplusplus2/MusicPlayer/MusicPlayer/Views/Player/EqualizerPresetsSheetView.swift",
+  "tables": {
+    "Localizable": [
+      {
+        "comment": "",
+        "key": "PRESETS",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 81
+        }
+      },
+      {
+        "comment": "",
+        "key": "Search models, brands, signatures...",
+        "location": {
+          "startingColumn": 53,
+          "startingLine": 83
+        }
+      },
+      {
+        "comment": "",
+        "key": "Section",
+        "location": {
+          "startingColumn": 28,
+          "startingLine": 57
+        }
+      },
+      {
+        "comment": "",
+        "key": "ACTIVE",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 108
+        }
+      },
+      {
+        "comment": "",
+        "key": "APPLY",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 116
+        }
+      },
+      {
+        "comment": "",
+        "key": "32",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 246
+        }
+      },
+      {
+        "comment": "",
+        "key": "0 dB",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 250
+        }
+      },
+      {
+        "comment": "",
+        "key": "16k",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 254
+        }
+      }
+    ]
+  },
+  "version": 1
+}

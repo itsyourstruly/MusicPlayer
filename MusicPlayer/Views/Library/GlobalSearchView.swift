@@ -222,12 +222,13 @@ public struct GlobalSearchView: View {
     public init(
         libraryStore: LibraryStore,
         playerService: AudioPlayerService,
-        initialQuery: String = "",
+        initialQuery: String? = nil,
         initialOnlineMode: Bool = false
     ) {
         self.libraryStore = libraryStore
         self.playerService = playerService
-        self._searchQuery = State(initialValue: initialQuery)
+        let query = initialQuery ?? libraryStore.globalSearchQuery
+        self._searchQuery = State(initialValue: query)
         self._isOnlineMode = State(initialValue: initialOnlineMode)
     }
 
@@ -361,6 +362,9 @@ public struct GlobalSearchView: View {
             UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
             #endif
         }
+        .onChange(of: searchQuery) { _, newValue in
+            libraryStore.globalSearchQuery = newValue
+        }
         .onChange(of: isOnlineMode) { _, _ in
             let q = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
             if !q.isEmpty {
@@ -401,10 +405,26 @@ public struct GlobalSearchView: View {
                 onSelectTrackForPlaylist: { selectedTrackForPlaylist = $0 },
                 onToggleArtistExpansion: { artistID in
                     HapticFeedback.selectionChanged()
-                    withAnimation(.spring(response: 0.22, dampingFraction: 0.86)) {
-                        if expandedArtistIDs.contains(artistID) {
+                    if expandedArtistIDs.contains(artistID) {
+                        withAnimation(.spring(response: 0.22, dampingFraction: 0.86)) {
                             expandedArtistIDs.remove(artistID)
-                        } else {
+                        }
+                    } else {
+                        if let index = results.artistTreeNodes.firstIndex(where: { $0.id == artistID }),
+                           results.artistTreeNodes[index].albums.isEmpty {
+                            let cleanQuery = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+                            if let expanded = SearchEngine.shared.expandArtist(artistID: artistID, query: cleanQuery) {
+                                var updatedNodes = results.artistTreeNodes
+                                updatedNodes[index] = expanded
+                                results = GlobalSearchResults(
+                                    artistTreeNodes: updatedNodes,
+                                    playlists: results.playlists,
+                                    directMatchedAlbums: results.directMatchedAlbums,
+                                    directMatchedTracks: results.directMatchedTracks
+                                )
+                            }
+                        }
+                        withAnimation(.spring(response: 0.22, dampingFraction: 0.86)) {
                             expandedArtistIDs.insert(artistID)
                         }
                     }
@@ -932,13 +952,18 @@ public struct GlobalSearchView: View {
     }
 
     private func applySearchResults(_ searchResults: GlobalSearchResults, for query: String) {
-        let topArtistID = searchResults.artistTreeNodes.first?.id
-        let topAlbumID = searchResults.artistTreeNodes.first?.albums.first?.id ?? searchResults.directMatchedAlbums.first?.album.id
-
         var newExpandedArtists: Set<String> = []
         var newExpandedAlbums: Set<String> = []
-        if let topArtistID { newExpandedArtists.insert(topArtistID) }
-        if let topAlbumID { newExpandedAlbums.insert(topAlbumID) }
+
+        if let topArtistNode = searchResults.artistTreeNodes.first {
+            newExpandedArtists.insert(topArtistNode.id)
+            let matchedAlbum = topArtistNode.albums.first(where: { $0.isDirectlyMatched })
+                ?? topArtistNode.albums.first(where: { $0.tracks.contains(where: { $0.isDirectlyMatched }) })
+                ?? topArtistNode.albums.first
+            if let matchedAlbumID = matchedAlbum?.id {
+                newExpandedAlbums.insert(matchedAlbumID)
+            }
+        }
 
         self.results = searchResults
         self.expandedArtistIDs = newExpandedArtists
@@ -1288,7 +1313,7 @@ public struct SearchAlbumTreeNodeRow: View, Equatable {
             .albumContextMenu(album: albumNode.album, libraryStore: libraryStore, playerService: playerService)
 
             if isExpanded && !albumNode.tracks.isEmpty {
-                VStack(alignment: .leading, spacing: 4) {
+                LazyVStack(alignment: .leading, spacing: 4) {
                     ForEach(Array(albumNode.tracks.enumerated()), id: \.element.id) { index, trackNode in
                         SearchTreeTrackRowView(
                             trackNode: trackNode,
@@ -1414,14 +1439,14 @@ public struct SearchArtistTreeNodeRow: View, Equatable {
             }
 
             if isExpanded && !artistNode.albums.isEmpty {
-                VStack(alignment: .leading, spacing: 14) {
+                LazyVStack(alignment: .leading, spacing: 14) {
                     let studioAlbums = artistNode.studioAlbumNodes
                     let singles = artistNode.singlesNodes
                     let alternates = artistNode.alternatesNodes
                     let featured = artistNode.featuredAlbumNodes
 
                     if !studioAlbums.isEmpty {
-                        VStack(alignment: .leading, spacing: 6) {
+                        LazyVStack(alignment: .leading, spacing: 6) {
                             Text("ALBUMS (\(studioAlbums.count))")
                                 .font(.system(size: 10, weight: .bold, design: .monospaced))
                                 .foregroundStyle(Color.secondary.opacity(0.65))
@@ -1448,7 +1473,7 @@ public struct SearchArtistTreeNodeRow: View, Equatable {
                     }
 
                     if !singles.isEmpty {
-                        VStack(alignment: .leading, spacing: 6) {
+                        LazyVStack(alignment: .leading, spacing: 6) {
                             Text("SINGLES (\(singles.count))")
                                 .font(.system(size: 10, weight: .bold, design: .monospaced))
                                 .foregroundStyle(Color.secondary.opacity(0.65))
@@ -1475,7 +1500,7 @@ public struct SearchArtistTreeNodeRow: View, Equatable {
                     }
 
                     if !alternates.isEmpty {
-                        VStack(alignment: .leading, spacing: 6) {
+                        LazyVStack(alignment: .leading, spacing: 6) {
                             Text("ALTERNATES (\(alternates.count))")
                                 .font(.system(size: 10, weight: .bold, design: .monospaced))
                                 .foregroundStyle(Color.secondary.opacity(0.65))
@@ -1502,7 +1527,7 @@ public struct SearchArtistTreeNodeRow: View, Equatable {
                     }
 
                     if !featured.isEmpty {
-                        VStack(alignment: .leading, spacing: 6) {
+                        LazyVStack(alignment: .leading, spacing: 6) {
                             Text("FEATURED ON (\(featured.count))")
                                 .font(.system(size: 10, weight: .bold, design: .monospaced))
                                 .foregroundStyle(Color.secondary.opacity(0.65))
@@ -1608,10 +1633,41 @@ public struct LibrarySearchResultsContainer: View, Equatable {
                             )
                             .equatable()
                         }
-                    } else if !results.directMatchedAlbums.isEmpty {
-                        filteredAlbumsList
-                    } else if !results.directMatchedTracks.isEmpty {
-                        tracksCategoryTreeView
+
+                        let topArtistTrackIDs = Set(results.artistTreeNodes.first?.albums.flatMap { $0.tracks.map { $0.track.id } } ?? [])
+                        let unrepresentedTracks = results.directMatchedTracks.filter { !topArtistTrackIDs.contains($0.track.id) }
+                        if !unrepresentedTracks.isEmpty {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text("TRACKS (\(unrepresentedTracks.count))")
+                                    .font(.system(size: 11, weight: .bold, design: .monospaced))
+                                    .foregroundStyle(.secondary)
+                                    .padding(.leading, 4)
+
+                                LazyVStack(alignment: .leading, spacing: 4) {
+                                    ForEach(Array(unrepresentedTracks.enumerated()), id: \.element.id) { index, trackNode in
+                                        SearchTreeTrackRowView(
+                                            trackNode: trackNode,
+                                            allAlbumTracks: libraryStore.findAlbum(title: trackNode.track.album, artist: trackNode.track.artist)?.tracks ?? [trackNode.track],
+                                            trackIndex: index,
+                                            libraryStore: libraryStore,
+                                            playerService: playerService,
+                                            onSelectArtist: onSelectArtist,
+                                            onSelectAlbum: onSelectAlbum,
+                                            onAddToPlaylist: onSelectTrackForPlaylist,
+                                            onShowInfo: onSelectTrackForInfo
+                                        )
+                                    }
+                                }
+                            }
+                            .padding(.top, 12)
+                        }
+                    } else {
+                        if !results.directMatchedAlbums.isEmpty {
+                            filteredAlbumsList
+                        }
+                        if !results.directMatchedTracks.isEmpty {
+                            tracksCategoryTreeView
+                        }
                     }
 
                     // Playlists Section (if matched)
@@ -1764,7 +1820,7 @@ public struct LibrarySearchResultsContainer: View, Equatable {
         return LazyVStack(alignment: .leading, spacing: 8) {
             ForEach(list, id: \.album.id) { pair in
                 let (album, artist) = pair
-                let resolvedAlbumArt = album.artworkKey ?? album.tracks.compactMap { $0.artworkKey }.first ?? libraryStore.findAlbum(title: album.title, artist: album.artist)?.artworkKey
+                let resolvedAlbumArt = album.artworkKey ?? album.tracks.first(where: { $0.artworkKey != nil })?.artworkKey
 
                 Button(action: {
                     onSelectAlbum(album)
@@ -1817,70 +1873,60 @@ public struct LibrarySearchResultsContainer: View, Equatable {
     }
 
     private var tracksCategoryTreeView: some View {
-        var matchingArtistNodes: [SearchTreeArtistNode] = results.artistTreeNodes.compactMap { artistNode in
-            let filteredAlbums = artistNode.albums.compactMap { albumNode -> SearchTreeAlbumNode? in
-                let matched = albumNode.tracks.filter { $0.isDirectlyMatched || $0.relevanceScore > 0 }
-                let effectiveTracks = !matched.isEmpty ? matched : albumNode.tracks
-                guard !effectiveTracks.isEmpty else { return nil }
-                return SearchTreeAlbumNode(
-                    id: albumNode.id,
-                    album: albumNode.album,
-                    tracks: effectiveTracks,
-                    isDirectlyMatched: albumNode.isDirectlyMatched,
-                    relevanceScore: albumNode.relevanceScore,
-                    category: albumNode.category
-                )
+        var orderedArtistKeys: [String] = []
+        var artistKeyToArtist: [String: Artist] = [:]
+        var artistKeyToOrderedAlbumKeys: [String: [String]] = [:]
+        var albumKeyToAlbum: [String: Album] = [:]
+        var albumKeyToTracks: [String: [SearchTreeTrackNode]] = [:]
+
+        for trackNode in results.directMatchedTracks {
+            let track = trackNode.track
+            let artistName = track.artist.isEmpty ? "Unknown Artist" : track.artist
+            let artistKey = ArtistParser.canonicalArtistKey(artistName)
+            let albumTitle = track.album.isEmpty ? "Singles" : track.album
+            let albumKey = "\(artistKey)_\(albumTitle.lowercased())"
+
+            if artistKeyToArtist[artistKey] == nil {
+                let artistObj = libraryStore.findArtist(name: artistName) ?? Artist(name: artistName, albums: [])
+                artistKeyToArtist[artistKey] = artistObj
+                orderedArtistKeys.append(artistKey)
+                artistKeyToOrderedAlbumKeys[artistKey] = []
             }
-            guard !filteredAlbums.isEmpty else { return nil }
-            return SearchTreeArtistNode(
-                id: artistNode.id,
-                artist: artistNode.artist,
-                albums: filteredAlbums,
-                isDirectlyMatched: artistNode.isDirectlyMatched,
-                relevanceScore: artistNode.relevanceScore
-            )
+
+            if albumKeyToAlbum[albumKey] == nil {
+                let albumObj = libraryStore.findAlbum(title: albumTitle, artist: artistName) ?? Album(title: albumTitle, artist: artistName, tracks: [track])
+                albumKeyToAlbum[albumKey] = albumObj
+                artistKeyToOrderedAlbumKeys[artistKey]?.append(albumKey)
+                albumKeyToTracks[albumKey] = []
+            }
+
+            albumKeyToTracks[albumKey]?.append(trackNode)
         }
 
-        if matchingArtistNodes.isEmpty && !results.directMatchedTracks.isEmpty {
-            var grouped: [String: (artist: Artist, albums: [String: (album: Album, tracks: [SearchTreeTrackNode])])] = [:]
-            for trackNode in results.directMatchedTracks {
-                let track = trackNode.track
-                let artistName = track.artist.isEmpty ? "Unknown Artist" : track.artist
-                let artistKey = ArtistParser.canonicalArtistKey(artistName)
-                let albumTitle = track.album.isEmpty ? "Singles" : track.album
-                let albumKey = "\(artistKey)_\(albumTitle.lowercased())"
-
-                if grouped[artistKey] == nil {
-                    let artistObj = libraryStore.findArtist(name: artistName) ?? Artist(name: artistName, albums: [])
-                    grouped[artistKey] = (artist: artistObj, albums: [:])
-                }
-                if grouped[artistKey]!.albums[albumKey] == nil {
-                    let albumObj = libraryStore.findAlbum(title: albumTitle, artist: artistName) ?? Album(title: albumTitle, artist: artistName, tracks: [track])
-                    grouped[artistKey]!.albums[albumKey] = (album: albumObj, tracks: [])
-                }
-                grouped[artistKey]!.albums[albumKey]!.tracks.append(trackNode)
-            }
-
-            for (artistKey, group) in grouped {
-                var albumNodes: [SearchTreeAlbumNode] = []
-                for (_, albGroup) in group.albums {
-                    albumNodes.append(SearchTreeAlbumNode(
-                        id: "synth_album_\(albGroup.album.id)",
-                        album: albGroup.album,
-                        tracks: albGroup.tracks,
-                        isDirectlyMatched: true,
-                        relevanceScore: albGroup.tracks.map { $0.relevanceScore }.max() ?? 50_000,
-                        category: albGroup.album.isSingle ? .singles : .albums
-                    ))
-                }
-                matchingArtistNodes.append(SearchTreeArtistNode(
-                    id: "synth_artist_\(artistKey)",
-                    artist: group.artist,
-                    albums: albumNodes,
+        var matchingArtistNodes: [SearchTreeArtistNode] = []
+        for artistKey in orderedArtistKeys {
+            guard let artist = artistKeyToArtist[artistKey],
+                  let albumKeys = artistKeyToOrderedAlbumKeys[artistKey] else { continue }
+            var albumNodes: [SearchTreeAlbumNode] = []
+            for albKey in albumKeys {
+                guard let album = albumKeyToAlbum[albKey],
+                      let trks = albumKeyToTracks[albKey] else { continue }
+                albumNodes.append(SearchTreeAlbumNode(
+                    id: "synth_album_\(albKey)",
+                    album: album,
+                    tracks: trks,
                     isDirectlyMatched: true,
-                    relevanceScore: albumNodes.map { $0.relevanceScore }.max() ?? 50_000
+                    relevanceScore: trks.map { $0.relevanceScore }.max() ?? 50_000,
+                    category: album.isSingle ? .singles : .albums
                 ))
             }
+            matchingArtistNodes.append(SearchTreeArtistNode(
+                id: "synth_artist_\(artistKey)",
+                artist: artist,
+                albums: albumNodes,
+                isDirectlyMatched: true,
+                relevanceScore: albumNodes.map { $0.relevanceScore }.max() ?? 50_000
+            ))
         }
 
         let allMatchingAlbumIDs = Set(matchingArtistNodes.flatMap { $0.albums.map { $0.id } })

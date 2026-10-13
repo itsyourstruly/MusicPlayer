@@ -2,7 +2,6 @@ import SwiftUI
 import AVFoundation
 import os
 #if os(iOS)
-import BackgroundTasks
 import UIKit
 #endif
 
@@ -15,9 +14,6 @@ struct MusicPlayerApp: App {
 
     init() {
         AppLogger.ui.info("LAC MusicPlayer application launched. Session logging active.")
-        #if os(iOS)
-        registerBackgroundTasks()
-        #endif
     }
 
     // Body
@@ -36,49 +32,40 @@ struct MusicPlayerApp: App {
         .onChange(of: scenePhase) { _, newPhase in
             if newPhase == .background {
                 #if os(iOS)
-                let taskID = UIApplication.shared.beginBackgroundTask(withName: "WALCheckpoint") {
-                    // Expiration handler
+                var taskID: UIBackgroundTaskIdentifier = .invalid
+                taskID = UIApplication.shared.beginBackgroundTask(withName: "FlushLibrarySnapshot") {
+                    if taskID != .invalid {
+                        UIApplication.shared.endBackgroundTask(taskID)
+                        taskID = .invalid
+                    }
                 }
                 Task.detached(priority: .utility) {
-                    LibraryDatabase.shared.walCheckpoint()
-                    UIApplication.shared.endBackgroundTask(taskID)
+                    if let store = await MainActor.run(body: { LibraryStore.shared }) {
+                        let sDir = await MainActor.run { store.storageDirectoryURL }
+                        let sHash = await MainActor.run { store.computeSettingsHash() }
+                        await LibraryRepository.shared.flushImmediate(storageDir: sDir, settingsHash: sHash)
+                    }
+                    await MainActor.run {
+                        LibraryStore.shared?.flushSnapshotImmediate()
+                    }
+                    if taskID != .invalid {
+                        UIApplication.shared.endBackgroundTask(taskID)
+                        taskID = .invalid
+                    }
                 }
-                scheduleAppRefresh()
                 #else
                 Task.detached(priority: .utility) {
-                    LibraryDatabase.shared.walCheckpoint()
+                    if let store = await MainActor.run(body: { LibraryStore.shared }) {
+                        let sDir = await MainActor.run { store.storageDirectoryURL }
+                        let sHash = await MainActor.run { store.computeSettingsHash() }
+                        await LibraryRepository.shared.flushImmediate(storageDir: sDir, settingsHash: sHash)
+                    }
+                    await MainActor.run {
+                        LibraryStore.shared?.flushSnapshotImmediate()
+                    }
                 }
                 #endif
             }
         }
     }
-
-    #if os(iOS)
-    private func registerBackgroundTasks() {
-        BGTaskScheduler.shared.register(
-            forTaskWithIdentifier: "com.musicplayer.jellyfin.sync",
-            using: nil
-        ) { task in
-            guard let appRefreshTask = task as? BGAppRefreshTask else { return }
-            handleBackgroundSync(task: appRefreshTask)
-        }
-    }
-
-    private func scheduleAppRefresh() {
-        let request = BGAppRefreshTaskRequest(identifier: "com.musicplayer.jellyfin.sync")
-        request.earliestBeginDate = Date(timeIntervalSinceNow: 60 * 60) // 1 hour
-        try? BGTaskScheduler.shared.submit(request)
-    }
-
-    private func handleBackgroundSync(task: BGAppRefreshTask) {
-        scheduleAppRefresh()
-        let syncTask = Task {
-            LibraryDatabase.shared.walCheckpoint()
-            task.setTaskCompleted(success: true)
-        }
-        task.expirationHandler = {
-            syncTask.cancel()
-        }
-    }
-    #endif
 }

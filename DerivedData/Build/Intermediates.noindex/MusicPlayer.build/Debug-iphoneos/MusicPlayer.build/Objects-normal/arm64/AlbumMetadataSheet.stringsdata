@@ -1,0 +1,264 @@
+{
+  "source": "/Users/apollo/Desktop/apollo air/seaplusplus2/MusicPlayer/MusicPlayer/Views/Library/AlbumMetadataSheet.swift",
+  "tables": {
+    "Localizable": [
+      {
+        "comment": "",
+        "key": "ALBUM METADATA",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 88
+        }
+      },
+      {
+        "comment": "",
+        "key": "SEARCH ARTIST & ALBUM ONLINE",
+        "location": {
+          "startingColumn": 27,
+          "startingLine": 116
+        }
+      },
+      {
+        "comment": "",
+        "key": "SEARCH",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 143
+        }
+      },
+      {
+        "comment": "",
+        "key": "ONLINE MATCHES (%lld)",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 185
+        }
+      },
+      {
+        "comment": "",
+        "key": "• %@",
+        "location": {
+          "startingColumn": 46,
+          "startingLine": 240
+        }
+      },
+      {
+        "comment": "",
+        "key": "LOCAL ALBUM",
+        "location": {
+          "startingColumn": 18,
+          "startingLine": 276
+        }
+      },
+      {
+        "comment": "",
+        "key": "• %lld TRACKS",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 305
+        }
+      },
+      {
+        "comment": "",
+        "key": "• %lld TRACKS",
+        "location": {
+          "startingColumn": 34,
+          "startingLine": 364
+        }
+      },
+      {
+        "comment": "",
+        "key": "SEARCHING...",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 374
+        }
+      },
+      {
+        "comment": "",
+        "key": "NO MATCH",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 381
+        }
+      },
+      {
+        "comment": "",
+        "key": "Search or switch source.",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 384
+        }
+      },
+      {
+        "comment": "",
+        "key": "LOCAL TRACKS (%lld)",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 531
+        }
+      },
+      {
+        "comment": "",
+        "key": "ONLINE TRACKLIST (%lld)",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 540
+        }
+      },
+      {
+        "comment": "",
+        "key": "—",
+        "location": {
+          "startingColumn": 34,
+          "startingLine": 648
+        }
+      },
+      {
+        "comment": "",
+        "key": "MISSING FROM ALBUM",
+        "location": {
+          "startingColumn": 34,
+          "startingLine": 653
+        }
+      },
+      {
+        "comment": "",
+        "key": "%lld",
+        "location": {
+          "startingColumn": 34,
+          "startingLine": 614
+        }
+      },
+      {
+        "comment": "",
+        "key": "%lld",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 672
+        }
+      },
+      {
+        "comment": "",
+        "key": "%lld",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 718
+        }
+      },
+      {
+        "comment": "",
+        "key": "PRESERVE LOCAL",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 769
+        }
+      },
+      {
+        "comment": "",
+        "key": "%lld",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 749
+        }
+      },
+      {
+        "comment": "",
+        "key": "Tracks in local album not on official tracklist. Tap badge to re-route.",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 816
+        }
+      },
+      {
+        "comment": "",
+        "key": "UNMATCHED TRACKS (%lld)",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 793
+        }
+      },
+      {
+        "comment": "",
+        "key": "SCANNING...",
+        "location": {
+          "startingColumn": 42,
+          "startingLine": 803
+        }
+      },
+      {
+        "comment": "",
+        "key": "SCAN",
+        "location": {
+          "startingColumn": 42,
+          "startingLine": 807
+        }
+      },
+      {
+        "comment": "",
+        "key": "MOVE TO OTHER ALBUM",
+        "location": {
+          "startingColumn": 29,
+          "startingLine": 867
+        }
+      },
+      {
+        "comment": "",
+        "key": "MOVE TO ALTERNATES (SELECTED)",
+        "location": {
+          "startingColumn": 61,
+          "startingLine": 863
+        }
+      },
+      {
+        "comment": "",
+        "key": "MOVE TO ALTERNATES",
+        "location": {
+          "startingColumn": 95,
+          "startingLine": 863
+        }
+      },
+      {
+        "comment": "",
+        "key": "KEEP IN MAIN TRACKLIST (SELECTED)",
+        "location": {
+          "startingColumn": 55,
+          "startingLine": 894
+        }
+      },
+      {
+        "comment": "",
+        "key": "KEEP IN MAIN TRACKLIST",
+        "location": {
+          "startingColumn": 93,
+          "startingLine": 894
+        }
+      },
+      {
+        "comment": "",
+        "key": "RESET EDITS",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 947
+        }
+      },
+      {
+        "comment": "",
+        "key": "APPLYING TO ALL TRACKS...",
+        "location": {
+          "startingColumn": 43,
+          "startingLine": 966
+        }
+      },
+      {
+        "comment": "",
+        "key": "APPLY ALBUM TO ALL TRACKS",
+        "location": {
+          "startingColumn": 73,
+          "startingLine": 966
+        }
+      }
+    ]
+  },
+  "version": 1
+}

@@ -20,14 +20,14 @@ extension UUID {
 }
 
 /// Origin source of the track's displayed metadata.
-public enum MetadataSource: String, Codable, Sendable, Hashable {
+nonisolated public enum MetadataSource: String, Codable, Sendable, Hashable {
     case embeddedTags = "embeddedTags"
     case folderStructure = "folderStructure"
     case server = "server"
 }
 
 /// Frozen snapshot of genuine embedded ID3/audio tags read from disk, allowing pristine METADATA mode restores.
-public struct TagSnapshot: Codable, Sendable, Hashable {
+nonisolated public struct TagSnapshot: Codable, Sendable, Hashable {
     public let title: String
     public let artist: String
     public let album: String
@@ -56,7 +56,7 @@ public struct TagSnapshot: Codable, Sendable, Hashable {
 }
 
 /// Core immutable audio track entity containing complete metadata and playback specifications.
-public struct Track: Identifiable, Codable, Sendable, Hashable {
+nonisolated public struct Track: Identifiable, Codable, Sendable, Hashable {
     public typealias MetadataSource = MusicPlayer.MetadataSource
     public typealias TagSnapshot = MusicPlayer.TagSnapshot
 
@@ -136,7 +136,7 @@ public struct Track: Identifiable, Codable, Sendable, Hashable {
 
     /// Determines whether online or offline metadata matching is supported for this track.
     /// Only supported for locally available files or downloaded Jellyfin items.
-    public var supportsMetadataLookup: Bool {
+    @MainActor public var supportsMetadataLookup: Bool {
         if isJellyfinItem || metadataSource == .server {
             return JellyfinDownloadManager.shared.isDownloaded(trackId: id)
         }

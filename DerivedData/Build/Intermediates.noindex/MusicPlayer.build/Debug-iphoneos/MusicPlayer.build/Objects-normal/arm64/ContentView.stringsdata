@@ -1,0 +1,24 @@
+{
+  "source": "/Users/apollo/Desktop/apollo air/seaplusplus2/MusicPlayer/MusicPlayer/ContentView.swift",
+  "tables": {
+    "Localizable": [
+      {
+        "comment": "",
+        "key": "Home",
+        "location": {
+          "startingColumn": 27,
+          "startingLine": 147
+        }
+      },
+      {
+        "comment": "",
+        "key": "Library",
+        "location": {
+          "startingColumn": 27,
+          "startingLine": 163
+        }
+      }
+    ]
+  },
+  "version": 1
+}

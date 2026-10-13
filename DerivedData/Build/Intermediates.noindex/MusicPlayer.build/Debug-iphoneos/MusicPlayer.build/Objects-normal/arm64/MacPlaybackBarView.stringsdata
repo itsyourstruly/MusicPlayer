@@ -1,0 +1,112 @@
+{
+  "source": "/Users/apollo/Desktop/apollo air/seaplusplus2/MusicPlayer/MusicPlayer/Views/MacOS/MacPlaybackBarView.swift",
+  "tables": {
+    "Localizable": [
+      {
+        "comment": "",
+        "key": "•",
+        "location": {
+          "startingColumn": 34,
+          "startingLine": 99
+        }
+      },
+      {
+        "comment": "",
+        "key": "INFO",
+        "location": {
+          "startingColumn": 34,
+          "startingLine": 121
+        }
+      },
+      {
+        "comment": "",
+        "key": "Ready",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 140
+        }
+      },
+      {
+        "comment": "",
+        "key": "Select a song to start listening",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 144
+        }
+      },
+      {
+        "comment": "",
+        "key": "SHUF",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 162
+        }
+      },
+      {
+        "comment": "",
+        "key": "BACK",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 184
+        }
+      },
+      {
+        "comment": "",
+        "key": "PAUSE",
+        "location": {
+          "startingColumn": 67,
+          "startingLine": 199
+        }
+      },
+      {
+        "comment": "",
+        "key": "PLAY",
+        "location": {
+          "startingColumn": 77,
+          "startingLine": 199
+        }
+      },
+      {
+        "comment": "",
+        "key": "NEXT",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 213
+        }
+      },
+      {
+        "comment": "",
+        "key": "MUTED",
+        "location": {
+          "startingColumn": 46,
+          "startingLine": 335
+        }
+      },
+      {
+        "comment": "",
+        "key": "VOL",
+        "location": {
+          "startingColumn": 56,
+          "startingLine": 335
+        }
+      },
+      {
+        "comment": "",
+        "key": "QUEUE",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 365
+        }
+      },
+      {
+        "comment": "",
+        "key": "%lld",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 369
+        }
+      }
+    ]
+  },
+  "version": 1
+}

@@ -1,0 +1,104 @@
+{
+  "source": "/Users/apollo/Desktop/apollo air/seaplusplus2/MusicPlayer/MusicPlayer/Views/Settings/JellyfinSignInSheet.swift",
+  "tables": {
+    "Localizable": [
+      {
+        "comment": "",
+        "key": "CONNECT JELLYFIN",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 145
+        }
+      },
+      {
+        "comment": "",
+        "key": "CONNECTION ERROR",
+        "location": {
+          "startingColumn": 38,
+          "startingLine": 26
+        }
+      },
+      {
+        "comment": "",
+        "key": "OPEN SETTINGS",
+        "location": {
+          "startingColumn": 46,
+          "startingLine": 46
+        }
+      },
+      {
+        "comment": "",
+        "key": "SERVER URL",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 68
+        }
+      },
+      {
+        "comment": "",
+        "key": "HTTP://192.168.1.100:8096",
+        "location": {
+          "startingColumn": 35,
+          "startingLine": 72
+        }
+      },
+      {
+        "comment": "",
+        "key": "USERNAME",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 87
+        }
+      },
+      {
+        "comment": "",
+        "key": "USERNAME",
+        "location": {
+          "startingColumn": 35,
+          "startingLine": 91
+        }
+      },
+      {
+        "comment": "",
+        "key": "PASSWORD",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 105
+        }
+      },
+      {
+        "comment": "",
+        "key": "PASSWORD",
+        "location": {
+          "startingColumn": 37,
+          "startingLine": 109
+        }
+      },
+      {
+        "comment": "",
+        "key": "CONNECTING...",
+        "location": {
+          "startingColumn": 49,
+          "startingLine": 127
+        }
+      },
+      {
+        "comment": "",
+        "key": "CONNECT",
+        "location": {
+          "startingColumn": 67,
+          "startingLine": 127
+        }
+      },
+      {
+        "comment": "",
+        "key": "CANCEL",
+        "location": {
+          "startingColumn": 28,
+          "startingLine": 149
+        }
+      }
+    ]
+  },
+  "version": 1
+}

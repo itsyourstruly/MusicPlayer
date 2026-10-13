@@ -1,7 +1,7 @@
 import Foundation
 
 /// Detailed audio file specification and container metadata.
-public struct AudioFileInfo: Identifiable, Codable, Sendable, Hashable {
+nonisolated public struct AudioFileInfo: Identifiable, Codable, Sendable, Hashable {
     /// Keyed by file path so lookups from `Track.fileInfo` remain O(1) in dictionaries.
     public var id: String { filePath }
 

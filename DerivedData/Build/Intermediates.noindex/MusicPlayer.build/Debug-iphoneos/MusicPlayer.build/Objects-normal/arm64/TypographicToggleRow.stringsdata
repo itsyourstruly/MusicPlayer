@@ -1,0 +1,24 @@
+{
+  "source": "/Users/apollo/Desktop/apollo air/seaplusplus2/MusicPlayer/MusicPlayer/Views/Components/TypographicToggleRow.swift",
+  "tables": {
+    "Localizable": [
+      {
+        "comment": "",
+        "key": "ON",
+        "location": {
+          "startingColumn": 25,
+          "startingLine": 46
+        }
+      },
+      {
+        "comment": "",
+        "key": "OFF",
+        "location": {
+          "startingColumn": 32,
+          "startingLine": 46
+        }
+      }
+    ]
+  },
+  "version": 1
+}

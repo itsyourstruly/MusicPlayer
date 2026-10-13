@@ -1,0 +1,56 @@
+{
+  "source": "/Users/apollo/Desktop/apollo air/seaplusplus2/MusicPlayer/MusicPlayer/Views/Settings/SettingsView.swift",
+  "tables": {
+    "Localizable": [
+      {
+        "comment": "",
+        "key": "SETTINGS",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 270
+        }
+      },
+      {
+        "comment": "",
+        "key": "FOLDER",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 319
+        }
+      },
+      {
+        "comment": "",
+        "key": "RESET HOME SHUFFLE TO ALL",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 399
+        }
+      },
+      {
+        "comment": "",
+        "key": "OPTION INFO",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 408
+        }
+      },
+      {
+        "comment": "",
+        "key": "Long press options for more info",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 416
+        }
+      },
+      {
+        "comment": "",
+        "key": "SHOW LOGS",
+        "location": {
+          "startingColumn": 34,
+          "startingLine": 424
+        }
+      }
+    ]
+  },
+  "version": 1
+}

@@ -1,0 +1,37 @@
+{
+  "/Users/apollo/Desktop/apollo air/seaplusplus2/MusicPlayer/MusicPlayer/Utilities/ArtistParser.swift" : {
+    "const-values" : "/Users/apollo/Desktop/apollo air/seaplusplus2/MusicPlayer/DerivedData/Build/Intermediates.noindex/MusicPlayer.build/Debug-iphoneos/MusicPlayer.build/Objects-normal/arm64/ArtistParser.swiftconstvalues",
+    "dependencies" : "/Users/apollo/Desktop/apollo air/seaplusplus2/MusicPlayer/DerivedData/Build/Intermediates.noindex/MusicPlayer.build/Debug-iphoneos/MusicPlayer.build/Objects-normal/arm64/ArtistParser.d",
+    "diagnostics" : "/Users/apollo/Desktop/apollo air/seaplusplus2/MusicPlayer/DerivedData/Build/Intermediates.noindex/MusicPlayer.build/Debug-iphoneos/MusicPlayer.build/Objects-normal/arm64/ArtistParser.dia",
+    "object" : "/Users/apollo/Desktop/apollo air/seaplusplus2/MusicPlayer/DerivedData/Build/Intermediates.noindex/MusicPlayer.build/Debug-iphoneos/MusicPlayer.build/Objects-normal/arm64/ArtistParser.o",
+    "swift-dependencies" : "/Users/apollo/Desktop/apollo air/seaplusplus2/MusicPlayer/DerivedData/Build/Intermediates.noindex/MusicPlayer.build/Debug-iphoneos/MusicPlayer.build/Objects-normal/arm64/ArtistParser.swiftdeps"
+  },
+  "/Users/apollo/Desktop/apollo air/seaplusplus2/MusicPlayer/MusicPlayer/Utilities/AudioWaveformSpectrogramGenerator.swift" : {
+    "const-values" : "/Users/apollo/Desktop/apollo air/seaplusplus2/MusicPlayer/DerivedData/Build/Intermediates.noindex/MusicPlayer.build/Debug-iphoneos/MusicPlayer.build/Objects-normal/arm64/AudioWaveformSpectrogramGenerator.swiftconstvalues",
+    "dependencies" : "/Users/apollo/Desktop/apollo air/seaplusplus2/MusicPlayer/DerivedData/Build/Intermediates.noindex/MusicPlayer.build/Debug-iphoneos/MusicPlayer.build/Objects-normal/arm64/AudioWaveformSpectrogramGenerator.d",
+    "diagnostics" : "/Users/apollo/Desktop/apollo air/seaplusplus2/MusicPlayer/DerivedData/Build/Intermediates.noindex/MusicPlayer.build/Debug-iphoneos/MusicPlayer.build/Objects-normal/arm64/AudioWaveformSpectrogramGenerator.dia",
+    "object" : "/Users/apollo/Desktop/apollo air/seaplusplus2/MusicPlayer/DerivedData/Build/Intermediates.noindex/MusicPlayer.build/Debug-iphoneos/MusicPlayer.build/Objects-normal/arm64/AudioWaveformSpectrogramGenerator.o",
+    "swift-dependencies" : "/Users/apollo/Desktop/apollo air/seaplusplus2/MusicPlayer/DerivedData/Build/Intermediates.noindex/MusicPlayer.build/Debug-iphoneos/MusicPlayer.build/Objects-normal/arm64/AudioWaveformSpectrogramGenerator.swiftdeps"
+  },
+  "/Users/apollo/Desktop/apollo air/seaplusplus2/MusicPlayer/MusicPlayer/Utilities/ByteFormatting.swift" : {
+    "const-values" : "/Users/apollo/Desktop/apollo air/seaplusplus2/MusicPlayer/DerivedData/Build/Intermediates.noindex/MusicPlayer.build/Debug-iphoneos/MusicPlayer.build/Objects-normal/arm64/ByteFormatting.swiftconstvalues",
+    "dependencies" : "/Users/apollo/Desktop/apollo air/seaplusplus2/MusicPlayer/DerivedData/Build/Intermediates.noindex/MusicPlayer.build/Debug-iphoneos/MusicPlayer.build/Objects-normal/arm64/ByteFormatting.d",
+    "diagnostics" : "/Users/apollo/Desktop/apollo air/seaplusplus2/MusicPlayer/DerivedData/Build/Intermediates.noindex/MusicPlayer.build/Debug-iphoneos/MusicPlayer.build/Objects-normal/arm64/ByteFormatting.dia",
+    "object" : "/Users/apollo/Desktop/apollo air/seaplusplus2/MusicPlayer/DerivedData/Build/Intermediates.noindex/MusicPlayer.build/Debug-iphoneos/MusicPlayer.build/Objects-normal/arm64/ByteFormatting.o",
+    "swift-dependencies" : "/Users/apollo/Desktop/apollo air/seaplusplus2/MusicPlayer/DerivedData/Build/Intermediates.noindex/MusicPlayer.build/Debug-iphoneos/MusicPlayer.build/Objects-normal/arm64/ByteFormatting.swiftdeps"
+  },
+  "/Users/apollo/Desktop/apollo air/seaplusplus2/MusicPlayer/MusicPlayer/Utilities/DiagnosticsCollector.swift" : {
+    "const-values" : "/Users/apollo/Desktop/apollo air/seaplusplus2/MusicPlayer/DerivedData/Build/Intermediates.noindex/MusicPlayer.build/Debug-iphoneos/MusicPlayer.build/Objects-normal/arm64/DiagnosticsCollector.swiftconstvalues",
+    "dependencies" : "/Users/apollo/Desktop/apollo air/seaplusplus2/MusicPlayer/DerivedData/Build/Intermediates.noindex/MusicPlayer.build/Debug-iphoneos/MusicPlayer.build/Objects-normal/arm64/DiagnosticsCollector.d",
+    "diagnostics" : "/Users/apollo/Desktop/apollo air/seaplusplus2/MusicPlayer/DerivedData/Build/Intermediates.noindex/MusicPlayer.build/Debug-iphoneos/MusicPlayer.build/Objects-normal/arm64/DiagnosticsCollector.dia",
+    "object" : "/Users/apollo/Desktop/apollo air/seaplusplus2/MusicPlayer/DerivedData/Build/Intermediates.noindex/MusicPlayer.build/Debug-iphoneos/MusicPlayer.build/Objects-normal/arm64/DiagnosticsCollector.o",
+    "swift-dependencies" : "/Users/apollo/Desktop/apollo air/seaplusplus2/MusicPlayer/DerivedData/Build/Intermediates.noindex/MusicPlayer.build/Debug-iphoneos/MusicPlayer.build/Objects-normal/arm64/DiagnosticsCollector.swiftdeps"
+  },
+  "/Users/apollo/Desktop/apollo air/seaplusplus2/MusicPlayer/MusicPlayer/Utilities/DisambiguationMatcher.swift" : {
+    "const-values" : "/Users/apollo/Desktop/apollo air/seaplusplus2/MusicPlayer/DerivedData/Build/Intermediates.noindex/MusicPlayer.build/Debug-iphoneos/MusicPlayer.build/Objects-normal/arm64/DisambiguationMatcher.swiftconstvalues",
+    "dependencies" : "/Users/apollo/Desktop/apollo air/seaplusplus2/MusicPlayer/DerivedData/Build/Intermediates.noindex/MusicPlayer.build/Debug-iphoneos/MusicPlayer.build/Objects-normal/arm64/DisambiguationMatcher.d",
+    "diagnostics" : "/Users/apollo/Desktop/apollo air/seaplusplus2/MusicPlayer/DerivedData/Build/Intermediates.noindex/MusicPlayer.build/Debug-iphoneos/MusicPlayer.build/Objects-normal/arm64/DisambiguationMatcher.dia",
+    "object" : "/Users/apollo/Desktop/apollo air/seaplusplus2/MusicPlayer/DerivedData/Build/Intermediates.noindex/MusicPlayer.build/Debug-iphoneos/MusicPlayer.build/Objects-normal/arm64/DisambiguationMatcher.o",
+    "swift-dependencies" : "/Users/apollo/Desktop/apollo air/seaplusplus2/MusicPlayer/DerivedData/Build/Intermediates.noindex/MusicPlayer.build/Debug-iphoneos/MusicPlayer.build/Objects-normal/arm64/DisambiguationMatcher.swiftdeps"
+  }
+}

@@ -1,0 +1,48 @@
+{
+  "source": "/Users/apollo/Desktop/apollo air/seaplusplus2/MusicPlayer/MusicPlayer/Views/Player/EqualizerGraphView.swift",
+  "tables": {
+    "Localizable": [
+      {
+        "comment": "",
+        "key": "+12",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 120
+        }
+      },
+      {
+        "comment": "",
+        "key": "+6",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 124
+        }
+      },
+      {
+        "comment": "",
+        "key": " 0",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 128
+        }
+      },
+      {
+        "comment": "",
+        "key": "-6",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 132
+        }
+      },
+      {
+        "comment": "",
+        "key": "-12",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 136
+        }
+      }
+    ]
+  },
+  "version": 1
+}

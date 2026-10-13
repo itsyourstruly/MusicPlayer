@@ -1,0 +1,296 @@
+{
+  "source": "/Users/apollo/Desktop/apollo air/seaplusplus2/MusicPlayer/MusicPlayer/Views/Library/MetadataComparisonListView.swift",
+  "tables": {
+    "Localizable": [
+      {
+        "comment": "",
+        "key": "METADATA ENRICHMENT",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 70
+        }
+      },
+      {
+        "comment": "",
+        "key": "ENRICHMENT COMPLETE",
+        "location": {
+          "startingColumn": 18,
+          "startingLine": 85
+        }
+      },
+      {
+        "comment": "",
+        "key": "Successfully enriched %lld tracks in your library with verified online metadata, high-resolution artwork, and disk tags.",
+        "location": {
+          "startingColumn": 18,
+          "startingLine": 89
+        }
+      },
+      {
+        "comment": "",
+        "key": "DONE",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 98
+        }
+      },
+      {
+        "comment": "",
+        "key": "PLEASE KEEP THE APPLICATION OPEN UNTIL ENRICHMENT IS COMPLETE.",
+        "location": {
+          "startingColumn": 18,
+          "startingLine": 142
+        }
+      },
+      {
+        "comment": "",
+        "key": "ENRICHING METADATA",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 116
+        }
+      },
+      {
+        "comment": "",
+        "key": "APPLYING VERIFIED TAGS, DOWNLOADING ARTWORK, AND UPDATING AUDIO FILES.",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 120
+        }
+      },
+      {
+        "comment": "",
+        "key": "PROGRESS: %lld%%",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 133
+        }
+      },
+      {
+        "comment": "",
+        "key": "SHOWING %lld OF %lld TRACKS",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 175
+        }
+      },
+      {
+        "comment": "",
+        "key": "NO MATCHING TRACKS FOUND",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 185
+        }
+      },
+      {
+        "comment": "",
+        "key": "No pending enrichment matches query '%@'.",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 188
+        }
+      },
+      {
+        "comment": "",
+        "key": "SEARCH TRACK, ALBUM, OR ARTIST...",
+        "location": {
+          "startingColumn": 23,
+          "startingLine": 221
+        }
+      },
+      {
+        "comment": "",
+        "key": "CLEAR",
+        "location": {
+          "startingColumn": 24,
+          "startingLine": 227
+        }
+      },
+      {
+        "comment": "",
+        "key": "APPLE MUSIC / DEEZER",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 373
+        }
+      },
+      {
+        "comment": "",
+        "key": "VERIFIED ONLINE MATCHES",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 362
+        }
+      },
+      {
+        "comment": "",
+        "key": "%lld TRACKS READY TO ENRICH",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 366
+        }
+      },
+      {
+        "comment": "",
+        "key": "METADATA CHECK: %lld%%",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 384
+        }
+      },
+      {
+        "comment": "",
+        "key": "ENRICHING: %lld%%",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 397
+        }
+      },
+      {
+        "comment": "",
+        "key": "ENRICHING IN PROGRESS...",
+        "location": {
+          "startingColumn": 36,
+          "startingLine": 421
+        }
+      },
+      {
+        "comment": "",
+        "key": "ENRICH ALL (%lld TRACKS)",
+        "location": {
+          "startingColumn": 65,
+          "startingLine": 421
+        }
+      },
+      {
+        "comment": "",
+        "key": "•",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 483
+        }
+      },
+      {
+        "comment": "",
+        "key": "ONLINE METADATA",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 477
+        }
+      },
+      {
+        "comment": "",
+        "key": "ORIGINAL LOCAL",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 490
+        }
+      },
+      {
+        "comment": "",
+        "key": "APPLY ONLINE METADATA",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 525
+        }
+      },
+      {
+        "comment": "",
+        "key": "CUSTOM SEARCH",
+        "location": {
+          "startingColumn": 34,
+          "startingLine": 533
+        }
+      },
+      {
+        "comment": "",
+        "key": "KEEP LOCAL METADATA",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 543
+        }
+      },
+      {
+        "comment": "",
+        "key": "CUSTOM SEARCH",
+        "location": {
+          "startingColumn": 34,
+          "startingLine": 551
+        }
+      },
+      {
+        "comment": "",
+        "key": "KEEPING LOCAL ARTWORK [KEEP LOCAL]",
+        "location": {
+          "startingColumn": 64,
+          "startingLine": 659
+        }
+      },
+      {
+        "comment": "",
+        "key": "USING LOCAL ARTWORK",
+        "location": {
+          "startingColumn": 103,
+          "startingLine": 659
+        }
+      },
+      {
+        "comment": "",
+        "key": "USING ONLINE ARTWORK",
+        "location": {
+          "startingColumn": 34,
+          "startingLine": 664
+        }
+      },
+      {
+        "comment": "",
+        "key": "• %@",
+        "location": {
+          "startingColumn": 34,
+          "startingLine": 665
+        }
+      },
+      {
+        "comment": "",
+        "key": "ORIGINAL LOCAL METADATA",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 792
+        }
+      },
+      {
+        "comment": "",
+        "key": "[KEEP LOCAL]",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 860
+        }
+      },
+      {
+        "comment": "",
+        "key": "[KEEP LOCAL]",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 887
+        }
+      },
+      {
+        "comment": "",
+        "key": "NO PENDING ENRICHMENTS",
+        "location": {
+          "startingColumn": 18,
+          "startingLine": 903
+        }
+      },
+      {
+        "comment": "",
+        "key": "All tracks in your library with verified online records are up to date.",
+        "location": {
+          "startingColumn": 18,
+          "startingLine": 907
+        }
+      }
+    ]
+  },
+  "version": 1
+}

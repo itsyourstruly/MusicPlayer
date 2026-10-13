@@ -1,0 +1,44 @@
+{
+  "/Users/apollo/Desktop/apollo air/seaplusplus2/MusicPlayer/MusicPlayer/Models/LibrarySource.swift" : {
+    "const-values" : "/Users/apollo/Desktop/apollo air/seaplusplus2/MusicPlayer/DerivedData/Build/Intermediates.noindex/MusicPlayer.build/Debug-iphoneos/MusicPlayer.build/Objects-normal/arm64/LibrarySource.swiftconstvalues",
+    "dependencies" : "/Users/apollo/Desktop/apollo air/seaplusplus2/MusicPlayer/DerivedData/Build/Intermediates.noindex/MusicPlayer.build/Debug-iphoneos/MusicPlayer.build/Objects-normal/arm64/LibrarySource.d",
+    "diagnostics" : "/Users/apollo/Desktop/apollo air/seaplusplus2/MusicPlayer/DerivedData/Build/Intermediates.noindex/MusicPlayer.build/Debug-iphoneos/MusicPlayer.build/Objects-normal/arm64/LibrarySource.dia",
+    "object" : "/Users/apollo/Desktop/apollo air/seaplusplus2/MusicPlayer/DerivedData/Build/Intermediates.noindex/MusicPlayer.build/Debug-iphoneos/MusicPlayer.build/Objects-normal/arm64/LibrarySource.o",
+    "swift-dependencies" : "/Users/apollo/Desktop/apollo air/seaplusplus2/MusicPlayer/DerivedData/Build/Intermediates.noindex/MusicPlayer.build/Debug-iphoneos/MusicPlayer.build/Objects-normal/arm64/LibrarySource.swiftdeps"
+  },
+  "/Users/apollo/Desktop/apollo air/seaplusplus2/MusicPlayer/MusicPlayer/Models/LyricsModels.swift" : {
+    "const-values" : "/Users/apollo/Desktop/apollo air/seaplusplus2/MusicPlayer/DerivedData/Build/Intermediates.noindex/MusicPlayer.build/Debug-iphoneos/MusicPlayer.build/Objects-normal/arm64/LyricsModels.swiftconstvalues",
+    "dependencies" : "/Users/apollo/Desktop/apollo air/seaplusplus2/MusicPlayer/DerivedData/Build/Intermediates.noindex/MusicPlayer.build/Debug-iphoneos/MusicPlayer.build/Objects-normal/arm64/LyricsModels.d",
+    "diagnostics" : "/Users/apollo/Desktop/apollo air/seaplusplus2/MusicPlayer/DerivedData/Build/Intermediates.noindex/MusicPlayer.build/Debug-iphoneos/MusicPlayer.build/Objects-normal/arm64/LyricsModels.dia",
+    "object" : "/Users/apollo/Desktop/apollo air/seaplusplus2/MusicPlayer/DerivedData/Build/Intermediates.noindex/MusicPlayer.build/Debug-iphoneos/MusicPlayer.build/Objects-normal/arm64/LyricsModels.o",
+    "swift-dependencies" : "/Users/apollo/Desktop/apollo air/seaplusplus2/MusicPlayer/DerivedData/Build/Intermediates.noindex/MusicPlayer.build/Debug-iphoneos/MusicPlayer.build/Objects-normal/arm64/LyricsModels.swiftdeps"
+  },
+  "/Users/apollo/Desktop/apollo air/seaplusplus2/MusicPlayer/MusicPlayer/Models/OnlineDiscoveryModels.swift" : {
+    "const-values" : "/Users/apollo/Desktop/apollo air/seaplusplus2/MusicPlayer/DerivedData/Build/Intermediates.noindex/MusicPlayer.build/Debug-iphoneos/MusicPlayer.build/Objects-normal/arm64/OnlineDiscoveryModels.swiftconstvalues",
+    "dependencies" : "/Users/apollo/Desktop/apollo air/seaplusplus2/MusicPlayer/DerivedData/Build/Intermediates.noindex/MusicPlayer.build/Debug-iphoneos/MusicPlayer.build/Objects-normal/arm64/OnlineDiscoveryModels.d",
+    "diagnostics" : "/Users/apollo/Desktop/apollo air/seaplusplus2/MusicPlayer/DerivedData/Build/Intermediates.noindex/MusicPlayer.build/Debug-iphoneos/MusicPlayer.build/Objects-normal/arm64/OnlineDiscoveryModels.dia",
+    "object" : "/Users/apollo/Desktop/apollo air/seaplusplus2/MusicPlayer/DerivedData/Build/Intermediates.noindex/MusicPlayer.build/Debug-iphoneos/MusicPlayer.build/Objects-normal/arm64/OnlineDiscoveryModels.o",
+    "swift-dependencies" : "/Users/apollo/Desktop/apollo air/seaplusplus2/MusicPlayer/DerivedData/Build/Intermediates.noindex/MusicPlayer.build/Debug-iphoneos/MusicPlayer.build/Objects-normal/arm64/OnlineDiscoveryModels.swiftdeps"
+  },
+  "/Users/apollo/Desktop/apollo air/seaplusplus2/MusicPlayer/MusicPlayer/Models/OnlineTrackMetadata.swift" : {
+    "const-values" : "/Users/apollo/Desktop/apollo air/seaplusplus2/MusicPlayer/DerivedData/Build/Intermediates.noindex/MusicPlayer.build/Debug-iphoneos/MusicPlayer.build/Objects-normal/arm64/OnlineTrackMetadata.swiftconstvalues",
+    "dependencies" : "/Users/apollo/Desktop/apollo air/seaplusplus2/MusicPlayer/DerivedData/Build/Intermediates.noindex/MusicPlayer.build/Debug-iphoneos/MusicPlayer.build/Objects-normal/arm64/OnlineTrackMetadata.d",
+    "diagnostics" : "/Users/apollo/Desktop/apollo air/seaplusplus2/MusicPlayer/DerivedData/Build/Intermediates.noindex/MusicPlayer.build/Debug-iphoneos/MusicPlayer.build/Objects-normal/arm64/OnlineTrackMetadata.dia",
+    "object" : "/Users/apollo/Desktop/apollo air/seaplusplus2/MusicPlayer/DerivedData/Build/Intermediates.noindex/MusicPlayer.build/Debug-iphoneos/MusicPlayer.build/Objects-normal/arm64/OnlineTrackMetadata.o",
+    "swift-dependencies" : "/Users/apollo/Desktop/apollo air/seaplusplus2/MusicPlayer/DerivedData/Build/Intermediates.noindex/MusicPlayer.build/Debug-iphoneos/MusicPlayer.build/Objects-normal/arm64/OnlineTrackMetadata.swiftdeps"
+  },
+  "/Users/apollo/Desktop/apollo air/seaplusplus2/MusicPlayer/MusicPlayer/Models/OrganizationModeState.swift" : {
+    "const-values" : "/Users/apollo/Desktop/apollo air/seaplusplus2/MusicPlayer/DerivedData/Build/Intermediates.noindex/MusicPlayer.build/Debug-iphoneos/MusicPlayer.build/Objects-normal/arm64/OrganizationModeState.swiftconstvalues",
+    "dependencies" : "/Users/apollo/Desktop/apollo air/seaplusplus2/MusicPlayer/DerivedData/Build/Intermediates.noindex/MusicPlayer.build/Debug-iphoneos/MusicPlayer.build/Objects-normal/arm64/OrganizationModeState.d",
+    "diagnostics" : "/Users/apollo/Desktop/apollo air/seaplusplus2/MusicPlayer/DerivedData/Build/Intermediates.noindex/MusicPlayer.build/Debug-iphoneos/MusicPlayer.build/Objects-normal/arm64/OrganizationModeState.dia",
+    "object" : "/Users/apollo/Desktop/apollo air/seaplusplus2/MusicPlayer/DerivedData/Build/Intermediates.noindex/MusicPlayer.build/Debug-iphoneos/MusicPlayer.build/Objects-normal/arm64/OrganizationModeState.o",
+    "swift-dependencies" : "/Users/apollo/Desktop/apollo air/seaplusplus2/MusicPlayer/DerivedData/Build/Intermediates.noindex/MusicPlayer.build/Debug-iphoneos/MusicPlayer.build/Objects-normal/arm64/OrganizationModeState.swiftdeps"
+  },
+  "/Users/apollo/Desktop/apollo air/seaplusplus2/MusicPlayer/MusicPlayer/Models/PinnedItem.swift" : {
+    "const-values" : "/Users/apollo/Desktop/apollo air/seaplusplus2/MusicPlayer/DerivedData/Build/Intermediates.noindex/MusicPlayer.build/Debug-iphoneos/MusicPlayer.build/Objects-normal/arm64/PinnedItem.swiftconstvalues",
+    "dependencies" : "/Users/apollo/Desktop/apollo air/seaplusplus2/MusicPlayer/DerivedData/Build/Intermediates.noindex/MusicPlayer.build/Debug-iphoneos/MusicPlayer.build/Objects-normal/arm64/PinnedItem.d",
+    "diagnostics" : "/Users/apollo/Desktop/apollo air/seaplusplus2/MusicPlayer/DerivedData/Build/Intermediates.noindex/MusicPlayer.build/Debug-iphoneos/MusicPlayer.build/Objects-normal/arm64/PinnedItem.dia",
+    "object" : "/Users/apollo/Desktop/apollo air/seaplusplus2/MusicPlayer/DerivedData/Build/Intermediates.noindex/MusicPlayer.build/Debug-iphoneos/MusicPlayer.build/Objects-normal/arm64/PinnedItem.o",
+    "swift-dependencies" : "/Users/apollo/Desktop/apollo air/seaplusplus2/MusicPlayer/DerivedData/Build/Intermediates.noindex/MusicPlayer.build/Debug-iphoneos/MusicPlayer.build/Objects-normal/arm64/PinnedItem.swiftdeps"
+  }
+}

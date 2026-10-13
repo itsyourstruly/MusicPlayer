@@ -1,0 +1,96 @@
+{
+  "source": "/Users/apollo/Desktop/apollo air/seaplusplus2/MusicPlayer/MusicPlayer/Views/MacOS/MacHomeView.swift",
+  "tables": {
+    "Localizable": [
+      {
+        "comment": "",
+        "key": "NO MUSIC SOURCE LINKED",
+        "location": {
+          "startingColumn": 18,
+          "startingLine": 72
+        }
+      },
+      {
+        "comment": "",
+        "key": "Link a music folder or connect a Jellyfin server to index, organize, and play your audio library.",
+        "location": {
+          "startingColumn": 18,
+          "startingLine": 77
+        }
+      },
+      {
+        "comment": "",
+        "key": "ADD SOURCE",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 83
+        }
+      },
+      {
+        "comment": "",
+        "key": "SEARCH ONLINE",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 94
+        }
+      },
+      {
+        "comment": "",
+        "key": "PINNED FAVORITES",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 209
+        }
+      },
+      {
+        "comment": "",
+        "key": "%lld PINNED",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 216
+        }
+      },
+      {
+        "comment": "",
+        "key": "LATEST PLAYS",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 293
+        }
+      },
+      {
+        "comment": "",
+        "key": "%lld ALBUMS",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 300
+        }
+      },
+      {
+        "comment": "",
+        "key": "PLAY ALBUM",
+        "location": {
+          "startingColumn": 42,
+          "startingLine": 349
+        }
+      },
+      {
+        "comment": "",
+        "key": "PLAY NEXT",
+        "location": {
+          "startingColumn": 42,
+          "startingLine": 354
+        }
+      },
+      {
+        "comment": "",
+        "key": "ADD TO QUEUE",
+        "location": {
+          "startingColumn": 42,
+          "startingLine": 359
+        }
+      }
+    ]
+  },
+  "version": 1
+}

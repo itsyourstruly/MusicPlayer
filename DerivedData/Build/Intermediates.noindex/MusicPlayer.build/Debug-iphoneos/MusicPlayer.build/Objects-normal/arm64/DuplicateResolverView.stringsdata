@@ -1,0 +1,232 @@
+{
+  "source": "/Users/apollo/Desktop/apollo air/seaplusplus2/MusicPlayer/MusicPlayer/Views/Duplicates/DuplicateResolverView.swift",
+  "tables": {
+    "Localizable": [
+      {
+        "comment": "",
+        "key": "SCANNING LIBRARY FOR DUPLICATES...",
+        "location": {
+          "startingColumn": 45,
+          "startingLine": 40
+        }
+      },
+      {
+        "comment": "",
+        "key": "SCAN LIBRARY FOR DUPLICATES",
+        "location": {
+          "startingColumn": 84,
+          "startingLine": 40
+        }
+      },
+      {
+        "comment": "",
+        "key": "DUPLICATE MANAGER",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 115
+        }
+      },
+      {
+        "comment": "",
+        "key": "DELETE ALL DUPLICATES FROM DISK?",
+        "location": {
+          "startingColumn": 20,
+          "startingLine": 117
+        }
+      },
+      {
+        "comment": "",
+        "key": "DELETE FILE FROM DISK?",
+        "location": {
+          "startingColumn": 20,
+          "startingLine": 129
+        }
+      },
+      {
+        "comment": "",
+        "key": "DELETION RESULT",
+        "location": {
+          "startingColumn": 20,
+          "startingLine": 144
+        }
+      },
+      {
+        "comment": "",
+        "key": "CANCEL",
+        "location": {
+          "startingColumn": 24,
+          "startingLine": 118
+        }
+      },
+      {
+        "comment": "",
+        "key": "DELETE FILES",
+        "location": {
+          "startingColumn": 24,
+          "startingLine": 119
+        }
+      },
+      {
+        "comment": "",
+        "key": "This will permanently move %lld redundant audio files (%@) to Trash. Your selected primary versions will be safely retained in your library.",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 127
+        }
+      },
+      {
+        "comment": "",
+        "key": "CANCEL",
+        "location": {
+          "startingColumn": 24,
+          "startingLine": 133
+        }
+      },
+      {
+        "comment": "",
+        "key": "DELETE FILE",
+        "location": {
+          "startingColumn": 24,
+          "startingLine": 134
+        }
+      },
+      {
+        "comment": "",
+        "key": "Permanently move '%@' (%@) to Trash?",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 141
+        }
+      },
+      {
+        "comment": "",
+        "key": "OK",
+        "location": {
+          "startingColumn": 24,
+          "startingLine": 148
+        }
+      },
+      {
+        "comment": "",
+        "key": "DISMISS",
+        "location": {
+          "startingColumn": 20,
+          "startingLine": 244
+        }
+      },
+      {
+        "comment": "",
+        "key": "MOVING REDUNDANT FILES TO TRASH...",
+        "location": {
+          "startingColumn": 18,
+          "startingLine": 270
+        }
+      },
+      {
+        "comment": "",
+        "key": "DUPLICATE CLUSTERS DETECTED",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 304
+        }
+      },
+      {
+        "comment": "",
+        "key": "%lld GROUPS • %lld REDUNDANT FILES",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 308
+        }
+      },
+      {
+        "comment": "",
+        "key": "RECOVERABLE",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 316
+        }
+      },
+      {
+        "comment": "",
+        "key": "AUTO-RESOLVE BEST",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 331
+        }
+      },
+      {
+        "comment": "",
+        "key": "DELETE ALL DUPLICATES",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 339
+        }
+      },
+      {
+        "comment": "",
+        "key": "+%@ RECOVERABLE",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 398
+        }
+      },
+      {
+        "comment": "",
+        "key": "KEEPING THIS VERSION",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 509
+        }
+      },
+      {
+        "comment": "",
+        "key": "TAP ARTWORK TO KEEP",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 513
+        }
+      },
+      {
+        "comment": "",
+        "key": "PRIMARY SELECTION",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 536
+        }
+      },
+      {
+        "comment": "",
+        "key": "SELECT AS PRIMARY",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 542
+        }
+      },
+      {
+        "comment": "",
+        "key": "DELETE FROM DISK",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 550
+        }
+      },
+      {
+        "comment": "",
+        "key": "NO DUPLICATES DETECTED",
+        "location": {
+          "startingColumn": 18,
+          "startingLine": 593
+        }
+      },
+      {
+        "comment": "",
+        "key": "All audio files in your linked directory are unique. The library is fully deduplicated and optimized.",
+        "location": {
+          "startingColumn": 18,
+          "startingLine": 597
+        }
+      }
+    ]
+  },
+  "version": 1
+}

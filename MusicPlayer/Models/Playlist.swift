@@ -1,7 +1,7 @@
 import Foundation
 
 /// User-curated custom playlist entity supporting pinning, ordering, and metadata.
-public struct Playlist: Identifiable, Codable, Sendable, Hashable {
+nonisolated public struct Playlist: Identifiable, Codable, Sendable, Hashable {
     // Unique identifier
     public let id: UUID
     public var name: String

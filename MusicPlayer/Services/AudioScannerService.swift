@@ -322,7 +322,7 @@ public struct AudioScannerService: Sendable {
 
         // MARK: - High-Throughput Streaming TaskGroup Worker Pool
         if !filesNeedingParsing.isEmpty {
-            let maxConcurrentWorkers = min(16, max(4, ProcessInfo.processInfo.activeProcessorCount))
+            let maxConcurrentWorkers = 4
             let artworkDeduplicator = ArtworkKeyDeduplicator()
             var scannedNewTracks: [Track] = []
             scannedNewTracks.reserveCapacity(toParseCount)

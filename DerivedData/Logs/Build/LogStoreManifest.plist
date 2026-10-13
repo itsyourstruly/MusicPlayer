@@ -1,0 +1,95 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>logFormatVersion</key>
+	<integer>13</integer>
+	<key>logs</key>
+	<dict>
+		<key>0F33C532-60BA-478B-B084-BD8AE844198E</key>
+		<dict>
+			<key>className</key>
+			<string>IDECommandLineBuildLog</string>
+			<key>documentTypeString</key>
+			<string>&lt;nil&gt;</string>
+			<key>domainType</key>
+			<string>Xcode.IDEActivityLogDomainType.BuildLog</string>
+			<key>fileName</key>
+			<string>0F33C532-60BA-478B-B084-BD8AE844198E.xcactivitylog</string>
+			<key>hasPrimaryLog</key>
+			<true/>
+			<key>primaryObservable</key>
+			<dict>
+				<key>highLevelStatus</key>
+				<string>W</string>
+				<key>totalNumberOfAnalyzerIssues</key>
+				<integer>0</integer>
+				<key>totalNumberOfErrors</key>
+				<integer>0</integer>
+				<key>totalNumberOfTestFailures</key>
+				<integer>0</integer>
+				<key>totalNumberOfWarnings</key>
+				<integer>91</integer>
+			</dict>
+			<key>schemeIdentifier-containerName</key>
+			<string>MusicPlayer project</string>
+			<key>schemeIdentifier-schemeName</key>
+			<string>MusicPlayer</string>
+			<key>schemeIdentifier-sharedScheme</key>
+			<integer>1</integer>
+			<key>signature</key>
+			<string>Building project MusicPlayer with scheme MusicPlayer</string>
+			<key>timeStartedRecording</key>
+			<real>813582678.90580404</real>
+			<key>timeStoppedRecording</key>
+			<real>813582716.62188494</real>
+			<key>title</key>
+			<string>Building project MusicPlayer with scheme MusicPlayer</string>
+			<key>uniqueIdentifier</key>
+			<string>0F33C532-60BA-478B-B084-BD8AE844198E</string>
+		</dict>
+		<key>825E3351-EA1E-419D-8503-302CFBF76BE3</key>
+		<dict>
+			<key>className</key>
+			<string>IDECommandLineBuildLog</string>
+			<key>documentTypeString</key>
+			<string>&lt;nil&gt;</string>
+			<key>domainType</key>
+			<string>Xcode.IDEActivityLogDomainType.BuildLog</string>
+			<key>fileName</key>
+			<string>825E3351-EA1E-419D-8503-302CFBF76BE3.xcactivitylog</string>
+			<key>hasPrimaryLog</key>
+			<true/>
+			<key>primaryObservable</key>
+			<dict>
+				<key>highLevelStatus</key>
+				<string>W</string>
+				<key>totalNumberOfAnalyzerIssues</key>
+				<integer>0</integer>
+				<key>totalNumberOfErrors</key>
+				<integer>0</integer>
+				<key>totalNumberOfTestFailures</key>
+				<integer>0</integer>
+				<key>totalNumberOfWarnings</key>
+				<integer>87</integer>
+			</dict>
+			<key>schemeIdentifier-containerName</key>
+			<string>MusicPlayer project</string>
+			<key>schemeIdentifier-schemeName</key>
+			<string>MusicPlayer</string>
+			<key>schemeIdentifier-sharedScheme</key>
+			<integer>1</integer>
+			<key>signature</key>
+			<string>Building project MusicPlayer with scheme MusicPlayer</string>
+			<key>timeStartedRecording</key>
+			<real>813582048.55600297</real>
+			<key>timeStoppedRecording</key>
+			<real>813582064.34332895</real>
+			<key>title</key>
+			<string>Building project MusicPlayer with scheme MusicPlayer</string>
+			<key>uniqueIdentifier</key>
+			<string>825E3351-EA1E-419D-8503-302CFBF76BE3</string>
+		</dict>
+	</dict>
+</dict>
+</plist>

@@ -1,0 +1,120 @@
+{
+  "source": "/Users/apollo/Desktop/apollo air/seaplusplus2/MusicPlayer/MusicPlayer/Views/MacOS/MacSidebarView.swift",
+  "tables": {
+    "Localizable": [
+      {
+        "comment": "",
+        "key": "No playlists yet",
+        "location": {
+          "startingColumn": 34,
+          "startingLine": 95
+        }
+      },
+      {
+        "comment": "",
+        "key": "+ NEW",
+        "location": {
+          "startingColumn": 38,
+          "startingLine": 82
+        }
+      },
+      {
+        "comment": "",
+        "key": "MUSIC",
+        "location": {
+          "startingColumn": 18,
+          "startingLine": 127
+        }
+      },
+      {
+        "comment": "",
+        "key": "SCANNING",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 139
+        }
+      },
+      {
+        "comment": "",
+        "key": "%lld",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 186
+        }
+      },
+      {
+        "comment": "",
+        "key": "PIN",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 235
+        }
+      },
+      {
+        "comment": "",
+        "key": "%lld",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 244
+        }
+      },
+      {
+        "comment": "",
+        "key": "PLAY",
+        "location": {
+          "startingColumn": 20,
+          "startingLine": 258
+        }
+      },
+      {
+        "comment": "",
+        "key": "PLAY NEXT",
+        "location": {
+          "startingColumn": 20,
+          "startingLine": 265
+        }
+      },
+      {
+        "comment": "",
+        "key": "UNPIN",
+        "location": {
+          "startingColumn": 31,
+          "startingLine": 270
+        }
+      },
+      {
+        "comment": "",
+        "key": "PIN",
+        "location": {
+          "startingColumn": 41,
+          "startingLine": 270
+        }
+      },
+      {
+        "comment": "",
+        "key": "DELETE",
+        "location": {
+          "startingColumn": 20,
+          "startingLine": 274
+        }
+      },
+      {
+        "comment": "",
+        "key": "%lld tracks indexed",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 292
+        }
+      },
+      {
+        "comment": "",
+        "key": "SETTINGS",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 302
+        }
+      }
+    ]
+  },
+  "version": 1
+}

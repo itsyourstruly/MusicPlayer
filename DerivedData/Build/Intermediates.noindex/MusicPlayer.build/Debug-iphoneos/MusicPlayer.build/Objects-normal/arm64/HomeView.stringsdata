@@ -1,0 +1,104 @@
+{
+  "source": "/Users/apollo/Desktop/apollo air/seaplusplus2/MusicPlayer/MusicPlayer/Views/Home/HomeView.swift",
+  "tables": {
+    "Localizable": [
+      {
+        "comment": "",
+        "key": "HOME",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 73
+        }
+      },
+      {
+        "comment": "",
+        "key": "LATEST PLAYS",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 106
+        }
+      },
+      {
+        "comment": "",
+        "key": "PLAY ALBUM",
+        "location": {
+          "startingColumn": 42,
+          "startingLine": 148
+        }
+      },
+      {
+        "comment": "",
+        "key": "PLAY NEXT",
+        "location": {
+          "startingColumn": 42,
+          "startingLine": 154
+        }
+      },
+      {
+        "comment": "",
+        "key": "ADD TO QUEUE",
+        "location": {
+          "startingColumn": 42,
+          "startingLine": 160
+        }
+      },
+      {
+        "comment": "",
+        "key": "NO MUSIC SOURCE LINKED",
+        "location": {
+          "startingColumn": 18,
+          "startingLine": 173
+        }
+      },
+      {
+        "comment": "",
+        "key": "Link a folder or connect a Jellyfin server to scan and automatically categorize all your audio tracks, albums, and artists.",
+        "location": {
+          "startingColumn": 18,
+          "startingLine": 177
+        }
+      },
+      {
+        "comment": "",
+        "key": "ADD SOURCE",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 184
+        }
+      },
+      {
+        "comment": "",
+        "key": "SET",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 282
+        }
+      },
+      {
+        "comment": "",
+        "key": "RESET TO ALL TRACKS",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 291
+        }
+      },
+      {
+        "comment": "",
+        "key": "SEARCH",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 302
+        }
+      },
+      {
+        "comment": "",
+        "key": "LIBRARY",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 306
+        }
+      }
+    ]
+  },
+  "version": 1
+}

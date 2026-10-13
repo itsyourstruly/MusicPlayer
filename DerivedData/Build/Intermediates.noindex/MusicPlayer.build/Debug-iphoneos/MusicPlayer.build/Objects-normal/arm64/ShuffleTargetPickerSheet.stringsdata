@@ -1,0 +1,104 @@
+{
+  "source": "/Users/apollo/Desktop/apollo air/seaplusplus2/MusicPlayer/MusicPlayer/Views/Home/ShuffleTargetPickerSheet.swift",
+  "tables": {
+    "Localizable": [
+      {
+        "comment": "",
+        "key": "SEARCH ARTISTS, ALBUMS, PLAYLISTS...",
+        "location": {
+          "startingColumn": 25,
+          "startingLine": 129
+        }
+      },
+      {
+        "comment": "",
+        "key": "SET SHUFFLE TARGET",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 131
+        }
+      },
+      {
+        "comment": "",
+        "key": "THIS WILL SWITCH THE SHUFFLE BUTTON TO THIS ARTIST/ALBUM/PLAYLIST. ARE YOU SURE?",
+        "location": {
+          "startingColumn": 17,
+          "startingLine": 142
+        }
+      },
+      {
+        "comment": "",
+        "key": "ALL TRACKS",
+        "location": {
+          "startingColumn": 38,
+          "startingLine": 66
+        }
+      },
+      {
+        "comment": "",
+        "key": "Entire library (%lld tracks)",
+        "location": {
+          "startingColumn": 38,
+          "startingLine": 69
+        }
+      },
+      {
+        "comment": "",
+        "key": "ARTISTS (%lld)",
+        "location": {
+          "startingColumn": 34,
+          "startingLine": 85
+        }
+      },
+      {
+        "comment": "",
+        "key": "ALBUMS (%lld)",
+        "location": {
+          "startingColumn": 34,
+          "startingLine": 98
+        }
+      },
+      {
+        "comment": "",
+        "key": "PLAYLISTS (%lld)",
+        "location": {
+          "startingColumn": 34,
+          "startingLine": 111
+        }
+      },
+      {
+        "comment": "",
+        "key": "CANCEL",
+        "location": {
+          "startingColumn": 28,
+          "startingLine": 135
+        }
+      },
+      {
+        "comment": "",
+        "key": "CONFIRM",
+        "location": {
+          "startingColumn": 24,
+          "startingLine": 146
+        }
+      },
+      {
+        "comment": "",
+        "key": "CANCEL",
+        "location": {
+          "startingColumn": 24,
+          "startingLine": 152
+        }
+      },
+      {
+        "comment": "",
+        "key": "%@ • %@",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 208
+        }
+      }
+    ]
+  },
+  "version": 1
+}

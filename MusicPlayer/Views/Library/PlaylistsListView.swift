@@ -45,13 +45,23 @@ public struct PlaylistsListView: View {
             )
 
             if libraryStore.filteredPlaylists.isEmpty {
-                EmptyStateView(
-                    title: "EMPTY",
-                    message: "Create a playlist to organize your favorite music.",
-                    actionTitle: "NEW PLAYLIST",
-                    action: { showingCreateSheet = true }
-                )
-                .padding(.top, 32)
+                if !libraryStore.searchModel.isSearching {
+                    if libraryStore.searchQuery.isEmpty {
+                        EmptyStateView(
+                            title: "EMPTY",
+                            message: "Create a playlist to organize your favorite music.",
+                            actionTitle: "NEW PLAYLIST",
+                            action: { showingCreateSheet = true }
+                        )
+                        .padding(.top, 32)
+                    } else {
+                        EmptyStateView(
+                            title: "NO PLAYLISTS FOUND",
+                            message: "No playlists match '\(libraryStore.searchQuery)'."
+                        )
+                        .padding(.top, 32)
+                    }
+                }
             } else {
                 LazyVGrid(columns: columns, spacing: 18) {
                     ForEach(libraryStore.filteredPlaylists) { playlist in

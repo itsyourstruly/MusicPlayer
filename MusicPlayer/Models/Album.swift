@@ -3,7 +3,7 @@ import Foundation
 // MARK: - Album
 
 /// Grouped album representation containing sorted tracks and discography metadata.
-public struct Album: Identifiable, Codable, Sendable, Hashable {
+nonisolated public struct Album: Identifiable, Codable, Sendable, Hashable {
 
     // MARK: - Identity
 
@@ -62,6 +62,32 @@ public struct Album: Identifiable, Codable, Sendable, Hashable {
     public let alternateTracks: [Track]
 
     // MARK: - Init
+
+    /// Memberwise restore initializer that directly assigns precomputed fields without sorting or parsing.
+    public init(
+        restoredFrom record: AlbumRecord,
+        tracks: [Track],
+        mainTracks: [Track],
+        alternateTracks: [Track]
+    ) {
+        self.groupKey = record.groupKey
+        self.title = record.title
+        self.artist = record.artist
+        self.year = record.year
+        self.genre = record.genre
+        self.artworkKey = record.artworkKey
+        self.tracks = tracks
+        self.normalizedTitle = record.normalizedTitle
+        self.normalizedArtist = record.normalizedArtist
+        self.searchTokens = record.searchTokens
+        self.resolvedYear = record.resolvedYear
+        self.isSingle = record.isSingle
+        self.isRemix = record.isRemix
+        self.isLive = record.isLive
+        self.isStudioAlbum = record.isStudioAlbum
+        self.mainTracks = mainTracks
+        self.alternateTracks = alternateTracks
+    }
 
     // Initialize with configured properties
     public init(

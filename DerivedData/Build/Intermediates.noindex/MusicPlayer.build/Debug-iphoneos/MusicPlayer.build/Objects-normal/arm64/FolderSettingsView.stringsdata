@@ -1,0 +1,456 @@
+{
+  "source": "/Users/apollo/Desktop/apollo air/seaplusplus2/MusicPlayer/MusicPlayer/Views/Settings/FolderSettingsView.swift",
+  "tables": {
+    "Localizable": [
+      {
+        "comment": "",
+        "key": "FOLDER SETTINGS",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 71
+        }
+      },
+      {
+        "comment": "",
+        "key": "UNLINK DIRECTORY?",
+        "location": {
+          "startingColumn": 16,
+          "startingLine": 100
+        }
+      },
+      {
+        "comment": "",
+        "key": "CLEAR METADATA CACHE?",
+        "location": {
+          "startingColumn": 16,
+          "startingLine": 115
+        }
+      },
+      {
+        "comment": "",
+        "key": "CLEAR ARTWORK CACHE?",
+        "location": {
+          "startingColumn": 16,
+          "startingLine": 123
+        }
+      },
+      {
+        "comment": "",
+        "key": "CLEAR ALL DOWNLOADS?",
+        "location": {
+          "startingColumn": 16,
+          "startingLine": 134
+        }
+      },
+      {
+        "comment": "",
+        "key": "ICLOUD STORAGE DETECTED",
+        "location": {
+          "startingColumn": 16,
+          "startingLine": 142
+        }
+      },
+      {
+        "comment": "",
+        "key": "REMOVE JELLYFIN SERVER?",
+        "location": {
+          "startingColumn": 16,
+          "startingLine": 166
+        }
+      },
+      {
+        "comment": "",
+        "key": "CANCEL",
+        "location": {
+          "startingColumn": 20,
+          "startingLine": 101
+        }
+      },
+      {
+        "comment": "",
+        "key": "UNLINK",
+        "location": {
+          "startingColumn": 20,
+          "startingLine": 104
+        }
+      },
+      {
+        "comment": "",
+        "key": "THIS WILL REMOVE INDEXED TRACKS AND PLAYLISTS FROM THE APP. YOUR AUDIO FILES ON DISK WILL NOT BE MODIFIED OR DELETED.",
+        "location": {
+          "startingColumn": 18,
+          "startingLine": 113
+        }
+      },
+      {
+        "comment": "",
+        "key": "CANCEL",
+        "location": {
+          "startingColumn": 20,
+          "startingLine": 116
+        }
+      },
+      {
+        "comment": "",
+        "key": "CLEAR",
+        "location": {
+          "startingColumn": 20,
+          "startingLine": 117
+        }
+      },
+      {
+        "comment": "",
+        "key": "THIS WILL REMOVE ALL LOCALLY CACHED ONLINE METADATA MATCHES AND RESET ENRICHMENT QUEUES.",
+        "location": {
+          "startingColumn": 18,
+          "startingLine": 121
+        }
+      },
+      {
+        "comment": "",
+        "key": "CANCEL",
+        "location": {
+          "startingColumn": 20,
+          "startingLine": 124
+        }
+      },
+      {
+        "comment": "",
+        "key": "CLEAR",
+        "location": {
+          "startingColumn": 20,
+          "startingLine": 125
+        }
+      },
+      {
+        "comment": "",
+        "key": "THIS WILL REMOVE ALL CACHED COVER ARTWORKS FROM DISK. ARTWORKS WILL BE RE-EXTRACTED AS NEEDED.",
+        "location": {
+          "startingColumn": 18,
+          "startingLine": 132
+        }
+      },
+      {
+        "comment": "",
+        "key": "CANCEL",
+        "location": {
+          "startingColumn": 20,
+          "startingLine": 135
+        }
+      },
+      {
+        "comment": "",
+        "key": "CLEAR",
+        "location": {
+          "startingColumn": 20,
+          "startingLine": 136
+        }
+      },
+      {
+        "comment": "",
+        "key": "THIS WILL REMOVE ALL DOWNLOADED JELLYFIN TRACKS FROM DEVICE STORAGE. TRACKS WILL REMAIN IN YOUR LIBRARY AND CAN STILL BE STREAMED.",
+        "location": {
+          "startingColumn": 18,
+          "startingLine": 140
+        }
+      },
+      {
+        "comment": "",
+        "key": "OK",
+        "location": {
+          "startingColumn": 20,
+          "startingLine": 143
+        }
+      },
+      {
+        "comment": "",
+        "key": "CANCEL",
+        "location": {
+          "startingColumn": 20,
+          "startingLine": 167
+        }
+      },
+      {
+        "comment": "",
+        "key": "REMOVE",
+        "location": {
+          "startingColumn": 20,
+          "startingLine": 170
+        }
+      },
+      {
+        "comment": "",
+        "key": "THIS WILL REMOVE TRACKS FROM THIS JELLYFIN SERVER FROM YOUR LIBRARY.",
+        "location": {
+          "startingColumn": 18,
+          "startingLine": 177
+        }
+      },
+      {
+        "comment": "",
+        "key": "ADD SOURCE",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 205
+        }
+      },
+      {
+        "comment": "",
+        "key": "ADD ANOTHER SOURCE",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 225
+        }
+      },
+      {
+        "comment": "",
+        "key": "USER: %@ • %lld TRACKS",
+        "location": {
+          "startingColumn": 18,
+          "startingLine": 275
+        }
+      },
+      {
+        "comment": "",
+        "key": "JELLYFIN: %@",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 239
+        }
+      },
+      {
+        "comment": "",
+        "key": "RESCAN",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 251
+        }
+      },
+      {
+        "comment": "",
+        "key": "REMOVE SERVER",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 263
+        }
+      },
+      {
+        "comment": "",
+        "key": "OPEN SETTINGS",
+        "location": {
+          "startingColumn": 34,
+          "startingLine": 293
+        }
+      },
+      {
+        "comment": "",
+        "key": "%lld TRACKS, %lld ALBUMS, %lld ARTISTS",
+        "location": {
+          "startingColumn": 18,
+          "startingLine": 391
+        }
+      },
+      {
+        "comment": "",
+        "key": "LINKED TO %@",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 316
+        }
+      },
+      {
+        "comment": "",
+        "key": "SCANNING...",
+        "location": {
+          "startingColumn": 34,
+          "startingLine": 336
+        }
+      },
+      {
+        "comment": "",
+        "key": "RESCAN",
+        "location": {
+          "startingColumn": 34,
+          "startingLine": 338
+        }
+      },
+      {
+        "comment": "",
+        "key": "OPTION INFO",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 355
+        }
+      },
+      {
+        "comment": "",
+        "key": "CHANGE FOLDER",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 365
+        }
+      },
+      {
+        "comment": "",
+        "key": "EXCLUDE FROM TAG ENRICHMENT (SELECTED)",
+        "location": {
+          "startingColumn": 67,
+          "startingLine": 371
+        }
+      },
+      {
+        "comment": "",
+        "key": "EXCLUDE FROM TAG ENRICHMENT",
+        "location": {
+          "startingColumn": 110,
+          "startingLine": 371
+        }
+      },
+      {
+        "comment": "",
+        "key": "UNLINK FOLDER",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 379
+        }
+      },
+      {
+        "comment": "",
+        "key": "FIND TRACK TAGS",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 406
+        }
+      },
+      {
+        "comment": "",
+        "key": "%lld/%lld",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 412
+        }
+      },
+      {
+        "comment": "",
+        "key": "%lld/%lld",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 417
+        }
+      },
+      {
+        "comment": "",
+        "key": "%lld FOUND • %lld GOOD • %lld LOST • %lld DUPES",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 421
+        }
+      },
+      {
+        "comment": "",
+        "key": "OPTION INFO",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 445
+        }
+      },
+      {
+        "comment": "",
+        "key": "DOWNLOADS & OFFLINE",
+        "location": {
+          "startingColumn": 18,
+          "startingLine": 476
+        }
+      },
+      {
+        "comment": "",
+        "key": "JELLYFIN OFFLINE STORAGE",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 520
+        }
+      },
+      {
+        "comment": "",
+        "key": "%lld TRACKS • %@",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 524
+        }
+      },
+      {
+        "comment": "",
+        "key": "CLEAR ALL",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 536
+        }
+      },
+      {
+        "comment": "",
+        "key": "LIBRARY SCAN METHOD",
+        "location": {
+          "startingColumn": 18,
+          "startingLine": 550
+        }
+      },
+      {
+        "comment": "",
+        "key": "METADATA",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 563
+        }
+      },
+      {
+        "comment": "",
+        "key": "FOLDER",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 584
+        }
+      },
+      {
+        "comment": "",
+        "key": "INDEXING: %lld%%",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 656
+        }
+      },
+      {
+        "comment": "",
+        "key": "CACHE MANAGEMENT",
+        "location": {
+          "startingColumn": 18,
+          "startingLine": 669
+        }
+      },
+      {
+        "comment": "",
+        "key": "%lld REC",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 687
+        }
+      },
+      {
+        "comment": "",
+        "key": "CLEAR METADATA CACHE",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 679
+        }
+      },
+      {
+        "comment": "",
+        "key": "CLEAR ARTWORK CACHE",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 698
+        }
+      }
+    ]
+  },
+  "version": 1
+}

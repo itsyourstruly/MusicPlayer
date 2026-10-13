@@ -143,6 +143,95 @@ public final class JellyfinSyncService: Sendable {
         self.session = session
     }
 
+    /// Fetches audio track changes (upserted tracks and removed track UUIDs) incrementally.
+    nonisolated public func fetchAudioTrackChanges(
+        for link: JellyfinServerLink,
+        token: String,
+        existingTracks: [Track] = [],
+        lastSyncDate: Date? = nil,
+        statusHandler: ((String) -> Void)? = nil,
+        progressHandler: ((Int, Int) -> Void)? = nil
+    ) async throws -> (upserted: [Track], removedIDs: Set<UUID>) {
+        if let host = link.serverURL.host, JellyfinClient.isLocalHost(host) {
+            let port = link.serverURL.port ?? (link.serverURL.scheme?.lowercased() == "https" ? 443 : 8096)
+            try await JellyfinClient.triggerLocalNetworkPrompt(host: host, port: port)
+        }
+
+        statusHandler?("DISCOVERING LIBRARIES...")
+        let parentIDs = await fetchMusicParentIDs(link: link, token: token)
+        let parentIDsToQuery: [String?] = parentIDs.isEmpty ? [nil] : parentIDs.map { Optional($0) }
+
+        statusHandler?("FETCHING TRACKS...")
+
+        if let lastSyncDate = lastSyncDate, !existingTracks.isEmpty {
+            do {
+                var allServerIDs = Set<String>()
+                for parentID in parentIDsToQuery {
+                    let ids = try await fetchAllAudioItemIDs(link: link, token: token, parentID: parentID)
+                    allServerIDs.formUnion(ids)
+                }
+
+                let validServerTrackIDs = Set(allServerIDs.map { TrackIdentity.jellyfinTrackID(serverLinkID: link.id, itemID: $0) })
+                let removedIDs = Set(existingTracks.map(\.id).filter { !validServerTrackIDs.contains($0) })
+                let survivingTracksMap = Dictionary(existingTracks.filter { validServerTrackIDs.contains($0.id) }.map { ($0.id, $0) }, uniquingKeysWith: { _, second in second })
+
+                let adjustedDate = lastSyncDate.addingTimeInterval(-10)
+                let minDateStr = Self.iso8601Standard.string(from: adjustedDate)
+
+                var changedItemsMap: [String: JellyfinAudioItem] = [:]
+                for parentID in parentIDsToQuery {
+                    let items = try await fetchAudioItems(
+                        link: link,
+                        token: token,
+                        parentID: parentID,
+                        minDateLastSaved: minDateStr,
+                        progressHandler: progressHandler
+                    )
+                    for item in items {
+                        changedItemsMap[item.id] = item
+                    }
+                }
+
+                if changedItemsMap.isEmpty {
+                    progressHandler?(survivingTracksMap.count, survivingTracksMap.count)
+                    return (upserted: [], removedIDs: removedIDs)
+                }
+
+                let changedPaths = changedItemsMap.values.compactMap { $0.path }
+                let commonPrefix = findCommonPathPrefix(paths: changedPaths)
+
+                var upserted: [Track] = []
+                for item in changedItemsMap.values {
+                    if let track = mapItemToTrack(
+                        item: item,
+                        link: link,
+                        token: token,
+                        commonPrefix: commonPrefix,
+                        existingTracksByID: survivingTracksMap
+                    ) {
+                        upserted.append(track)
+                    }
+                }
+
+                progressHandler?(survivingTracksMap.count + upserted.count, survivingTracksMap.count + upserted.count)
+                return (upserted: upserted, removedIDs: removedIDs)
+            } catch {
+                AppLogger.library.warning("Incremental Jellyfin sync failed, falling back to full sync: \(error.localizedDescription)")
+            }
+        }
+
+        let fullTracks = try await fetchFullTracks(
+            for: link,
+            token: token,
+            existingTracks: existingTracks,
+            parentIDs: parentIDsToQuery,
+            progressHandler: progressHandler
+        )
+        let newIDs = Set(fullTracks.map(\.id))
+        let removedIDs = Set(existingTracks.map(\.id).filter { !newIDs.contains($0) })
+        return (upserted: fullTracks, removedIDs: removedIDs)
+    }
+
     /// Fetches all audio items from the server for the specified server link, returning mapped Tracks.
     nonisolated public func fetchAudioTracks(
         for link: JellyfinServerLink,

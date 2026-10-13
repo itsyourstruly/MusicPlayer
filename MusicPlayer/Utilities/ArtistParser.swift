@@ -1,7 +1,7 @@
 import Foundation
 
 /// Represents an individual artist token in a multi-artist collaboration string along with its trailing separator.
-public struct ArtistSegment: Identifiable, Hashable, Sendable {
+nonisolated public struct ArtistSegment: Identifiable, Hashable, Sendable {
     // Unique track identifier
     public var id: String { name }
     // Name
@@ -18,7 +18,7 @@ public struct ArtistSegment: Identifiable, Hashable, Sendable {
 
 /// Robust, intelligent parser for multi-artist metadata strings (supporting commas, ampersands, feat./ft., slashes, etc.)
 /// with placeholder masking for compound artist names (e.g. "Tyler, The Creator", "Earth, Wind & Fire", "Simon & Garfunkel").
-public enum ArtistParser: Sendable {
+nonisolated public enum ArtistParser: Sendable {
     // Known compound artist / band names that contain internal commas, ampersands, pluses, or slashes
     // Sorted longest first so longer multi-word names match before shorter substrings
     private static let protectedArtists: [String] = [

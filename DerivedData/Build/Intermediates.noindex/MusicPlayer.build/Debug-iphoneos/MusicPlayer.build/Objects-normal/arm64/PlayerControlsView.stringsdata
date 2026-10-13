@@ -1,0 +1,56 @@
+{
+  "source": "/Users/apollo/Desktop/apollo air/seaplusplus2/MusicPlayer/MusicPlayer/Views/Player/PlayerControlsView.swift",
+  "tables": {
+    "Localizable": [
+      {
+        "comment": "",
+        "key": "BACK",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 44
+        }
+      },
+      {
+        "comment": "",
+        "key": "PAUSE",
+        "location": {
+          "startingColumn": 75,
+          "startingLine": 70
+        }
+      },
+      {
+        "comment": "",
+        "key": "PLAY",
+        "location": {
+          "startingColumn": 85,
+          "startingLine": 70
+        }
+      },
+      {
+        "comment": "",
+        "key": "NEXT",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 88
+        }
+      },
+      {
+        "comment": "",
+        "key": "SHUFFLE",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 111
+        }
+      },
+      {
+        "comment": "",
+        "key": "REPEAT",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 133
+        }
+      }
+    ]
+  },
+  "version": 1
+}

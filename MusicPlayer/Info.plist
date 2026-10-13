@@ -14,11 +14,6 @@
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>audio</string>
-		<string>fetch</string>
-	</array>
-	<key>BGTaskSchedulerPermittedIdentifiers</key>
-	<array>
-		<string>com.musicplayer.jellyfin.sync</string>
 	</array>
 </dict>
 </plist>

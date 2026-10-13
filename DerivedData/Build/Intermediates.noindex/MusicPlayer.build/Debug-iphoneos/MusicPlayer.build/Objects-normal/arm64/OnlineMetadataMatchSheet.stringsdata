@@ -1,0 +1,128 @@
+{
+  "source": "/Users/apollo/Desktop/apollo air/seaplusplus2/MusicPlayer/MusicPlayer/Views/Library/OnlineMetadataMatchSheet.swift",
+  "tables": {
+    "Localizable": [
+      {
+        "comment": "",
+        "key": "ONLINE METADATA",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 59
+        }
+      },
+      {
+        "comment": "",
+        "key": "ONLINE MATCHES (%lld)",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 94
+        }
+      },
+      {
+        "comment": "",
+        "key": "• %@",
+        "location": {
+          "startingColumn": 46,
+          "startingLine": 149
+        }
+      },
+      {
+        "comment": "",
+        "key": "CUSTOM SEARCH QUERY...",
+        "location": {
+          "startingColumn": 23,
+          "startingLine": 196
+        }
+      },
+      {
+        "comment": "",
+        "key": "CLEAR",
+        "location": {
+          "startingColumn": 24,
+          "startingLine": 208
+        }
+      },
+      {
+        "comment": "",
+        "key": "SEARCH",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 220
+        }
+      },
+      {
+        "comment": "",
+        "key": "SEARCHING %@...",
+        "location": {
+          "startingColumn": 18,
+          "startingLine": 245
+        }
+      },
+      {
+        "comment": "",
+        "key": "NO ONLINE MATCHES FOUND",
+        "location": {
+          "startingColumn": 18,
+          "startingLine": 254
+        }
+      },
+      {
+        "comment": "",
+        "key": "We couldn't find matches via %@ for '%@'. Try searching by song title alone or switching API sources.",
+        "location": {
+          "startingColumn": 18,
+          "startingLine": 258
+        }
+      },
+      {
+        "comment": "",
+        "key": "VERIFIED ONLINE RECORD",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 343
+        }
+      },
+      {
+        "comment": "",
+        "key": "API:",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 358
+        }
+      },
+      {
+        "comment": "",
+        "key": "OVERWRITE ALL",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 386
+        }
+      },
+      {
+        "comment": "",
+        "key": "KEEP ALL",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 398
+        }
+      },
+      {
+        "comment": "",
+        "key": "APPLYING & WRITING...",
+        "location": {
+          "startingColumn": 39,
+          "startingLine": 482
+        }
+      },
+      {
+        "comment": "",
+        "key": "APPLY METADATA & ARTWORK",
+        "location": {
+          "startingColumn": 65,
+          "startingLine": 482
+        }
+      }
+    ]
+  },
+  "version": 1
+}

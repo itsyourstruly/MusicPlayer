@@ -3,7 +3,7 @@ import Foundation
 /// Ultra-fast, SIMD/cache-optimized fuzzy matching and relevance scoring engine.
 /// Features full punctuation tolerance, `&` <-> `and` conjunction equivalence,
 /// and sub-millisecond execution across massive music libraries.
-public enum FuzzyMatcher {
+nonisolated public enum FuzzyMatcher {
 
     // MARK: - Normalization & Token Preparation
 

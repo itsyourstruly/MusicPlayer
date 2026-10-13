@@ -1,0 +1,400 @@
+{
+  "source": "/Users/apollo/Desktop/apollo air/seaplusplus2/MusicPlayer/MusicPlayer/Views/Settings/TrackTagFinderSheetView.swift",
+  "tables": {
+    "Localizable": [
+      {
+        "comment": "",
+        "key": "FIND TRACK TAGS",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 138
+        }
+      },
+      {
+        "comment": "",
+        "key": "DELETE DUPLICATES FROM DISK?",
+        "location": {
+          "startingColumn": 20,
+          "startingLine": 148
+        }
+      },
+      {
+        "comment": "",
+        "key": "DELETE FILE FROM DISK?",
+        "location": {
+          "startingColumn": 20,
+          "startingLine": 158
+        }
+      },
+      {
+        "comment": "",
+        "key": "ICLOUD STORAGE DETECTED",
+        "location": {
+          "startingColumn": 20,
+          "startingLine": 173
+        }
+      },
+      {
+        "comment": "",
+        "key": "CANCEL",
+        "location": {
+          "startingColumn": 24,
+          "startingLine": 149
+        }
+      },
+      {
+        "comment": "",
+        "key": "DELETE FILES",
+        "location": {
+          "startingColumn": 24,
+          "startingLine": 150
+        }
+      },
+      {
+        "comment": "",
+        "key": "This will permanently delete %lld redundant duplicate audio files (%@) from disk. Your primary versions will be safely preserved.",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 156
+        }
+      },
+      {
+        "comment": "",
+        "key": "CANCEL",
+        "location": {
+          "startingColumn": 24,
+          "startingLine": 162
+        }
+      },
+      {
+        "comment": "",
+        "key": "DELETE",
+        "location": {
+          "startingColumn": 24,
+          "startingLine": 163
+        }
+      },
+      {
+        "comment": "",
+        "key": "Are you sure you want to permanently delete \"%@\" from disk? This cannot be undone.",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 170
+        }
+      },
+      {
+        "comment": "",
+        "key": "OK",
+        "location": {
+          "startingColumn": 24,
+          "startingLine": 174
+        }
+      },
+      {
+        "comment": "",
+        "key": "SEARCH TRACK, ALBUM, OR ARTIST...",
+        "location": {
+          "startingColumn": 23,
+          "startingLine": 189
+        }
+      },
+      {
+        "comment": "",
+        "key": "CLEAR",
+        "location": {
+          "startingColumn": 24,
+          "startingLine": 195
+        }
+      },
+      {
+        "comment": "",
+        "key": "%lld LOST",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 243
+        }
+      },
+      {
+        "comment": "",
+        "key": "%lld FOUND",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 245
+        }
+      },
+      {
+        "comment": "",
+        "key": "%lld GOOD",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 247
+        }
+      },
+      {
+        "comment": "",
+        "key": "FOUND %lld DUPLICATES",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 249
+        }
+      },
+      {
+        "comment": "",
+        "key": "LOCAL AUDIO TAGS MATCH OFFICIAL ONLINE RECORDS. YOU CAN REVIEW MATCHES, CUSTOM SEARCH, OR RESCAN.",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 292
+        }
+      },
+      {
+        "comment": "",
+        "key": "TRACKS WITHOUT AUTOMATIC EXACT ONLINE MATCHES. YOU CAN RUN TARGETED SEARCHES OR RECHECK INDIVIDUALLY.",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 297
+        }
+      },
+      {
+        "comment": "",
+        "key": "%lld CLUSTERS • %@ SAVINGS",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 303
+        }
+      },
+      {
+        "comment": "",
+        "key": "LAC WILL COMPARE YOUR LOCAL TRACK METADATA INCLUDING TRACK TITLE, ARTIST, AND ALBUM TO FIND THE MOST ACCURATE MATCH ACROSS APPLE MUSIC, DEEZER, AND MUSICBRAINZ. RESULTS WILL NOT BE PERFECT. I HIGHLY RECOMMEND YOU DOUBLE CHECK BEFORE ENRICHING. FOR BETTER RESULTS, SEARCH ALBUMS OR TRACKS INDIVIDUALLY.",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 344
+        }
+      },
+      {
+        "comment": "",
+        "key": "%lld/%lld",
+        "location": {
+          "startingColumn": 35,
+          "startingLine": 325
+        }
+      },
+      {
+        "comment": "",
+        "key": "ENRICH ALL %lld TRACKS",
+        "location": {
+          "startingColumn": 59,
+          "startingLine": 325
+        }
+      },
+      {
+        "comment": "",
+        "key": "SCANNING LIBRARY FOR DUPLICATES...",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 372
+        }
+      },
+      {
+        "comment": "",
+        "key": "SCAN LIBRARY FOR DUPLICATES",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 374
+        }
+      },
+      {
+        "comment": "",
+        "key": "AUTO-RESOLVE",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 394
+        }
+      },
+      {
+        "comment": "",
+        "key": "DELETING...",
+        "location": {
+          "startingColumn": 34,
+          "startingLine": 415
+        }
+      },
+      {
+        "comment": "",
+        "key": "DELETE DUPLICATES",
+        "location": {
+          "startingColumn": 34,
+          "startingLine": 417
+        }
+      },
+      {
+        "comment": "",
+        "key": "SCAN ALL TRACKS ONLINE",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 444
+        }
+      },
+      {
+        "comment": "",
+        "key": "%lld/%lld",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 458
+        }
+      },
+      {
+        "comment": "",
+        "key": "PLAY",
+        "location": {
+          "startingColumn": 84,
+          "startingLine": 472
+        }
+      },
+      {
+        "comment": "",
+        "key": "PAUSE",
+        "location": {
+          "startingColumn": 93,
+          "startingLine": 472
+        }
+      },
+      {
+        "comment": "",
+        "key": "CANCEL",
+        "location": {
+          "startingColumn": 34,
+          "startingLine": 495
+        }
+      },
+      {
+        "comment": "",
+        "key": "NO UNMATCHED TRACKS",
+        "location": {
+          "startingColumn": 47,
+          "startingLine": 533
+        }
+      },
+      {
+        "comment": "",
+        "key": "NO MATCHING TRACKS FOUND",
+        "location": {
+          "startingColumn": 71,
+          "startingLine": 533
+        }
+      },
+      {
+        "comment": "",
+        "key": "All tracks in your library have either been matched or verified.",
+        "location": {
+          "startingColumn": 47,
+          "startingLine": 536
+        }
+      },
+      {
+        "comment": "",
+        "key": "No unmatched track matches '%@'.",
+        "location": {
+          "startingColumn": 116,
+          "startingLine": 536
+        }
+      },
+      {
+        "comment": "",
+        "key": "NO PENDING ENRICHMENTS",
+        "location": {
+          "startingColumn": 47,
+          "startingLine": 570
+        }
+      },
+      {
+        "comment": "",
+        "key": "NO MATCHING TRACKS FOUND",
+        "location": {
+          "startingColumn": 74,
+          "startingLine": 570
+        }
+      },
+      {
+        "comment": "",
+        "key": "Scan all tracks online to search for tag improvements and high-res artwork.",
+        "location": {
+          "startingColumn": 47,
+          "startingLine": 573
+        }
+      },
+      {
+        "comment": "",
+        "key": "No pending track matches '%@'.",
+        "location": {
+          "startingColumn": 127,
+          "startingLine": 573
+        }
+      },
+      {
+        "comment": "",
+        "key": "NO VERIFIED TRACKS",
+        "location": {
+          "startingColumn": 47,
+          "startingLine": 615
+        }
+      },
+      {
+        "comment": "",
+        "key": "NO MATCHING TRACKS FOUND",
+        "location": {
+          "startingColumn": 70,
+          "startingLine": 615
+        }
+      },
+      {
+        "comment": "",
+        "key": "Tracks that already match online records will appear here.",
+        "location": {
+          "startingColumn": 47,
+          "startingLine": 618
+        }
+      },
+      {
+        "comment": "",
+        "key": "No verified track matches '%@'.",
+        "location": {
+          "startingColumn": 110,
+          "startingLine": 618
+        }
+      },
+      {
+        "comment": "",
+        "key": "NO DUPLICATE TRACKS FOUND",
+        "location": {
+          "startingColumn": 47,
+          "startingLine": 654
+        }
+      },
+      {
+        "comment": "",
+        "key": "NO MATCHING DUPLICATES",
+        "location": {
+          "startingColumn": 77,
+          "startingLine": 654
+        }
+      },
+      {
+        "comment": "",
+        "key": "Your library has no detected duplicate tracks.",
+        "location": {
+          "startingColumn": 47,
+          "startingLine": 657
+        }
+      },
+      {
+        "comment": "",
+        "key": "No duplicate cluster matches '%@'.",
+        "location": {
+          "startingColumn": 98,
+          "startingLine": 657
+        }
+      }
+    ]
+  },
+  "version": 1
+}

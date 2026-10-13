@@ -306,7 +306,9 @@ public struct FolderHierarchyScanner: Sendable {
 
         // Case 1: 2+ folders remaining -> [..., Artist, Album]
         if remainingFolders.count >= 2 {
-            let rawAlbum = remainingFolders.last!
+            guard let rawAlbum = remainingFolders.last else {
+                return HierarchyResult(artist: nil, album: nil, discNumber: detectedDiscNumber, year: nil)
+            }
             let rawArtist = remainingFolders[remainingFolders.count - 2]
 
             let (cleanAlbum, year) = extractYearFromAlbumFolder(rawAlbum)

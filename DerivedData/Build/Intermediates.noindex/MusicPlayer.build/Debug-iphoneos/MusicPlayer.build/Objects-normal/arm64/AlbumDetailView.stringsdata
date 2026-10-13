@@ -1,0 +1,160 @@
+{
+  "source": "/Users/apollo/Desktop/apollo air/seaplusplus2/MusicPlayer/MusicPlayer/Views/Library/AlbumDetailView.swift",
+  "tables": {
+    "Localizable": [
+      {
+        "comment": "",
+        "key": "SEARCH TRACKS IN ALBUM",
+        "location": {
+          "startingColumn": 31,
+          "startingLine": 94
+        }
+      },
+      {
+        "comment": "",
+        "key": "PLAY ALBUM",
+        "location": {
+          "startingColumn": 34,
+          "startingLine": 130
+        }
+      },
+      {
+        "comment": "",
+        "key": "SHUFFLE",
+        "location": {
+          "startingColumn": 34,
+          "startingLine": 142
+        }
+      },
+      {
+        "comment": "",
+        "key": "REMOVE ALBUM DOWNLOADS",
+        "location": {
+          "startingColumn": 46,
+          "startingLine": 164
+        }
+      },
+      {
+        "comment": "",
+        "key": "CANCEL DOWNLOADS",
+        "location": {
+          "startingColumn": 46,
+          "startingLine": 173
+        }
+      },
+      {
+        "comment": "",
+        "key": "DOWNLOAD ALBUM",
+        "location": {
+          "startingColumn": 46,
+          "startingLine": 180
+        }
+      },
+      {
+        "comment": "",
+        "key": "ALBUM METADATA",
+        "location": {
+          "startingColumn": 42,
+          "startingLine": 191
+        }
+      },
+      {
+        "comment": "",
+        "key": "SEARCH ONLINE",
+        "location": {
+          "startingColumn": 38,
+          "startingLine": 198
+        }
+      },
+      {
+        "comment": "",
+        "key": "REVERT COLLABORATIVE ALBUM",
+        "location": {
+          "startingColumn": 87,
+          "startingLine": 205
+        }
+      },
+      {
+        "comment": "",
+        "key": "MAKE COLLABORATIVE ALBUM",
+        "location": {
+          "startingColumn": 118,
+          "startingLine": 205
+        }
+      },
+      {
+        "comment": "",
+        "key": "ADD TO PLAYLIST",
+        "location": {
+          "startingColumn": 38,
+          "startingLine": 213
+        }
+      },
+      {
+        "comment": "",
+        "key": "QUICK ADD TO...",
+        "location": {
+          "startingColumn": 42,
+          "startingLine": 227
+        }
+      },
+      {
+        "comment": "",
+        "key": "TRACKLIST (%lld)",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 242
+        }
+      },
+      {
+        "comment": "",
+        "key": "ALTERNATES",
+        "location": {
+          "startingColumn": 34,
+          "startingLine": 304
+        }
+      },
+      {
+        "comment": "",
+        "key": "ADD TO PLAYLIST",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 455
+        }
+      },
+      {
+        "comment": "",
+        "key": "ADD ALL (%lld)",
+        "location": {
+          "startingColumn": 38,
+          "startingLine": 438
+        }
+      },
+      {
+        "comment": "",
+        "key": "CANCEL",
+        "location": {
+          "startingColumn": 28,
+          "startingLine": 459
+        }
+      },
+      {
+        "comment": "",
+        "key": "SEPARATE ARTISTS",
+        "location": {
+          "startingColumn": 38,
+          "startingLine": 529
+        }
+      },
+      {
+        "comment": "",
+        "key": "JOIN ARTISTS",
+        "location": {
+          "startingColumn": 38,
+          "startingLine": 536
+        }
+      }
+    ]
+  },
+  "version": 1
+}

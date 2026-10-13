@@ -1,0 +1,240 @@
+{
+  "source": "/Users/apollo/Desktop/apollo air/seaplusplus2/MusicPlayer/MusicPlayer/Views/Player/PlayerQueueView.swift",
+  "tables": {
+    "Localizable": [
+      {
+        "comment": "",
+        "key": "QUEUE",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 186
+        }
+      },
+      {
+        "comment": "",
+        "key": "PAST SONGS (%lld)",
+        "location": {
+          "startingColumn": 38,
+          "startingLine": 95
+        }
+      },
+      {
+        "comment": "",
+        "key": "NOW PLAYING",
+        "location": {
+          "startingColumn": 38,
+          "startingLine": 111
+        }
+      },
+      {
+        "comment": "",
+        "key": "CLEAR",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 231
+        }
+      },
+      {
+        "comment": "",
+        "key": "PLAYING",
+        "location": {
+          "startingColumn": 67,
+          "startingLine": 397
+        }
+      },
+      {
+        "comment": "",
+        "key": "PAUSED",
+        "location": {
+          "startingColumn": 79,
+          "startingLine": 397
+        }
+      },
+      {
+        "comment": "",
+        "key": "GO TO ARTIST",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 440
+        }
+      },
+      {
+        "comment": "",
+        "key": "GO TO ARTIST",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 452
+        }
+      },
+      {
+        "comment": "",
+        "key": "GO TO ALBUM",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 461
+        }
+      },
+      {
+        "comment": "",
+        "key": "MOVE TO QUEUE",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 509
+        }
+      },
+      {
+        "comment": "",
+        "key": "GO TO ARTIST",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 518
+        }
+      },
+      {
+        "comment": "",
+        "key": "GO TO ARTIST",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 530
+        }
+      },
+      {
+        "comment": "",
+        "key": "GO TO ALBUM",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 539
+        }
+      },
+      {
+        "comment": "",
+        "key": "NEXT",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 561
+        }
+      },
+      {
+        "comment": "",
+        "key": "REMOVE",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 608
+        }
+      },
+      {
+        "comment": "",
+        "key": "TO UP NEXT",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 618
+        }
+      },
+      {
+        "comment": "",
+        "key": "MOVE TO UP NEXT",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 628
+        }
+      },
+      {
+        "comment": "",
+        "key": "GO TO ARTIST",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 637
+        }
+      },
+      {
+        "comment": "",
+        "key": "GO TO ARTIST",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 649
+        }
+      },
+      {
+        "comment": "",
+        "key": "GO TO ALBUM",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 658
+        }
+      },
+      {
+        "comment": "",
+        "key": "REMOVE FROM QUEUE",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 667
+        }
+      },
+      {
+        "comment": "",
+        "key": "NEXT",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 688
+        }
+      },
+      {
+        "comment": "",
+        "key": "REMOVE",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 735
+        }
+      },
+      {
+        "comment": "",
+        "key": "TO QUEUE",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 745
+        }
+      },
+      {
+        "comment": "",
+        "key": "MOVE TO QUEUE",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 755
+        }
+      },
+      {
+        "comment": "",
+        "key": "GO TO ARTIST",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 764
+        }
+      },
+      {
+        "comment": "",
+        "key": "GO TO ARTIST",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 776
+        }
+      },
+      {
+        "comment": "",
+        "key": "GO TO ALBUM",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 785
+        }
+      },
+      {
+        "comment": "",
+        "key": "REMOVE FROM UP NEXT",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 794
+        }
+      }
+    ]
+  },
+  "version": 1
+}

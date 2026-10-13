@@ -1,0 +1,64 @@
+{
+  "source": "/Users/apollo/Desktop/apollo air/seaplusplus2/MusicPlayer/MusicPlayer/Views/Settings/AddLibrarySourceSheet.swift",
+  "tables": {
+    "Localizable": [
+      {
+        "comment": "",
+        "key": "ADD SOURCE",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 96
+        }
+      },
+      {
+        "comment": "",
+        "key": "CHOOSE A SOURCE TYPE TO ADD TO YOUR MUSIC LIBRARY.",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 23
+        }
+      },
+      {
+        "comment": "",
+        "key": "LOCAL / ICLOUD FOLDER",
+        "location": {
+          "startingColumn": 34,
+          "startingLine": 36
+        }
+      },
+      {
+        "comment": "",
+        "key": "PLAY AUDIO FILES STORED ON DEVICE OR IN ICLOUD DRIVE",
+        "location": {
+          "startingColumn": 34,
+          "startingLine": 40
+        }
+      },
+      {
+        "comment": "",
+        "key": "JELLYFIN SERVER",
+        "location": {
+          "startingColumn": 34,
+          "startingLine": 67
+        }
+      },
+      {
+        "comment": "",
+        "key": "STREAM DIRECTLY FROM YOUR HOME MEDIA SERVER",
+        "location": {
+          "startingColumn": 34,
+          "startingLine": 71
+        }
+      },
+      {
+        "comment": "",
+        "key": "CANCEL",
+        "location": {
+          "startingColumn": 28,
+          "startingLine": 100
+        }
+      }
+    ]
+  },
+  "version": 1
+}

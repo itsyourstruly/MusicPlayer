@@ -1,9 +1,12 @@
 import Foundation
 
 /// Grouped artist representation containing discography, albums, and associated tracks.
-public struct Artist: Identifiable, Codable, Sendable, Hashable {
-    /// Lowercased name used as a stable, case-insensitive identifier.
-    public var id: String { name.lowercased() }
+nonisolated public struct Artist: Identifiable, Codable, Sendable, Hashable {
+    /// Canonical key used as a stable, alias-tolerant identifier.
+    public var id: String {
+        let key = ArtistParser.canonicalArtistKey(name)
+        return key.isEmpty ? name.lowercased() : key
+    }
 
     // Name
     public let name: String
@@ -27,6 +30,24 @@ public struct Artist: Identifiable, Codable, Sendable, Hashable {
     public let discographySummary: String
     /// Precomputed primary visual avatar artwork key for this artist.
     public let mostRecentArtworkKey: String?
+
+    /// Memberwise restore initializer that directly assigns precomputed fields without sorting or parsing.
+    public init(
+        restoredFrom record: ArtistRecord,
+        albums: [Album],
+        tracks: [Track]
+    ) {
+        self.name = record.name
+        self.albums = albums
+        self.tracks = tracks
+        self.normalizedName = record.normalizedName
+        self.searchTokens = record.searchTokens
+        self.ownAlbumCount = record.ownAlbumCount
+        self.ownTrackCount = record.ownTrackCount
+        self.ownTotalDuration = record.ownTotalDuration
+        self.discographySummary = record.discographySummary
+        self.mostRecentArtworkKey = record.mostRecentArtworkKey
+    }
 
     // Initialize with configured properties
     public init(name: String, albums: [Album] = [], tracks: [Track] = [], joinedArtists: [String] = []) {

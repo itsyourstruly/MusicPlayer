@@ -32,7 +32,7 @@ public struct AllTracksListView: View {
 
             if tracks.isEmpty {
                 let hasSources = !libraryStore.settings.linkedFolders.isEmpty || !libraryStore.settings.jellyfinServers.isEmpty
-                if !libraryStore.isInitialLoading || !hasSources {
+                if (!libraryStore.isInitialLoading || !hasSources) && !libraryStore.searchModel.isSearching {
                     EmptyStateView(
                         title: "NO TRACKS FOUND",
                         message: libraryStore.searchQuery.isEmpty

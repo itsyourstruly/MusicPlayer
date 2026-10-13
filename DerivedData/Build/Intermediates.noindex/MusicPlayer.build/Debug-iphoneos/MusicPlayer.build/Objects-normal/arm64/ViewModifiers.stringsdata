@@ -1,0 +1,80 @@
+{
+  "source": "/Users/apollo/Desktop/apollo air/seaplusplus2/MusicPlayer/MusicPlayer/Utilities/ViewModifiers.swift",
+  "tables": {
+    "Localizable": [
+      {
+        "comment": "",
+        "key": "ALBUM METADATA",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 144
+        }
+      },
+      {
+        "comment": "",
+        "key": "REVERT COLLABORATIVE ALBUM",
+        "location": {
+          "startingColumn": 69,
+          "startingLine": 151
+        }
+      },
+      {
+        "comment": "",
+        "key": "MAKE COLLABORATIVE ALBUM",
+        "location": {
+          "startingColumn": 100,
+          "startingLine": 151
+        }
+      },
+      {
+        "comment": "",
+        "key": "UNPIN",
+        "location": {
+          "startingColumn": 62,
+          "startingLine": 160
+        }
+      },
+      {
+        "comment": "",
+        "key": "PIN",
+        "location": {
+          "startingColumn": 72,
+          "startingLine": 160
+        }
+      },
+      {
+        "comment": "",
+        "key": "PLAY",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 168
+        }
+      },
+      {
+        "comment": "",
+        "key": "SHUFFLE",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 181
+        }
+      },
+      {
+        "comment": "",
+        "key": "PLAY NEXT",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 187
+        }
+      },
+      {
+        "comment": "",
+        "key": "QUEUE NEXT",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 193
+        }
+      }
+    ]
+  },
+  "version": 1
+}

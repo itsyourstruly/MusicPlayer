@@ -1,0 +1,168 @@
+{
+  "source": "/Users/apollo/Desktop/apollo air/seaplusplus2/MusicPlayer/MusicPlayer/Views/Components/TrackRowView.swift",
+  "tables": {
+    "Localizable": [
+      {
+        "comment": "",
+        "key": "QUEUED",
+        "location": {
+          "startingColumn": 45,
+          "startingLine": 201
+        }
+      },
+      {
+        "comment": "",
+        "key": "AGAIN?",
+        "location": {
+          "startingColumn": 74,
+          "startingLine": 201
+        }
+      },
+      {
+        "comment": "",
+        "key": "QUEUE",
+        "location": {
+          "startingColumn": 85,
+          "startingLine": 201
+        }
+      },
+      {
+        "comment": "",
+        "key": "PLAY NOW",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 360
+        }
+      },
+      {
+        "comment": "",
+        "key": "PLAY NEXT",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 364
+        }
+      },
+      {
+        "comment": "",
+        "key": "QUEUE",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 367
+        }
+      },
+      {
+        "comment": "",
+        "key": "GO TO ARTIST",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 377
+        }
+      },
+      {
+        "comment": "",
+        "key": "GO TO ARTIST",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 389
+        }
+      },
+      {
+        "comment": "",
+        "key": "GO TO ALBUM",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 396
+        }
+      },
+      {
+        "comment": "",
+        "key": "ADD TO PLAYLIST",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 401
+        }
+      },
+      {
+        "comment": "",
+        "key": "REMOVE FROM PLAYLIST",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 406
+        }
+      },
+      {
+        "comment": "",
+        "key": "FILE INFO",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 411
+        }
+      },
+      {
+        "comment": "",
+        "key": "REMOVE DOWNLOAD",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 421
+        }
+      },
+      {
+        "comment": "",
+        "key": "REMOVE DOWNLOAD",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 430
+        }
+      },
+      {
+        "comment": "",
+        "key": "CANCEL DOWNLOAD",
+        "location": {
+          "startingColumn": 34,
+          "startingLine": 439
+        }
+      },
+      {
+        "comment": "",
+        "key": "DOWNLOAD TRACK",
+        "location": {
+          "startingColumn": 34,
+          "startingLine": 446
+        }
+      },
+      {
+        "comment": "",
+        "key": "HIDE TRACK",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 460
+        }
+      },
+      {
+        "comment": "",
+        "key": "NEXT",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 618
+        }
+      },
+      {
+        "comment": "",
+        "key": "PLAYING",
+        "location": {
+          "startingColumn": 34,
+          "startingLine": 606
+        }
+      },
+      {
+        "comment": "",
+        "key": "PAUSED",
+        "location": {
+          "startingColumn": 46,
+          "startingLine": 606
+        }
+      }
+    ]
+  },
+  "version": 1
+}

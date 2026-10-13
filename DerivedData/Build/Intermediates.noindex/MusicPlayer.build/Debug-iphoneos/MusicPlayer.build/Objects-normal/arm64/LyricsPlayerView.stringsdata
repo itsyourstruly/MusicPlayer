@@ -1,0 +1,40 @@
+{
+  "source": "/Users/apollo/Desktop/apollo air/seaplusplus2/MusicPlayer/MusicPlayer/Views/Player/LyricsPlayerView.swift",
+  "tables": {
+    "Localizable": [
+      {
+        "comment": "",
+        "key": "SCANNING FOR LYRICS...",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 410
+        }
+      },
+      {
+        "comment": "",
+        "key": "Inspecting audio stream tags and sidecar files...",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 414
+        }
+      },
+      {
+        "comment": "",
+        "key": "NO LYRICS AVAILABLE",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 419
+        }
+      },
+      {
+        "comment": "",
+        "key": "This audio file does not contain embedded or sidecar lyrics.",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 423
+        }
+      }
+    ]
+  },
+  "version": 1
+}

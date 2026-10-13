@@ -9,7 +9,7 @@ public enum CloudAvailabilityStatus: String, Sendable, Codable {
 }
 
 /// Helper classifying files as local, cloud-only, or downloading without reading or downloading the file.
-public enum CloudFileAvailability: Sendable {
+nonisolated public enum CloudFileAvailability: Sendable {
 
     private static let availabilityCache = NSCache<NSURL, NSNumber>()
     private static let cloudItemCache = NSCache<NSURL, NSNumber>()

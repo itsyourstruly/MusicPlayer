@@ -1,0 +1,88 @@
+{
+  "source": "/Users/apollo/Desktop/apollo air/seaplusplus2/MusicPlayer/MusicPlayer/Views/MacOS/MacMainView.swift",
+  "tables": {
+    "Localizable": [
+      {
+        "comment": "",
+        "key": "CLOSE",
+        "location": {
+          "startingColumn": 32,
+          "startingLine": 131
+        }
+      },
+      {
+        "comment": "",
+        "key": "CLOSE",
+        "location": {
+          "startingColumn": 32,
+          "startingLine": 151
+        }
+      },
+      {
+        "comment": "",
+        "key": "DROP MUSIC FOLDER OR AUDIO FILES",
+        "location": {
+          "startingColumn": 34,
+          "startingLine": 170
+        }
+      },
+      {
+        "comment": "",
+        "key": "Will link directory and index audio files automatically",
+        "location": {
+          "startingColumn": 34,
+          "startingLine": 173
+        }
+      },
+      {
+        "comment": "",
+        "key": "ALBUMS",
+        "location": {
+          "startingColumn": 34,
+          "startingLine": 257
+        }
+      },
+      {
+        "comment": "",
+        "key": "ARTISTS",
+        "location": {
+          "startingColumn": 34,
+          "startingLine": 270
+        }
+      },
+      {
+        "comment": "",
+        "key": "ADD TO PLAYLIST",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 329
+        }
+      },
+      {
+        "comment": "",
+        "key": "NO PLAYLISTS CREATED",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 302
+        }
+      },
+      {
+        "comment": "",
+        "key": "ADD",
+        "location": {
+          "startingColumn": 38,
+          "startingLine": 320
+        }
+      },
+      {
+        "comment": "",
+        "key": "DONE",
+        "location": {
+          "startingColumn": 28,
+          "startingLine": 332
+        }
+      }
+    ]
+  },
+  "version": 1
+}

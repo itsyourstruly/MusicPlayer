@@ -1,0 +1,64 @@
+{
+  "source": "/Users/apollo/Desktop/apollo air/seaplusplus2/MusicPlayer/MusicPlayer/Views/Library/FoldersListView.swift",
+  "tables": {
+    "Localizable": [
+      {
+        "comment": "",
+        "key": "•",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 152
+        }
+      },
+      {
+        "comment": "",
+        "key": "%lld TRACKS",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 156
+        }
+      },
+      {
+        "comment": "",
+        "key": "•",
+        "location": {
+          "startingColumn": 34,
+          "startingLine": 161
+        }
+      },
+      {
+        "comment": "",
+        "key": "%lld ALBUMS",
+        "location": {
+          "startingColumn": 34,
+          "startingLine": 165
+        }
+      },
+      {
+        "comment": "",
+        "key": "RESCAN SOURCE",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 197
+        }
+      },
+      {
+        "comment": "",
+        "key": "DISABLE IN LIBRARY",
+        "location": {
+          "startingColumn": 34,
+          "startingLine": 205
+        }
+      },
+      {
+        "comment": "",
+        "key": "ENABLE IN LIBRARY",
+        "location": {
+          "startingColumn": 57,
+          "startingLine": 205
+        }
+      }
+    ]
+  },
+  "version": 1
+}

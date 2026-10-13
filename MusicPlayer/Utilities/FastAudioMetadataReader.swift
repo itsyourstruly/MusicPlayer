@@ -1,7 +1,7 @@
 import Foundation
 
 /// Fast in-memory parsed audio metadata container.
-public struct ParsedAudioMetadata: Sendable {
+nonisolated public struct ParsedAudioMetadata: Sendable {
     // Display title of the song
     public var title: String?
     // Primary performing artist
@@ -38,7 +38,7 @@ public struct ParsedAudioMetadata: Sendable {
 /// Ultra-high-speed pure Swift in-process binary metadata reader.
 /// Directly reads and decodes ID3v2, ISO-BMFF (M4A/MP4), Vorbis Comment (FLAC), and RIFF (WAV) tags
 /// in under 0.2ms per file with zero CoreMedia XPC roundtrips or mediaserverd contention.
-public struct FastAudioMetadataReader: Sendable {
+nonisolated public struct FastAudioMetadataReader: Sendable {
 
     /// Reads metadata directly from file binary headers without spawning AVURLAsset or IPC daemons.
     public static func readMetadata(from fileURL: URL) -> ParsedAudioMetadata? {
@@ -611,6 +611,10 @@ public struct FastAudioMetadataReader: Sendable {
             let atomType = String(decoding: data[offset+4..<offset+8], as: UTF8.self)
 
             if atomType == "mvhd" {
+                guard offset + 9 <= data.count else {
+                    offset += atomSize
+                    continue
+                }
                 // Version
                 let version = data[offset+8]
                 if version == 0 && offset + 28 <= data.count {

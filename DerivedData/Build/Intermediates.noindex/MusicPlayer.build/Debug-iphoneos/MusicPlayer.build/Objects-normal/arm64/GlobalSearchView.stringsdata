@@ -1,0 +1,440 @@
+{
+  "source": "/Users/apollo/Desktop/apollo air/seaplusplus2/MusicPlayer/MusicPlayer/Views/Library/GlobalSearchView.swift",
+  "tables": {
+    "Localizable": [
+      {
+        "comment": "",
+        "key": "SEARCH ONLINE",
+        "location": {
+          "startingColumn": 41,
+          "startingLine": 273
+        }
+      },
+      {
+        "comment": "",
+        "key": "SEARCH LIBRARY",
+        "location": {
+          "startingColumn": 59,
+          "startingLine": 273
+        }
+      },
+      {
+        "comment": "",
+        "key": "SEARCH ONLINE CATALOG...",
+        "location": {
+          "startingColumn": 41,
+          "startingLine": 279
+        }
+      },
+      {
+        "comment": "",
+        "key": "SEARCH TRACKS, ARTISTS, ALBUMS...",
+        "location": {
+          "startingColumn": 70,
+          "startingLine": 279
+        }
+      },
+      {
+        "comment": "",
+        "key": "SONGS (%lld)",
+        "location": {
+          "startingColumn": 18,
+          "startingLine": 530
+        }
+      },
+      {
+        "comment": "",
+        "key": "·",
+        "location": {
+          "startingColumn": 46,
+          "startingLine": 578
+        }
+      },
+      {
+        "comment": "",
+        "key": "PAUSE",
+        "location": {
+          "startingColumn": 113,
+          "startingLine": 596
+        }
+      },
+      {
+        "comment": "",
+        "key": "PREVIEW",
+        "location": {
+          "startingColumn": 123,
+          "startingLine": 596
+        }
+      },
+      {
+        "comment": "",
+        "key": "ALBUMS (%lld)",
+        "location": {
+          "startingColumn": 18,
+          "startingLine": 623
+        }
+      },
+      {
+        "comment": "",
+        "key": "%lld TRACKS",
+        "location": {
+          "startingColumn": 42,
+          "startingLine": 654
+        }
+      },
+      {
+        "comment": "",
+        "key": "ARTISTS (%lld)",
+        "location": {
+          "startingColumn": 18,
+          "startingLine": 670
+        }
+      },
+      {
+        "comment": "",
+        "key": "RECENTLY PLAYED",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 727
+        }
+      },
+      {
+        "comment": "",
+        "key": "CLEAR",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 738
+        }
+      },
+      {
+        "comment": "",
+        "key": "Searching...",
+        "location": {
+          "startingColumn": 18,
+          "startingLine": 799
+        }
+      },
+      {
+        "comment": "",
+        "key": "No results for \"%@\"",
+        "location": {
+          "startingColumn": 18,
+          "startingLine": 812
+        }
+      },
+      {
+        "comment": "",
+        "key": "Try searching for alternative spellings or part of a name.",
+        "location": {
+          "startingColumn": 18,
+          "startingLine": 816
+        }
+      },
+      {
+        "comment": "",
+        "key": "No online results found for \"%@\"",
+        "location": {
+          "startingColumn": 18,
+          "startingLine": 830
+        }
+      },
+      {
+        "comment": "",
+        "key": "Add to Playlist",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 871
+        }
+      },
+      {
+        "comment": "",
+        "key": "%lld tracks",
+        "location": {
+          "startingColumn": 38,
+          "startingLine": 861
+        }
+      },
+      {
+        "comment": "",
+        "key": "QUEUED",
+        "location": {
+          "startingColumn": 52,
+          "startingLine": 1061
+        }
+      },
+      {
+        "comment": "",
+        "key": "PLAY NEXT",
+        "location": {
+          "startingColumn": 63,
+          "startingLine": 1061
+        }
+      },
+      {
+        "comment": "",
+        "key": "QUEUED",
+        "location": {
+          "startingColumn": 53,
+          "startingLine": 1082
+        }
+      },
+      {
+        "comment": "",
+        "key": "QUEUE NEXT",
+        "location": {
+          "startingColumn": 64,
+          "startingLine": 1082
+        }
+      },
+      {
+        "comment": "",
+        "key": "PLAY",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 1156
+        }
+      },
+      {
+        "comment": "",
+        "key": "PLAY NEXT",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 1160
+        }
+      },
+      {
+        "comment": "",
+        "key": "QUEUE NEXT",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 1164
+        }
+      },
+      {
+        "comment": "",
+        "key": "ADD TO PLAYLIST",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 1170
+        }
+      },
+      {
+        "comment": "",
+        "key": "GET INFO",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 1176
+        }
+      },
+      {
+        "comment": "",
+        "key": "GO TO ARTIST",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 1184
+        }
+      },
+      {
+        "comment": "",
+        "key": "GO TO ALBUM",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 1192
+        }
+      },
+      {
+        "comment": "",
+        "key": "·",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 1284
+        }
+      },
+      {
+        "comment": "",
+        "key": "%lld %@",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 1288
+        }
+      },
+      {
+        "comment": "",
+        "key": "OPEN",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 1299
+        }
+      },
+      {
+        "comment": "",
+        "key": "OPEN",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 1399
+        }
+      },
+      {
+        "comment": "",
+        "key": "VIEW ARTIST",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 1417
+        }
+      },
+      {
+        "comment": "",
+        "key": "PLAY ARTIST",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 1426
+        }
+      },
+      {
+        "comment": "",
+        "key": "SHUFFLE ARTIST",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 1437
+        }
+      },
+      {
+        "comment": "",
+        "key": "ALBUMS (%lld)",
+        "location": {
+          "startingColumn": 34,
+          "startingLine": 1450
+        }
+      },
+      {
+        "comment": "",
+        "key": "SINGLES (%lld)",
+        "location": {
+          "startingColumn": 34,
+          "startingLine": 1477
+        }
+      },
+      {
+        "comment": "",
+        "key": "ALTERNATES (%lld)",
+        "location": {
+          "startingColumn": 34,
+          "startingLine": 1504
+        }
+      },
+      {
+        "comment": "",
+        "key": "FEATURED ON (%lld)",
+        "location": {
+          "startingColumn": 34,
+          "startingLine": 1531
+        }
+      },
+      {
+        "comment": "",
+        "key": "TRACKS (%lld)",
+        "location": {
+          "startingColumn": 38,
+          "startingLine": 1641
+        }
+      },
+      {
+        "comment": "",
+        "key": "·",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 1705
+        }
+      },
+      {
+        "comment": "",
+        "key": "·",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 1721
+        }
+      },
+      {
+        "comment": "",
+        "key": "%lld ARTISTS",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 1697
+        }
+      },
+      {
+        "comment": "",
+        "key": "%lld ALBUMS",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 1713
+        }
+      },
+      {
+        "comment": "",
+        "key": "%lld TRACKS",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 1729
+        }
+      },
+      {
+        "comment": "",
+        "key": "COLLAPSE",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 1742
+        }
+      },
+      {
+        "comment": "",
+        "key": "SHOW ALL",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 1754
+        }
+      },
+      {
+        "comment": "",
+        "key": "OPEN",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 1797
+        }
+      },
+      {
+        "comment": "",
+        "key": "VIEW ARTIST",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 1810
+        }
+      },
+      {
+        "comment": "",
+        "key": "OPEN",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 1861
+        }
+      },
+      {
+        "comment": "",
+        "key": "·",
+        "location": {
+          "startingColumn": 38,
+          "startingLine": 1849
+        }
+      },
+      {
+        "comment": "",
+        "key": "PLAYLISTS (%lld)",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 1958
+        }
+      }
+    ]
+  },
+  "version": 1
+}
