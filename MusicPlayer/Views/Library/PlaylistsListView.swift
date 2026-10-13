@@ -100,13 +100,13 @@ public struct PlaylistsListView: View {
                                     libraryStore.togglePinPlaylist(id: playlist.id)
                                 }
                             }) {
-                                Label(playlist.isPinned ? "UNPIN" : "PIN", systemImage: playlist.isPinned ? "pin.slash" : "pin")
+                                Text(playlist.isPinned ? "UNPIN" : "PIN")
                             }
 
                             Button(role: .destructive, action: {
                                 libraryStore.deletePlaylist(id: playlist.id)
                             }) {
-                                Label("DELETE PLAYLIST", systemImage: "trash")
+                                Text("DELETE PLAYLIST")
                             }
                         }
                     }

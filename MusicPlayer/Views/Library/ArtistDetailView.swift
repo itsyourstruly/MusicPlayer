@@ -672,36 +672,33 @@ private struct ArtistDetailToolbarMenuView: View {
 
     var body: some View {
         Menu {
-            let jellyfinTracks = currentArtist.tracks.filter { $0.isJellyfinItem || $0.metadataSource == .server }
-            if !jellyfinTracks.isEmpty {
-                let downloadedCount = jellyfinTracks.filter { JellyfinDownloadManager.shared.isDownloaded(trackId: $0.id) }.count
-                let isAllDownloaded = downloadedCount == jellyfinTracks.count
-                let isAnyDownloading = jellyfinTracks.contains { JellyfinDownloadManager.shared.downloadStates[$0.id]?.isDownloading == true }
-
-                if isAllDownloaded {
+            let summary = JellyfinDownloadManager.shared.artistSummary(for: currentArtist)
+            if summary.total > 0 {
+                let jellyfinTracks = currentArtist.tracks.filter { $0.isJellyfinItem || $0.metadataSource == .server }
+                if summary.isAllDownloaded {
                     Button(role: .destructive) {
                         HapticFeedback.selectionChanged()
                         for track in jellyfinTracks {
                             JellyfinDownloadManager.shared.deleteDownload(trackId: track.id)
                         }
                     } label: {
-                        Label("REMOVE DISCOGRAPHY DOWNLOADS", systemImage: "trash")
+                        Text("REMOVE DISCOGRAPHY DOWNLOADS")
                     }
-                } else if isAnyDownloading {
+                } else if summary.isAnyDownloading {
                     Button {
                         HapticFeedback.selectionChanged()
                         for track in jellyfinTracks {
                             JellyfinDownloadManager.shared.cancelDownload(trackId: track.id)
                         }
                     } label: {
-                        Label("CANCEL DOWNLOADS", systemImage: "xmark.circle")
+                        Text("CANCEL DOWNLOADS")
                     }
                 } else {
                     Button {
                         HapticFeedback.selectionChanged()
                         JellyfinDownloadManager.shared.download(tracks: jellyfinTracks)
                     } label: {
-                        Label("DOWNLOAD AVAILABLE DISCOGRAPHY", systemImage: "arrow.down.circle")
+                        Text("DOWNLOAD AVAILABLE DISCOGRAPHY")
                     }
                 }
 
@@ -718,14 +715,14 @@ private struct ArtistDetailToolbarMenuView: View {
                     }
                 }
             } label: {
-                Label("FIND METADATA (DISCOGRAPHY)...", systemImage: "arrow.triangle.2.circlepath")
+                Text("FIND METADATA (DISCOGRAPHY)...")
             }
 
             Button(action: {
                 HapticFeedback.lightImpact()
                 showingOnlineDiscovery = true
             }) {
-                Label("FIND ONLINE", systemImage: "network")
+                Text("FIND ONLINE")
             }
         } label: {
             Image(systemName: "globe")

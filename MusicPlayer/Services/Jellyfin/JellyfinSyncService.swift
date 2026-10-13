@@ -307,7 +307,7 @@ public final class JellyfinSyncService: Sendable {
             }
         }
 
-        prefetchAlbumArtworks(items: Array(changedItemsMap.values), link: link, token: token)
+        // prefetchAlbumArtworks removed: artwork loads lazily per row
         progressHandler?(survivingTracksMap.count, survivingTracksMap.count)
         return Array(survivingTracksMap.values)
     }
@@ -353,7 +353,7 @@ public final class JellyfinSyncService: Sendable {
             }
         }
 
-        prefetchAlbumArtworks(items: Array(allItemsMap.values), link: link, token: token)
+        // prefetchAlbumArtworks removed: artwork loads lazily per row
         return resultTracks
     }
 
@@ -767,56 +767,6 @@ public final class JellyfinSyncService: Sendable {
         link: JellyfinServerLink,
         token: String
     ) {
-        Task.detached(priority: .utility) {
-            var keyToItem: [String: String] = [:]
-            for item in items {
-                let key: String
-                if let albId = item.albumId, !albId.isEmpty {
-                    key = "jf_album_\(albId)"
-                } else {
-                    let artist = item.artists?.first ?? item.albumArtist ?? "Unknown Artist"
-                    let album = item.album ?? "Unknown Album"
-                    key = ArtworkCacheService.albumArtworkKey(artist: artist, album: album)
-                }
-                if keyToItem[key] == nil {
-                    keyToItem[key] = item.albumId ?? item.id
-                }
-            }
-
-            var keysToFetch: [(key: String, itemId: String)] = []
-            for (key, itemId) in keyToItem {
-                let exists = await ArtworkCacheService.shared.hasArtwork(key: key)
-                if !exists {
-                    keysToFetch.append((key, itemId))
-                }
-            }
-
-            guard !keysToFetch.isEmpty else { return }
-
-            let maxConcurrent = 2
-            var iterator = keysToFetch.makeIterator()
-
-            await withTaskGroup(of: Void.self) { group in
-                for _ in 0..<maxConcurrent {
-                    if let entry = iterator.next() {
-                        group.addTask {
-                            if let data = await JellyfinArtworkRegistry.shared.fetchArtworkData(for: entry.key), !data.isEmpty {
-                                await ArtworkCacheService.shared.storeRawArtwork(data: data, key: entry.key)
-                            }
-                        }
-                    }
-                }
-
-                while await group.next() != nil {
-                    if let nextEntry = iterator.next() {
-                        group.addTask {
-                            if let data = await JellyfinArtworkRegistry.shared.fetchArtworkData(for: nextEntry.key), !data.isEmpty {
-                                await ArtworkCacheService.shared.storeRawArtwork(data: data, key: nextEntry.key)
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        // No-op: Artwork is fetched lazily on-demand when rendered by UI rows.
     }
 }

@@ -145,15 +145,15 @@ public struct AlbumDetailView: View {
 
                         Spacer()
 
-                        let jellyfinTracks = activeAlbum.tracks.filter { $0.isJellyfinItem || $0.metadataSource == .server }
-                        let isJellyfinAlbum = !jellyfinTracks.isEmpty
-                        let downloadedCount = jellyfinTracks.filter { JellyfinDownloadManager.shared.isDownloaded(trackId: $0.id) }.count
-                        let isAllDownloaded = isJellyfinAlbum && downloadedCount == jellyfinTracks.count
-                        let isAnyDownloading = jellyfinTracks.contains { JellyfinDownloadManager.shared.downloadStates[$0.id]?.isDownloading == true }
+                        let summary = JellyfinDownloadManager.shared.albumSummary(for: activeAlbum)
+                        let isJellyfinAlbum = summary.total > 0
+                        let isAllDownloaded = summary.isAllDownloaded
+                        let isAnyDownloading = summary.isAnyDownloading
 
                         // Music note icon button with Album Metadata, Search Online & Playlist Actions
                         Menu {
                             if isJellyfinAlbum {
+                                let jellyfinTracks = activeAlbum.tracks.filter { $0.isJellyfinItem || $0.metadataSource == .server }
                                 if isAllDownloaded {
                                     Button(role: .destructive) {
                                         HapticFeedback.selectionChanged()
@@ -184,10 +184,12 @@ public struct AlbumDetailView: View {
                                 Divider()
                             }
 
-                            Button(action: {
-                                showingAlbumMetadataSheet = true
-                            }) {
-                                Text("ALBUM METADATA")
+                            if activeAlbum.tracks.contains(where: { $0.supportsMetadataLookup }) {
+                                Button(action: {
+                                    showingAlbumMetadataSheet = true
+                                }) {
+                                    Text("ALBUM METADATA")
+                                }
                             }
 
                             Button(action: {
@@ -200,11 +202,7 @@ public struct AlbumDetailView: View {
                                 HapticFeedback.notificationSuccess()
                                 libraryStore.toggleCollaborativeAlbum(activeAlbum)
                             }) {
-                                if libraryStore.isCollaborativeAlbum(activeAlbum) {
-                                    Label("MAKE COLLABORATIVE ALBUM", systemImage: "checkmark")
-                                } else {
-                                    Text("MAKE COLLABORATIVE ALBUM")
-                                }
+                                Text(libraryStore.isCollaborativeAlbum(activeAlbum) ? "REVERT COLLABORATIVE ALBUM" : "MAKE COLLABORATIVE ALBUM")
                             }
 
                             Divider()

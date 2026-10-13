@@ -413,7 +413,8 @@ public struct TrackRowView: View {
 
             if track.canReadLocalBytes && track.metadataSource != .server {
                 let isUbiquitous = (try? track.url.resourceValues(forKeys: [.isUbiquitousItemKey]))?.isUbiquitousItem == true
-                if isUbiquitous {
+                let isPlayingOrNext = isCurrentTrack || isNextTrack || (AudioPlayerService.shared?.currentTrack?.id == track.id) || (AudioPlayerService.shared?.nextTrack?.id == track.id)
+                if isUbiquitous && !isPlayingOrNext {
                     Button(role: .destructive) {
                         try? FileManager.default.evictUbiquitousItem(at: track.url)
                     } label: {

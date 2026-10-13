@@ -258,7 +258,7 @@ public struct TrackInfoSheetView: View {
                     infoRow(label: "ARTWORK", value: currentTrack.artworkKey != nil ? "EMBEDDED (CACHED)" : "NONE / DEFAULT")
                 }
 
-                if libraryStore != nil {
+                if libraryStore != nil && currentTrack.supportsMetadataLookup {
                     Button(action: { showingOnlineMetadataSheet = true }) {
                         HStack {
                             Text("FETCH ONLINE METADATA")

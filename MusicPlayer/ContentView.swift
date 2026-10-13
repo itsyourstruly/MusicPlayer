@@ -6,6 +6,7 @@ import SwiftUI
 /// Adapts cleanly to macOS with a desktop NavigationSplitView and bottom playback console,
 /// while maintaining the fluid TabView and Expandable Player on iOS.
 public struct ContentView: View {
+    @Environment(\.scenePhase) private var scenePhase
     @State private var libraryStore = LibraryStore()
     @State private var playerService = AudioPlayerService()
 
@@ -217,6 +218,11 @@ public struct ContentView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
             playerService.refreshAudioSessionAndRoute()
+        }
+        .onChange(of: scenePhase) { _, newPhase in
+            if newPhase == .background {
+                JellyfinDownloadManager.shared.flushIndex()
+            }
         }
         .preferredColorScheme(.dark)
         #endif

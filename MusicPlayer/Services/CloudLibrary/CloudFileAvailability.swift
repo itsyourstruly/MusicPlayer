@@ -11,6 +11,21 @@ public enum CloudAvailabilityStatus: String, Sendable, Codable {
 /// Helper classifying files as local, cloud-only, or downloading without reading or downloading the file.
 public enum CloudFileAvailability: Sendable {
 
+    private static let availabilityCache = NSCache<NSURL, NSNumber>()
+    private static let cloudItemCache = NSCache<NSURL, NSNumber>()
+
+    /// Clears the availability cache (e.g. after background sync or metadata refresh)
+    public static func clearCache() {
+        availabilityCache.removeAllObjects()
+        cloudItemCache.removeAllObjects()
+    }
+
+    /// Invalidates cached availability for a specific URL
+    public static func invalidate(for url: URL) {
+        availabilityCache.removeObject(forKey: url as NSURL)
+        cloudItemCache.removeObject(forKey: url as NSURL)
+    }
+
     /// Classifies an audio file URL into its cloud availability status.
     public static func status(for url: URL) -> CloudAvailabilityStatus {
         let filename = url.lastPathComponent
@@ -30,9 +45,9 @@ public enum CloudFileAvailability: Sendable {
                     return .downloading
                 }
                 if let status = values.ubiquitousItemDownloadingStatus {
-                    if status == .current || status == .downloaded {
+                    if status == .current {
                         return .local
-                    } else if status == .notDownloaded {
+                    } else {
                         return .cloudOnly
                     }
                 }
@@ -58,10 +73,13 @@ public enum CloudFileAvailability: Sendable {
         if url.scheme == "jellyfin" || url.scheme == "http" || url.scheme == "https" {
             return false
         }
-        // Build a fresh URL and remove cached values to ensure we don't read stale cached resource keys
-        var freshURL = URL(fileURLWithPath: url.path)
-        freshURL.removeAllCachedResourceValues()
-        return status(for: freshURL) == .local
+        let nsURL = url as NSURL
+        if let cached = availabilityCache.object(forKey: nsURL) {
+            return cached.boolValue
+        }
+        let local = status(for: url) == .local
+        availabilityCache.setObject(NSNumber(value: local), forKey: nsURL)
+        return local
     }
 
     /// Retrieves current download progress (0.0 to 1.0) if downloading.
@@ -82,17 +100,25 @@ public enum CloudFileAvailability: Sendable {
     public static func isCloudItem(url: URL) -> Bool {
         guard url.isFileURL else { return false }
         if url.scheme == "jellyfin" || url.scheme == "http" || url.scheme == "https" { return false }
+        let nsURL = url as NSURL
+        if let cached = cloudItemCache.object(forKey: nsURL) {
+            return cached.boolValue
+        }
         let filename = url.lastPathComponent
         if filename.hasSuffix(".icloud") || (filename.hasPrefix(".") && url.pathExtension.lowercased() == "icloud") {
+            cloudItemCache.setObject(NSNumber(value: true), forKey: nsURL)
             return true
         }
         if let values = try? url.resourceValues(forKeys: [.isUbiquitousItemKey]), values.isUbiquitousItem == true {
+            cloudItemCache.setObject(NSNumber(value: true), forKey: nsURL)
             return true
         }
         let path = url.path
         if path.contains("com~apple~CloudDocs") || path.contains("Mobile Documents") {
+            cloudItemCache.setObject(NSNumber(value: true), forKey: nsURL)
             return true
         }
+        cloudItemCache.setObject(NSNumber(value: false), forKey: nsURL)
         return false
     }
 

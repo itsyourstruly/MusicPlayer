@@ -61,9 +61,41 @@ public enum JellyfinDownloadState: Equatable, Sendable {
     }
 }
 
+// MARK: - Download Item State & Summaries
+
+/// Lightweight per-track observable state to isolate download progress re-renders to only the individual track row.
+@Observable
+@MainActor
+public final class DownloadItemState {
+    public var progress: Double = 0.0
+    public var state: JellyfinDownloadState = .notDownloaded
+
+    public init(progress: Double = 0.0, state: JellyfinDownloadState = .notDownloaded) {
+        self.progress = progress
+        self.state = state
+    }
+}
+
+/// Precomputed download summary for album and artist detail headers to eliminate per-frame filtering.
+public struct DownloadSummary: Sendable, Equatable {
+    public let downloaded: Int
+    public let total: Int
+    public let isAnyDownloading: Bool
+
+    public var isAllDownloaded: Bool {
+        total > 0 && downloaded == total
+    }
+
+    public init(downloaded: Int = 0, total: Int = 0, isAnyDownloading: Bool = false) {
+        self.downloaded = downloaded
+        self.total = total
+        self.isAnyDownloading = isAnyDownloading
+    }
+}
+
 // MARK: - Download Progress Throttler
 
-/// Thread-safe nonisolated tracker that throttles high-frequency URLSession download updates.
+/// Thread-safe nonisolated tracker that throttles high-frequency URLSession download updates to ~4 Hz or 5% steps.
 private final class DownloadProgressThrottler: @unchecked Sendable {
     static let shared = DownloadProgressThrottler()
     private let lock = NSLock()
@@ -73,7 +105,8 @@ private final class DownloadProgressThrottler: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         if let last = lastReported[taskID] {
-            if (now - last.timestamp >= 0.1) || abs(progress - last.progress) >= 0.02 || progress >= 1.0 {
+            // Lowered to ~4 Hz (0.25s) or 5% (0.05) steps, or 100%
+            if (now - last.timestamp >= 0.25) || abs(progress - last.progress) >= 0.05 || progress >= 1.0 {
                 lastReported[taskID] = (now, progress)
                 return true
             }
@@ -104,9 +137,10 @@ public final class JellyfinDownloadManager: NSObject, @unchecked Sendable {
     // MARK: - Observable State
 
     public private(set) var downloadStates: [UUID: JellyfinDownloadState] = [:]
-    public private(set) var downloadProgress: [UUID: Double] = [:]
+    @ObservationIgnored public private(set) var downloadProgress: [UUID: Double] = [:]
     public private(set) var downloadRecords: [UUID: DownloadedTrackRecord] = [:]
     public private(set) var totalDownloadedBytes: Int64 = 0
+    public private(set) var albumSummaries: [String: DownloadSummary] = [:]
 
     public var allowsCellularAccess: Bool = true {
         didSet {
@@ -127,16 +161,17 @@ public final class JellyfinDownloadManager: NSObject, @unchecked Sendable {
     public nonisolated let downloadsDirectoryURL: URL
     private let indexFileURL: URL
 
-    private var cachedTokensByServerID: [UUID: String] = [:]
-
-    private var activeTasks: [UUID: URLSessionDownloadTask] = [:]
-    private var downloadQueue: [(track: Track, server: JellyfinServerLink)] = []
-    private var taskToTrackID: [Int: UUID] = [:]
-    private var taskToTrack: [Int: Track] = [:]
-    private var taskToServer: [Int: JellyfinServerLink] = [:]
+    @ObservationIgnored private var cachedTokensByServerID: [UUID: String] = [:]
+    @ObservationIgnored private var perTrackStates: [UUID: DownloadItemState] = [:]
+    @ObservationIgnored private var activeTasks: [UUID: URLSessionDownloadTask] = [:]
+    @ObservationIgnored private var downloadQueue: [(track: Track, server: JellyfinServerLink)] = []
+    @ObservationIgnored private var taskToTrackID: [Int: UUID] = [:]
+    @ObservationIgnored private var taskToTrack: [Int: Track] = [:]
+    @ObservationIgnored private var taskToServer: [Int: JellyfinServerLink] = [:]
+    @ObservationIgnored private var saveIndexTask: Task<Void, Never>?
     private let maxConcurrentDownloads = 3
 
-    private var session: URLSession!
+    @ObservationIgnored private var session: URLSession!
 
     // MARK: - Init
 
@@ -168,149 +203,43 @@ public final class JellyfinDownloadManager: NSObject, @unchecked Sendable {
     // MARK: - Index Persistence & Self-Healing
 
     private func loadIndex() {
-        var validRecords: [UUID: DownloadedTrackRecord] = [:]
-        var totalBytes: Int64 = 0
-        var didHeal = false
-
         if fileManager.fileExists(atPath: indexFileURL.path),
            let data = try? Data(contentsOf: indexFileURL),
            let decoded = try? JSONDecoder().decode([UUID: DownloadedTrackRecord].self, from: data) {
+            self.downloadRecords = decoded
+            var bytes: Int64 = 0
             for (id, record) in decoded {
-                var currentRecord = record
-                var fileURL = downloadsDirectoryURL.appendingPathComponent(currentRecord.localFileName)
-
-                if fileManager.fileExists(atPath: fileURL.path) {
-                    if fileURL.pathExtension.lowercased() == "tmp" {
-                        let detectedExt = Self.detectAudioExtension(for: fileURL, preferred: nil)
-                        let healedName = "\(id.uuidString).\(detectedExt)"
-                        let healedURL = downloadsDirectoryURL.appendingPathComponent(healedName)
-                        try? fileManager.removeItem(at: healedURL)
-                        if (try? fileManager.moveItem(at: fileURL, to: healedURL)) != nil {
-                            fileURL = healedURL
-                            currentRecord = DownloadedTrackRecord(
-                                trackId: currentRecord.trackId,
-                                serverId: currentRecord.serverId,
-                                localFileName: healedName,
-                                fileSizeBytes: currentRecord.fileSizeBytes,
-                                dateDownloaded: currentRecord.dateDownloaded,
-                                originalURLString: currentRecord.originalURLString,
-                                trackTitle: currentRecord.trackTitle,
-                                artistName: currentRecord.artistName,
-                                albumTitle: currentRecord.albumTitle
-                            )
-                            didHeal = true
-                        }
-                    }
-                    validRecords[id] = currentRecord
-                    downloadStates[id] = .downloaded
-                    totalBytes += currentRecord.fileSizeBytes
-                } else if let (foundURL, _) = findExistingFileOnDisk(for: id) {
-                    let fileName = foundURL.lastPathComponent
-                    let fileSize = (try? fileManager.attributesOfItem(atPath: foundURL.path)[.size] as? Int64) ?? currentRecord.fileSizeBytes
-                    let healedRecord = DownloadedTrackRecord(
-                        trackId: id,
-                        serverId: currentRecord.serverId,
-                        localFileName: fileName,
-                        fileSizeBytes: fileSize,
-                        dateDownloaded: currentRecord.dateDownloaded,
-                        originalURLString: currentRecord.originalURLString,
-                        trackTitle: currentRecord.trackTitle,
-                        artistName: currentRecord.artistName,
-                        albumTitle: currentRecord.albumTitle
-                    )
-                    validRecords[id] = healedRecord
-                    downloadStates[id] = .downloaded
-                    totalBytes += fileSize
-                    didHeal = true
-                }
+                self.downloadStates[id] = .downloaded
+                bytes += record.fileSizeBytes
             }
+            self.totalDownloadedBytes = bytes
         }
 
-        // Scan directory for any .tmp files or orphaned tracks to heal them
-        if let fileNames = try? fileManager.contentsOfDirectory(atPath: downloadsDirectoryURL.path) {
-            for fileName in fileNames {
-                guard fileName.lowercased().hasSuffix(".tmp") else { continue }
-                let tmpURL = downloadsDirectoryURL.appendingPathComponent(fileName)
-                let stem = (fileName as NSString).deletingPathExtension
-                if let uuid = UUID(uuidString: stem) {
-                    let detectedExt = Self.detectAudioExtension(for: tmpURL, preferred: nil)
-                    let healedName = "\(uuid.uuidString).\(detectedExt)"
-                    let healedURL = downloadsDirectoryURL.appendingPathComponent(healedName)
-                    try? fileManager.removeItem(at: healedURL)
-                    if (try? fileManager.moveItem(at: tmpURL, to: healedURL)) != nil {
-                        let fileSize = (try? fileManager.attributesOfItem(atPath: healedURL.path)[.size] as? Int64) ?? 0
-                        if validRecords[uuid] == nil {
-                            let rec = DownloadedTrackRecord(
-                                trackId: uuid,
-                                serverId: UUID(),
-                                localFileName: healedName,
-                                fileSizeBytes: fileSize,
-                                originalURLString: healedURL.absoluteString,
-                                trackTitle: "",
-                                artistName: "",
-                                albumTitle: ""
-                            )
-                            validRecords[uuid] = rec
-                            downloadStates[uuid] = .downloaded
-                            totalBytes += fileSize
-                        }
-                        didHeal = true
-                    }
-                }
-            }
-        }
-
-        self.downloadRecords = validRecords
-        self.totalDownloadedBytes = totalBytes
-        if didHeal {
-            saveIndex()
+        // Reconcile with disk once at launch in a detached background task
+        Task.detached(priority: .utility) { [weak self] in
+            await self?.reconcileWithDisk()
         }
     }
 
-    private func saveIndex() {
-        let records = self.downloadRecords
-        let url = self.indexFileURL
-        Task.detached(priority: .utility) {
-            if let data = try? JSONEncoder().encode(records) {
-                try? data.write(to: url, options: .atomic)
-            }
-        }
-    }
+    /// Background self-healing reconciliation with disk run once at launch off the main thread.
+    private func reconcileWithDisk() async {
+        let fm = FileManager.default
+        let dir = downloadsDirectoryURL
+        var updatedRecords = await self.downloadRecords
+        var didHeal = false
+        var totalBytes: Int64 = 0
 
-    // MARK: - Public Queries
-
-    private func findExistingFileOnDisk(for trackId: UUID) -> (url: URL, ext: String)? {
-        let commonExtensions = ["flac", "mp3", "m4a", "wav", "aac", "alac", "aiff", "ogg"]
-        for ext in commonExtensions {
-            let candidate = downloadsDirectoryURL.appendingPathComponent("\(trackId.uuidString).\(ext)")
-            if fileManager.fileExists(atPath: candidate.path) {
-                return (candidate, ext)
-            }
-        }
-        let tmpCandidate = downloadsDirectoryURL.appendingPathComponent("\(trackId.uuidString).tmp")
-        if fileManager.fileExists(atPath: tmpCandidate.path) {
-            let detectedExt = Self.detectAudioExtension(for: tmpCandidate, preferred: nil)
-            let healedName = "\(trackId.uuidString).\(detectedExt)"
-            let healedURL = downloadsDirectoryURL.appendingPathComponent(healedName)
-            try? fileManager.removeItem(at: healedURL)
-            if (try? fileManager.moveItem(at: tmpCandidate, to: healedURL)) != nil {
-                return (healedURL, detectedExt)
-            }
-        }
-        return nil
-    }
-
-    /// Returns local file URL if track has been downloaded and exists on disk as a playable audio file.
-    public func localFileURL(for trackId: UUID) -> URL? {
-        if let record = downloadRecords[trackId] {
-            let fileURL = downloadsDirectoryURL.appendingPathComponent(record.localFileName)
-            if fileManager.fileExists(atPath: fileURL.path) {
+        // 1. Verify existing records and heal .tmp or moved files
+        for (id, record) in updatedRecords {
+            var fileURL = dir.appendingPathComponent(record.localFileName)
+            if fm.fileExists(atPath: fileURL.path) {
                 if fileURL.pathExtension.lowercased() == "tmp" {
                     let detectedExt = Self.detectAudioExtension(for: fileURL, preferred: nil)
-                    let healedName = "\(trackId.uuidString).\(detectedExt)"
-                    let healedURL = downloadsDirectoryURL.appendingPathComponent(healedName)
-                    try? fileManager.removeItem(at: healedURL)
-                    if (try? fileManager.moveItem(at: fileURL, to: healedURL)) != nil {
+                    let healedName = "\(id.uuidString).\(detectedExt)"
+                    let healedURL = dir.appendingPathComponent(healedName)
+                    try? fm.removeItem(at: healedURL)
+                    if (try? fm.moveItem(at: fileURL, to: healedURL)) != nil {
+                        fileURL = healedURL
                         let updated = DownloadedTrackRecord(
                             trackId: record.trackId,
                             serverId: record.serverId,
@@ -322,45 +251,140 @@ public final class JellyfinDownloadManager: NSObject, @unchecked Sendable {
                             artistName: record.artistName,
                             albumTitle: record.albumTitle
                         )
-                        downloadRecords[trackId] = updated
-                        saveIndex()
-                        return healedURL
+                        updatedRecords[id] = updated
+                        didHeal = true
                     }
                 }
-                return fileURL
-            }
-        }
-
-        // Fallback: search disk for this trackId
-        if let (foundURL, _) = findExistingFileOnDisk(for: trackId) {
-            if downloadRecords[trackId] == nil {
-                let fileSize = (try? fileManager.attributesOfItem(atPath: foundURL.path)[.size] as? Int64) ?? 0
-                let newRecord = DownloadedTrackRecord(
-                    trackId: trackId,
-                    serverId: UUID(),
-                    localFileName: foundURL.lastPathComponent,
+                totalBytes += record.fileSizeBytes
+            } else if let (foundURL, _) = findExistingFileOnDisk(for: id) {
+                let fileName = foundURL.lastPathComponent
+                let fileSize = (try? fm.attributesOfItem(atPath: foundURL.path)[.size] as? Int64) ?? record.fileSizeBytes
+                let healedRecord = DownloadedTrackRecord(
+                    trackId: id,
+                    serverId: record.serverId,
+                    localFileName: fileName,
                     fileSizeBytes: fileSize,
-                    originalURLString: foundURL.absoluteString,
-                    trackTitle: "",
-                    artistName: "",
-                    albumTitle: ""
+                    dateDownloaded: record.dateDownloaded,
+                    originalURLString: record.originalURLString,
+                    trackTitle: record.trackTitle,
+                    artistName: record.artistName,
+                    albumTitle: record.albumTitle
                 )
-                downloadRecords[trackId] = newRecord
-                downloadStates[trackId] = .downloaded
-                saveIndex()
+                updatedRecords[id] = healedRecord
+                totalBytes += fileSize
+                didHeal = true
             }
-            return foundURL
         }
 
+        // 2. Scan directory for orphaned files or unhealed .tmp files
+        if let fileNames = try? fm.contentsOfDirectory(atPath: dir.path) {
+            for fileName in fileNames {
+                guard fileName.lowercased().hasSuffix(".tmp") else { continue }
+                let tmpURL = dir.appendingPathComponent(fileName)
+                let stem = (fileName as NSString).deletingPathExtension
+                if let uuid = UUID(uuidString: stem) {
+                    let detectedExt = Self.detectAudioExtension(for: tmpURL, preferred: nil)
+                    let healedName = "\(uuid.uuidString).\(detectedExt)"
+                    let healedURL = dir.appendingPathComponent(healedName)
+                    try? fm.removeItem(at: healedURL)
+                    if (try? fm.moveItem(at: tmpURL, to: healedURL)) != nil {
+                        let fileSize = (try? fm.attributesOfItem(atPath: healedURL.path)[.size] as? Int64) ?? 0
+                        if updatedRecords[uuid] == nil {
+                            let rec = DownloadedTrackRecord(
+                                trackId: uuid,
+                                serverId: UUID(),
+                                localFileName: healedName,
+                                fileSizeBytes: fileSize,
+                                originalURLString: healedURL.absoluteString,
+                                trackTitle: "",
+                                artistName: "",
+                                albumTitle: ""
+                            )
+                            updatedRecords[uuid] = rec
+                            totalBytes += fileSize
+                        }
+                        didHeal = true
+                    }
+                }
+            }
+        }
+
+        let finalRecords = updatedRecords
+        let finalTotalBytes = totalBytes
+        let wasHealed = didHeal
+        await MainActor.run {
+            self.downloadRecords = finalRecords
+            self.totalDownloadedBytes = finalTotalBytes
+            for id in finalRecords.keys {
+                self.downloadStates[id] = .downloaded
+            }
+            self.invalidateSummaries()
+            if wasHealed {
+                self.saveIndex(immediate: true)
+            }
+        }
+    }
+
+    /// Saves download index with a 1.0s debouncing coalescer to prevent disk thrashing.
+    public func saveIndex(immediate: Bool = false) {
+        saveIndexTask?.cancel()
+        if immediate {
+            flushIndex()
+            return
+        }
+        saveIndexTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 1_000_000_000) // 1s debounce
+            guard !Task.isCancelled, let self = self else { return }
+            self.flushIndex()
+        }
+    }
+
+    /// Immediately flushes download index to disk (called on scenePhase == .background or completion).
+    public func flushIndex() {
+        saveIndexTask?.cancel()
+        saveIndexTask = nil
+        let records = self.downloadRecords
+        let url = self.indexFileURL
+        Task.detached(priority: .utility) {
+            if let data = try? JSONEncoder().encode(records) {
+                try? data.write(to: url, options: .atomic)
+            }
+        }
+    }
+
+    // MARK: - Public Queries
+
+    private nonisolated func findExistingFileOnDisk(for trackId: UUID) -> (url: URL, ext: String)? {
+        let fm = FileManager.default
+        let commonExtensions = ["flac", "mp3", "m4a", "wav", "aac", "alac", "aiff", "ogg"]
+        for ext in commonExtensions {
+            let candidate = downloadsDirectoryURL.appendingPathComponent("\(trackId.uuidString).\(ext)")
+            if fm.fileExists(atPath: candidate.path) {
+                return (candidate, ext)
+            }
+        }
+        let tmpCandidate = downloadsDirectoryURL.appendingPathComponent("\(trackId.uuidString).tmp")
+        if fm.fileExists(atPath: tmpCandidate.path) {
+            let detectedExt = Self.detectAudioExtension(for: tmpCandidate, preferred: nil)
+            let healedName = "\(trackId.uuidString).\(detectedExt)"
+            let healedURL = downloadsDirectoryURL.appendingPathComponent(healedName)
+            try? fm.removeItem(at: healedURL)
+            if (try? fm.moveItem(at: tmpCandidate, to: healedURL)) != nil {
+                return (healedURL, detectedExt)
+            }
+        }
         return nil
     }
 
-    /// Returns true if track is currently downloaded.
+    /// Returns local file URL if track has been downloaded and exists in the in-memory record index.
+    public func localFileURL(for trackId: UUID) -> URL? {
+        guard let record = downloadRecords[trackId] else { return nil }
+        return downloadsDirectoryURL.appendingPathComponent(record.localFileName)
+    }
+
+    /// Fast in-memory check for downloaded status. Never performs disk I/O in view bodies.
     public func isDownloaded(trackId: UUID) -> Bool {
-        if downloadRecords[trackId] != nil {
-            return true
-        }
-        return localFileURL(for: trackId) != nil
+        downloadRecords[trackId] != nil
     }
 
     /// Returns download state for a track ID.
@@ -371,8 +395,67 @@ public final class JellyfinDownloadManager: NSObject, @unchecked Sendable {
         return downloadStates[trackId] ?? .notDownloaded
     }
 
+    /// Returns or creates an isolated per-track progress model so progress updates only invalidate that row.
+    public func itemState(for trackId: UUID) -> DownloadItemState {
+        if let existing = perTrackStates[trackId] {
+            return existing
+        }
+        let st: JellyfinDownloadState
+        if isDownloaded(trackId: trackId) {
+            st = .downloaded
+        } else {
+            st = downloadStates[trackId] ?? .notDownloaded
+        }
+        let item = DownloadItemState(progress: downloadProgress[trackId] ?? 0.0, state: st)
+        perTrackStates[trackId] = item
+        return item
+    }
+
     public func progress(for trackId: UUID) -> Double {
         downloadProgress[trackId] ?? 0.0
+    }
+
+    // MARK: - Precomputed Album & Artist Summaries
+
+    public func invalidateSummaries() {
+        albumSummaries.removeAll()
+    }
+
+    public func albumSummary(for album: Album) -> DownloadSummary {
+        if let cached = albumSummaries[album.id] {
+            return cached
+        }
+        let jellyfinTracks = album.tracks.filter { $0.isJellyfinItem || $0.metadataSource == .server }
+        guard !jellyfinTracks.isEmpty else {
+            let empty = DownloadSummary(downloaded: 0, total: 0, isAnyDownloading: false)
+            albumSummaries[album.id] = empty
+            return empty
+        }
+        let downloadedCount = jellyfinTracks.filter { downloadRecords[$0.id] != nil }.count
+        let anyDownloading = jellyfinTracks.contains { downloadStates[$0.id]?.isDownloading == true }
+        let summary = DownloadSummary(downloaded: downloadedCount, total: jellyfinTracks.count, isAnyDownloading: anyDownloading)
+        albumSummaries[album.id] = summary
+        return summary
+    }
+
+    public func artistSummary(for artist: Artist) -> DownloadSummary {
+        let jellyfinTracks = artist.tracks.filter { $0.isJellyfinItem || $0.metadataSource == .server }
+        guard !jellyfinTracks.isEmpty else {
+            return DownloadSummary(downloaded: 0, total: 0, isAnyDownloading: false)
+        }
+        let downloadedCount = jellyfinTracks.filter { downloadRecords[$0.id] != nil }.count
+        let anyDownloading = jellyfinTracks.contains { downloadStates[$0.id]?.isDownloading == true }
+        return DownloadSummary(downloaded: downloadedCount, total: jellyfinTracks.count, isAnyDownloading: anyDownloading)
+    }
+
+    public func playlistSummary(for tracks: [Track]) -> DownloadSummary {
+        let jellyfinTracks = tracks.filter { $0.isJellyfinItem || $0.metadataSource == .server }
+        guard !jellyfinTracks.isEmpty else {
+            return DownloadSummary(downloaded: 0, total: 0, isAnyDownloading: false)
+        }
+        let downloadedCount = jellyfinTracks.filter { downloadRecords[$0.id] != nil }.count
+        let anyDownloading = jellyfinTracks.contains { downloadStates[$0.id]?.isDownloading == true }
+        return DownloadSummary(downloaded: downloadedCount, total: jellyfinTracks.count, isAnyDownloading: anyDownloading)
     }
 
     public var downloadedTracksList: [DownloadedTrackRecord] {
@@ -392,6 +475,11 @@ public final class JellyfinDownloadManager: NSObject, @unchecked Sendable {
 
         downloadStates[track.id] = .queued
         downloadProgress[track.id] = 0.0
+        if let item = perTrackStates[track.id] {
+            item.state = .queued
+            item.progress = 0.0
+        }
+        invalidateSummaries()
         downloadQueue.append((track, server))
         processNextInQueue()
     }
@@ -405,10 +493,15 @@ public final class JellyfinDownloadManager: NSObject, @unchecked Sendable {
 
             downloadStates[track.id] = .queued
             downloadProgress[track.id] = 0.0
+            if let item = perTrackStates[track.id] {
+                item.state = .queued
+                item.progress = 0.0
+            }
             downloadQueue.append((track, server))
             didEnqueue = true
         }
         if didEnqueue {
+            invalidateSummaries()
             processNextInQueue()
         }
     }
@@ -431,10 +524,15 @@ public final class JellyfinDownloadManager: NSObject, @unchecked Sendable {
 
             downloadStates[track.id] = .queued
             downloadProgress[track.id] = 0.0
+            if let item = perTrackStates[track.id] {
+                item.state = .queued
+                item.progress = 0.0
+            }
             downloadQueue.append((track, server))
             didEnqueue = true
         }
         if didEnqueue {
+            invalidateSummaries()
             processNextInQueue()
         }
     }
@@ -466,6 +564,9 @@ public final class JellyfinDownloadManager: NSObject, @unchecked Sendable {
         downloadQueue.removeAll { $0.track.id == trackId }
         downloadStates.removeValue(forKey: trackId)
         downloadProgress.removeValue(forKey: trackId)
+        perTrackStates[trackId]?.state = .notDownloaded
+        perTrackStates[trackId]?.progress = 0.0
+        invalidateSummaries()
         processNextInQueue()
     }
 
@@ -480,6 +581,9 @@ public final class JellyfinDownloadManager: NSObject, @unchecked Sendable {
         downloadRecords.removeValue(forKey: trackId)
         downloadStates.removeValue(forKey: trackId)
         downloadProgress.removeValue(forKey: trackId)
+        perTrackStates[trackId]?.state = .notDownloaded
+        perTrackStates[trackId]?.progress = 0.0
+        invalidateSummaries()
         totalDownloadedBytes = max(0, totalDownloadedBytes - record.fileSizeBytes)
         saveIndex()
     }
@@ -508,6 +612,11 @@ public final class JellyfinDownloadManager: NSObject, @unchecked Sendable {
         downloadRecords.removeAll()
         downloadStates.removeAll()
         downloadProgress.removeAll()
+        for item in perTrackStates.values {
+            item.state = .notDownloaded
+            item.progress = 0.0
+        }
+        invalidateSummaries()
         totalDownloadedBytes = 0
         saveIndex()
     }
@@ -538,7 +647,10 @@ public final class JellyfinDownloadManager: NSObject, @unchecked Sendable {
 
         let itemId = track.jellyfinItemId ?? track.url.lastPathComponent
         guard !itemId.isEmpty else {
-            downloadStates[track.id] = .failed("INVALID ITEM ID")
+            let state = JellyfinDownloadState.failed("INVALID ITEM ID")
+            downloadStates[track.id] = state
+            perTrackStates[track.id]?.state = state
+            invalidateSummaries()
             processNextInQueue()
             return
         }
@@ -558,7 +670,10 @@ public final class JellyfinDownloadManager: NSObject, @unchecked Sendable {
         components?.queryItems = queryItems
 
         guard let requestURL = components?.url else {
-            downloadStates[track.id] = .failed("INVALID URL")
+            let state = JellyfinDownloadState.failed("INVALID URL")
+            downloadStates[track.id] = state
+            perTrackStates[track.id]?.state = state
+            invalidateSummaries()
             processNextInQueue()
             return
         }
@@ -572,6 +687,9 @@ public final class JellyfinDownloadManager: NSObject, @unchecked Sendable {
         taskToTrack[task.taskIdentifier] = track
         taskToServer[task.taskIdentifier] = server
         downloadStates[track.id] = .downloading(progress: 0.0)
+        perTrackStates[track.id]?.state = .downloading(progress: 0.0)
+        perTrackStates[track.id]?.progress = 0.0
+        invalidateSummaries()
         task.resume()
     }
 
@@ -588,7 +706,7 @@ public final class JellyfinDownloadManager: NSObject, @unchecked Sendable {
     fileprivate func handleDownloadProgress(taskID: Int, progress: Double) {
         guard let trackID = taskToTrackID[taskID] else { return }
         downloadProgress[trackID] = progress
-        downloadStates[trackID] = .downloading(progress: progress)
+        perTrackStates[trackID]?.progress = progress
     }
 
     fileprivate func handleDownloadFinished(
@@ -606,6 +724,11 @@ public final class JellyfinDownloadManager: NSObject, @unchecked Sendable {
         downloadRecords[trackID] = record
         downloadStates[trackID] = .downloaded
         downloadProgress[trackID] = 1.0
+        if let item = perTrackStates[trackID] {
+            item.progress = 1.0
+            item.state = .downloaded
+        }
+        invalidateSummaries()
         totalDownloadedBytes += fileSize
         saveIndex()
         processNextInQueue()
@@ -622,7 +745,10 @@ public final class JellyfinDownloadManager: NSObject, @unchecked Sendable {
         taskToServer.removeValue(forKey: taskID)
         DownloadProgressThrottler.shared.remove(taskID: taskID)
 
-        downloadStates[trackID] = .failed(error.localizedDescription)
+        let state = JellyfinDownloadState.failed(error.localizedDescription)
+        downloadStates[trackID] = state
+        perTrackStates[trackID]?.state = state
+        invalidateSummaries()
         processNextInQueue()
     }
 
@@ -636,10 +762,13 @@ public final class JellyfinDownloadManager: NSObject, @unchecked Sendable {
 
         if let err = error as? URLError, err.code == .cancelled {
             downloadStates.removeValue(forKey: trackID)
+            perTrackStates[trackID]?.state = .notDownloaded
         } else {
-            downloadStates[trackID] = .failed(error?.localizedDescription ?? "UNKNOWN ERROR")
+            let state = JellyfinDownloadState.failed(error?.localizedDescription ?? "UNKNOWN ERROR")
+            downloadStates[trackID] = state
+            perTrackStates[trackID]?.state = state
         }
-
+        invalidateSummaries()
         processNextInQueue()
     }
 

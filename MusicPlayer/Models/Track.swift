@@ -134,6 +134,15 @@ public struct Track: Identifiable, Codable, Sendable, Hashable {
         jellyfinItemId != nil || url.scheme == "jellyfin" || metadataSource == .server
     }
 
+    /// Determines whether online or offline metadata matching is supported for this track.
+    /// Only supported for locally available files or downloaded Jellyfin items.
+    public var supportsMetadataLookup: Bool {
+        if isJellyfinItem || metadataSource == .server {
+            return JellyfinDownloadManager.shared.isDownloaded(trackId: id)
+        }
+        return url.isFileURL && canReadLocalBytes
+    }
+
     // Original track number
     public let originalTrackNumber: Int?
     // Deluxe track number

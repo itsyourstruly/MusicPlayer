@@ -3,6 +3,7 @@ import Foundation
 import AVFoundation
 import MediaToolbox
 import os
+import Synchronization
 
 /// High-performance, studio-grade real-time audio DSP engine providing:
 /// - 10-Band Pure Parametric Peaking Equalizer:
@@ -136,45 +137,34 @@ public final class AudioDSPProcessor: @unchecked Sendable {
         }
     }
 
-    private final class TapStorage: @unchecked Sendable {
-        var sampleRate: Double = 44100.0
-        var isEQEnabled: Bool = false
-        var hasActiveEQBands: Bool = false
-        var volumeBoostLinear: Float = 1.0
-        var volumeBoosterDB: Double = 0.0
-        var bandGains: [Double] = [Double](repeating: 0.0, count: 10)
-        var coefficients = FilterBankCoefficients()
+    public struct DSPParameters: Sendable {
+        public var isEQ: Bool = false
+        public var boost: Float = 1.0
+        public var boostDB: Double = 0.0
+        public var coeffs: FilterBankCoefficients = FilterBankCoefficients()
 
-        private var unfairLock = os_unfair_lock()
-
-        func lock() {
-            os_unfair_lock_lock(&unfairLock)
-        }
-
-        func unlock() {
-            os_unfair_lock_unlock(&unfairLock)
-        }
-
-        func readParameters() -> (isEQ: Bool, boost: Float, boostDB: Double, coeffs: FilterBankCoefficients) {
-            os_unfair_lock_lock(&unfairLock)
-            let eq = isEQEnabled && hasActiveEQBands
-            let b = volumeBoostLinear
-            let bDB = volumeBoosterDB
-            let c = coefficients
-            os_unfair_lock_unlock(&unfairLock)
-            return (eq, b, bDB, c)
+        public init(isEQ: Bool = false, boost: Float = 1.0, boostDB: Double = 0.0, coeffs: FilterBankCoefficients = FilterBankCoefficients()) {
+            self.isEQ = isEQ
+            self.boost = boost
+            self.boostDB = boostDB
+            self.coeffs = coeffs
         }
     }
 
     /// Context retained per active MTAudioProcessingTap instance to isolate channel states and limiter envelope
-    private final class TapContext {
-        let processor: AudioDSPProcessor
+    public final class TapContext: @unchecked Sendable {
+        weak var processor: AudioDSPProcessor?
         var leftState = ChannelFilterState()
         var rightState = ChannelFilterState()
         var isFloat: Bool = true
         var bitsPerChannel: UInt32 = 32
         var channelCount: UInt32 = 2
         var sampleRate: Double = 44100.0
+
+        // Lock-free double-buffered DSP parameters
+        var paramBuffer0 = DSPParameters()
+        var paramBuffer1 = DSPParameters()
+        let activeParamIndex = Atomic<Int>(0)
 
         // Dynamic Crest Leveler State for high volume boost levels
         var levelerEnv: Float = 0.0
@@ -187,9 +177,9 @@ public final class AudioDSPProcessor: @unchecked Sendable {
         var releaseCoeffFast: Float = 0.0003
         var releaseCoeffSlow: Float = 0.0001
 
-        // 64-sample circular lookahead delay line (~1.4 ms) for predictive zero-overshoot peak limiting
-        var delayBufferL = [Float](repeating: 0.0, count: 64)
-        var delayBufferR = [Float](repeating: 0.0, count: 64)
+        // Fixed UnsafeMutablePointer<Float> lookahead buffers allocated in init and freed in deinit (render-safe)
+        let delayBufferL: UnsafeMutablePointer<Float>
+        let delayBufferR: UnsafeMutablePointer<Float>
         var delayIndex: Int = 0
 
         // Parameter smoothing state for click-free live volume boost adjustments
@@ -201,6 +191,36 @@ public final class AudioDSPProcessor: @unchecked Sendable {
 
         init(processor: AudioDSPProcessor) {
             self.processor = processor
+            self.delayBufferL = UnsafeMutablePointer<Float>.allocate(capacity: 64)
+            self.delayBufferL.initialize(repeating: 0.0, count: 64)
+            self.delayBufferR = UnsafeMutablePointer<Float>.allocate(capacity: 64)
+            self.delayBufferR.initialize(repeating: 0.0, count: 64)
+            processor.registerContext(self)
+        }
+
+        deinit {
+            processor?.unregisterContext(self)
+            delayBufferL.deinitialize(count: 64)
+            delayBufferL.deallocate()
+            delayBufferR.deinitialize(count: 64)
+            delayBufferR.deallocate()
+        }
+
+        @inline(__always)
+        func readParameters() -> DSPParameters {
+            let idx = activeParamIndex.load(ordering: .acquiring)
+            return idx == 0 ? paramBuffer0 : paramBuffer1
+        }
+
+        func updateParameters(isEQ: Bool, boost: Float, boostDB: Double, coeffs: FilterBankCoefficients) {
+            let nextIdx = 1 - activeParamIndex.load(ordering: .relaxed)
+            let params = DSPParameters(isEQ: isEQ, boost: boost, boostDB: boostDB, coeffs: coeffs)
+            if nextIdx == 0 {
+                paramBuffer0 = params
+            } else {
+                paramBuffer1 = params
+            }
+            activeParamIndex.store(nextIdx, ordering: .releasing)
         }
 
         func configureSampleRate(_ sampleRate: Double) {
@@ -236,63 +256,82 @@ public final class AudioDSPProcessor: @unchecked Sendable {
         }
     }
 
-    private let storage = TapStorage()
+    private struct WeakTapContext {
+        weak var context: TapContext?
+    }
+
+    private let contextRegistryLock = NSLock()
+    private var activeContexts: [ObjectIdentifier: WeakTapContext] = [:]
+
+    fileprivate func registerContext(_ context: TapContext) {
+        contextRegistryLock.lock()
+        defer { contextRegistryLock.unlock() }
+        activeContexts[ObjectIdentifier(context)] = WeakTapContext(context: context)
+    }
+
+    fileprivate func unregisterContext(_ context: TapContext) {
+        contextRegistryLock.lock()
+        defer { contextRegistryLock.unlock() }
+        activeContexts.removeValue(forKey: ObjectIdentifier(context))
+    }
+
+    private let stateLock = NSLock()
+    private(set) var currentIsEQEnabled: Bool = false
+    private(set) var currentVolumeBoosterDB: Double = 0.0
+    private(set) var currentBandGains: [Double] = [Double](repeating: 0.0, count: 10)
+
     public let centerFrequencies: [Double] = [32.0, 64.0, 125.0, 250.0, 500.0, 1000.0, 2000.0, 4000.0, 8000.0, 16000.0]
 
-    private init() {
-        let (initialCoeffs, hasActive) = calculateCoefficients(sampleRate: storage.sampleRate, bandGains: storage.bandGains, isEQEnabled: storage.isEQEnabled)
-        storage.coefficients = initialCoeffs
-        storage.hasActiveEQBands = hasActive
-    }
+    private init() {}
 
     /// Updates DSP parameters from EqualizerManager.
     /// Pure, clean equalizer: applies the exact frequency curve matching the graph line shape
     /// without attenuating or altering untouched frequency bands.
     public func update(isEQEnabled: Bool, volumeBoosterDB: Double, bandGains: [Double]) {
-        storage.lock()
-        storage.isEQEnabled = isEQEnabled
-        storage.volumeBoosterDB = volumeBoosterDB
-        let linear = Float(pow(10.0, volumeBoosterDB / 20.0))
-        storage.volumeBoostLinear = linear
+        stateLock.lock()
+        self.currentIsEQEnabled = isEQEnabled
+        self.currentVolumeBoosterDB = volumeBoosterDB
         if bandGains.count == 10 {
-            storage.bandGains = bandGains
+            self.currentBandGains = bandGains
         }
-        let sr = storage.sampleRate
-        let gains = storage.bandGains
-        let eq = storage.isEQEnabled
-        storage.unlock()
+        let gains = self.currentBandGains
+        let linear = Float(pow(10.0, volumeBoosterDB / 20.0))
+        stateLock.unlock()
 
-        let (newCoeffs, hasActive) = calculateCoefficients(sampleRate: sr, bandGains: gains, isEQEnabled: eq)
+        contextRegistryLock.lock()
+        let contexts = activeContexts.values.compactMap { $0.context }
+        contextRegistryLock.unlock()
 
-        storage.lock()
-        storage.coefficients = newCoeffs
-        storage.hasActiveEQBands = hasActive
-        storage.unlock()
+        for ctx in contexts {
+            let (newCoeffs, hasActive) = calculateCoefficients(sampleRate: ctx.sampleRate, bandGains: gains, isEQEnabled: isEQEnabled)
+            ctx.updateParameters(isEQ: isEQEnabled && hasActive, boost: linear, boostDB: volumeBoosterDB, coeffs: newCoeffs)
+        }
     }
 
     /// Dynamically adapts filter coefficients when the output hardware route (e.g. car stereo A2DP sink) renegotiates sample rate
     public func updateSampleRate(_ sampleRate: Double) {
         let sr = (sampleRate > 8000.0 && !sampleRate.isNaN && !sampleRate.isInfinite) ? sampleRate : 44100.0
-        storage.lock()
-        let oldSR = storage.sampleRate
-        let gains = storage.bandGains
-        let eq = storage.isEQEnabled
-        storage.sampleRate = sr
-        storage.unlock()
+        stateLock.lock()
+        let gains = self.currentBandGains
+        let eq = self.currentIsEQEnabled
+        let boostDB = self.currentVolumeBoosterDB
+        let linear = Float(pow(10.0, boostDB / 20.0))
+        stateLock.unlock()
 
-        if abs(oldSR - sr) > 1.0 {
+        contextRegistryLock.lock()
+        let contexts = activeContexts.values.compactMap { $0.context }
+        contextRegistryLock.unlock()
+
+        for ctx in contexts {
+            ctx.configureSampleRate(sr)
             let (newCoeffs, hasActive) = calculateCoefficients(sampleRate: sr, bandGains: gains, isEQEnabled: eq)
-            storage.lock()
-            storage.coefficients = newCoeffs
-            storage.hasActiveEQBands = hasActive
-            storage.unlock()
-            AppLogger.audio.info("AudioDSPProcessor adapted dynamic sample rate: \(sr) Hz")
+            ctx.updateParameters(isEQ: eq && hasActive, boost: linear, boostDB: boostDB, coeffs: newCoeffs)
         }
     }
 
     /// Calculates 10-band peaking biquad coefficients precisely matching the interactive line shape.
     /// Q = 1.414 provides exactly 1-octave bandwidth, isolating each band's adjustment cleanly.
-    private func calculateCoefficients(sampleRate: Double, bandGains: [Double], isEQEnabled: Bool) -> (coeffs: FilterBankCoefficients, hasActive: Bool) {
+    public func calculateCoefficients(sampleRate: Double, bandGains: [Double], isEQEnabled: Bool) -> (coeffs: FilterBankCoefficients, hasActive: Bool) {
         let sr = (sampleRate > 8000.0 && !sampleRate.isNaN && !sampleRate.isInfinite) ? sampleRate : 44100.0
         var newCoeffs = FilterBankCoefficients()
         var hasActive = false
@@ -362,13 +401,24 @@ public final class AudioDSPProcessor: @unchecked Sendable {
                 let rawSR = processingFormat.pointee.mSampleRate
                 let sr = (rawSR > 8000.0 && !rawSR.isNaN && !rawSR.isInfinite) ? rawSR : 44100.0
 
-                context.processor.updateSampleRate(sr)
                 context.configureSampleRate(sr)
 
                 let flags = processingFormat.pointee.mFormatFlags
                 context.isFloat = (flags & kAudioFormatFlagIsFloat) != 0
                 context.bitsPerChannel = processingFormat.pointee.mBitsPerChannel
                 context.channelCount = processingFormat.pointee.mChannelsPerFrame
+
+                if let proc = context.processor {
+                    let gains = proc.currentBandGains
+                    let isEQ = proc.currentIsEQEnabled
+                    let boostDB = proc.currentVolumeBoosterDB
+                    let linear = Float(pow(10.0, boostDB / 20.0))
+                    let (coeffs, hasActive) = proc.calculateCoefficients(sampleRate: sr, bandGains: gains, isEQEnabled: isEQ)
+                    let params = DSPParameters(isEQ: isEQ && hasActive, boost: linear, boostDB: boostDB, coeffs: coeffs)
+                    context.paramBuffer0 = params
+                    context.paramBuffer1 = params
+                    context.activeParamIndex.store(0, ordering: .relaxed)
+                }
             },
             unprepare: { tap in
                 let storagePtr = MTAudioProcessingTapGetStorage(tap)
@@ -397,7 +447,7 @@ public final class AudioDSPProcessor: @unchecked Sendable {
                 let storagePtr = MTAudioProcessingTapGetStorage(tap)
                 let context = Unmanaged<TapContext>.fromOpaque(storagePtr).takeUnretainedValue()
 
-                // Upon stream discontinuity or seek, reset biquad filter memory and initiate anti-click micro-ramp
+                // Discontinuity check
                 let startOfStreamFlag = MTAudioProcessingTapFlags(kMTAudioProcessingTapFlag_StartOfStream)
                 let isStartOfStream = (flags & startOfStreamFlag) != 0 || (flagsOut.pointee & startOfStreamFlag) != 0
                 if isStartOfStream {
@@ -413,7 +463,7 @@ public final class AudioDSPProcessor: @unchecked Sendable {
                     context.declickRampRemainingFrames = context.declickRampTotalFrames
                 }
 
-                context.processor.processAudio(
+                context.processor?.processAudio(
                     bufferList: bufferListInOut,
                     frameCount: actualFrames,
                     context: context
@@ -432,7 +482,6 @@ public final class AudioDSPProcessor: @unchecked Sendable {
         if status == noErr {
             return tapOut
         } else {
-            AppLogger.audio.error("Failed to create MTAudioProcessingTap: \(status)")
             return nil
         }
     }
@@ -449,7 +498,11 @@ public final class AudioDSPProcessor: @unchecked Sendable {
         let numBuffers = bufferListPtr.count
         guard numBuffers > 0, frameCount > 0 else { return }
 
-        let (isEQ, boost, boostDB, coeffs) = storage.readParameters()
+        let params = context.readParameters()
+        let isEQ = params.isEQ
+        let boost = params.boost
+        let boostDB = params.boostDB
+        let coeffs = params.coeffs
         let hasDeclick = context.declickRampRemainingFrames > 0
         let isNoop = !isEQ && abs(boost - 1.0) < 0.001 && !hasDeclick && context.limiterGain >= 0.999 && context.levelerEnv < 0.01
         if isNoop { return }

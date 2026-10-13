@@ -536,6 +536,10 @@ public struct OnlineMetadataMatchSheet: View {
     // MARK: - Handlers
 
     private func performSearchWithCurrentSource() async {
+        guard track.supportsMetadataLookup else {
+            isSearching = false
+            return
+        }
         let query = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
         isSearching = true
         selectedMatch = nil

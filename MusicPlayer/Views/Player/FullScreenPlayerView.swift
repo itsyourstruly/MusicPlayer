@@ -869,7 +869,7 @@ public struct FullScreenPlayerView: View {
                                     HapticFeedback.notificationSuccess()
                                     playAlbumNext(for: track)
                                 } label: {
-                                    Label("PLAY ALBUM NEXT", systemImage: "text.line.first.and.arrowtriangle.forward")
+                                    Text("PLAY ALBUM NEXT")
                                 }
                             }
                             .transition(.opacity)

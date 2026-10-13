@@ -72,10 +72,16 @@ public enum FuzzyMatcher {
     ) -> Int {
         guard !cleanQuery.isEmpty else { return 0 }
 
-        // Fast rejection: if the pre-joined search token string does not match anywhere and query has no multi-tokens
-        if !searchTokens.contains(cleanQuery) && !cleanQuery.contains(" ") {
-            // Check acronym or short prefix
-            if cleanQuery.count >= 2 && isSubsequence(query: cleanQuery, in: normalizedTitle) {
+        let queryCount = cleanQuery.count
+        let hasQuickMatch = searchTokens.contains(cleanQuery) ||
+                            normalizedTitle.contains(cleanQuery) ||
+                            normalizedArtist.contains(cleanQuery) ||
+                            normalizedAlbum.contains(cleanQuery) ||
+                            cleanQuery.contains(" ")
+
+        // If query has no quick match and is short (< 3), check acronym subsequence
+        if !hasQuickMatch && queryCount < 3 {
+            if isSubsequence(query: cleanQuery, in: normalizedTitle) {
                 return 250
             }
             return 0
@@ -90,12 +96,21 @@ public enum FuzzyMatcher {
         // Token score
         let tokenScore = evaluateScore(cleanText: searchTokens, cleanQuery: cleanQuery)
 
-        return max(
+        let bestScore = max(
             titleScore * 2,
             Int(Double(artistScore) * 1.4),
             albumScore,
             tokenScore
         )
+
+        if bestScore > 0 { return bestScore }
+
+        // Fallback: Check subsequence on title if >= 3
+        if queryCount >= 3 && isSubsequence(query: cleanQuery, in: normalizedTitle) {
+            return 250
+        }
+
+        return 0
     }
 
     /// Fallback scoreTrack taking raw strings (normalizes on the fly if pre-normalized tokens not available).
@@ -160,7 +175,74 @@ public enum FuzzyMatcher {
 
     // MARK: - Core Matching Engine
 
+    /// Collapses all internal whitespace for contiguous token comparison (e.g. "daft punk" -> "daftpunk").
+    @inline(__always)
+    public static func collapsedString(_ str: String) -> String {
+        str.filter { $0 != " " }
+    }
+
+    /// Fast Damerau-Levenshtein edit distance allowing substitutions, insertions, deletions, and adjacent transpositions.
+    @inline(__always)
+    public static func damerauLevenshteinDistance(_ a: [UInt8], _ b: [UInt8], maxAllowed: Int) -> Int {
+        let m = a.count
+        let n = b.count
+        if m == 0 { return n }
+        if n == 0 { return m }
+        let diff = abs(m - n)
+        if diff > maxAllowed { return diff }
+
+        var d0 = [Int](repeating: 0, count: n + 1)
+        var d1 = [Int](repeating: 0, count: n + 1)
+        var d2 = [Int](repeating: 0, count: n + 1)
+
+        for j in 0...n { d1[j] = j }
+
+        for i in 1...m {
+            d2[0] = i
+            var minRowVal = i
+            let ai = a[i - 1]
+
+            for j in 1...n {
+                let bj = b[j - 1]
+                let cost: Int = (ai == bj) ? 0 : 1
+
+                let delCost = d1[j] + 1
+                let insCost = d2[j - 1] + 1
+                let subCost = d1[j - 1] + cost
+                var minCost = min(delCost, insCost, subCost)
+
+                if i > 1 && j > 1 && ai == b[j - 2] && a[i - 2] == bj {
+                    let transCost = d0[j - 2] + 1
+                    if transCost < minCost {
+                        minCost = transCost
+                    }
+                }
+
+                d2[j] = minCost
+                if minCost < minRowVal {
+                    minRowVal = minCost
+                }
+            }
+
+            if minRowVal > maxAllowed { return minRowVal }
+            d0 = d1
+            d1 = d2
+        }
+        return d1[n]
+    }
+
+    /// Fast edit distance helper between two normalized strings with bounded early exit.
+    @inline(__always)
+    public static func fastEditDistance(_ s1: String, _ s2: String, maxAllowed: Int = 2) -> Int {
+        if s1 == s2 { return 0 }
+        let c1 = s1.count
+        let c2 = s2.count
+        if abs(c1 - c2) > maxAllowed { return abs(c1 - c2) }
+        return damerauLevenshteinDistance(Array(s1.utf8), Array(s2.utf8), maxAllowed: maxAllowed)
+    }
+
     /// Evaluates match score between pre-normalized strings with zero per-call heap allocations.
+    /// Incorporates exact matches, word-boundary prefixes, space-collapsed matches, token sets, and typo tolerance.
     @inline(__always)
     public static func evaluateScore(cleanText: String, cleanQuery: String) -> Int {
         guard !cleanText.isEmpty, !cleanQuery.isEmpty else { return 0 }
@@ -179,34 +261,134 @@ public enum FuzzyMatcher {
             return 900 + Int(ratio * 150)
         }
 
-        // 3. Fast word-boundary check (e.g. "california" inside "hotel california")
+        // 3. Word-boundary Prefix Check (e.g. "california" inside "hotel california")
         let spaceQuery = " " + cleanQuery
         if cleanText.contains(spaceQuery) {
             let ratio = Double(queryCount) / Double(max(textCount, 1))
-            return 750 + Int(ratio * 120)
+            return 800 + Int(ratio * 120)
         }
 
-        // 4. Exact Substring Containment (550 - 700)
+        // 4. Space-collapsed match (e.g. "daftpunk" matches "daft punk", "taylorswift" matches "taylor swift")
+        let collapsedText = collapsedString(cleanText)
+        let collapsedQuery = collapsedString(cleanQuery)
+        if collapsedText == collapsedQuery {
+            return 1150
+        }
+        if collapsedText.hasPrefix(collapsedQuery) {
+            let ratio = Double(collapsedQuery.count) / Double(max(collapsedText.count, 1))
+            return 880 + Int(ratio * 100)
+        }
+        if collapsedQuery.count >= 3 && collapsedText.contains(collapsedQuery) {
+            let ratio = Double(collapsedQuery.count) / Double(max(collapsedText.count, 1))
+            return 720 + Int(ratio * 80)
+        }
+
+        // 5. Exact Substring Containment (580 - 700)
         if cleanText.contains(cleanQuery) {
             let ratio = Double(queryCount) / Double(max(textCount, 1))
-            return 550 + Int(ratio * 150)
+            return 580 + Int(ratio * 120)
         }
 
-        // 5. Multi-word Query: All query tokens present in text (400 - 520)
+        // 6. Multi-word Query: All query tokens present in text or match with typo
         if cleanQuery.contains(" ") {
             let queryTokens = cleanQuery.split(separator: " ", omittingEmptySubsequences: true)
+            let textTokens = cleanText.split(separator: " ", omittingEmptySubsequences: true)
             if queryTokens.count > 1 {
-                let allMatch = queryTokens.allSatisfy { qToken in
-                    cleanText.hasPrefix(qToken) || cleanText.contains(" " + qToken) || cleanText.contains(qToken)
+                var allMatch = true
+                var totalTokenScore = 0
+
+                for qToken in queryTokens {
+                    let qStr = String(qToken)
+                    let qLen = qStr.count
+                    var tokenMatched = false
+
+                    for tToken in textTokens {
+                        let tStr = String(tToken)
+                        if tStr == qStr {
+                            tokenMatched = true
+                            totalTokenScore += 200
+                            break
+                        } else if tStr.hasPrefix(qStr) {
+                            tokenMatched = true
+                            totalTokenScore += 150
+                            break
+                        } else if tStr.contains(qStr) {
+                            tokenMatched = true
+                            totalTokenScore += 100
+                            break
+                        } else if qLen >= 4 && abs(tStr.count - qLen) <= 1 {
+                            let d = fastEditDistance(tStr, qStr, maxAllowed: 1)
+                            if d <= 1 {
+                                tokenMatched = true
+                                totalTokenScore += 120
+                                break
+                            }
+                        }
+                    }
+
+                    if !tokenMatched {
+                        allMatch = false
+                        break
+                    }
                 }
+
                 if allMatch {
                     let ratio = Double(queryCount) / Double(max(textCount, 1))
-                    return 420 + Int(ratio * 120)
+                    return 450 + min(totalTokenScore, 200) + Int(ratio * 100)
                 }
             }
         }
 
-        // 6. Subsequence / Acronym match (250 - 380)
+        // 7. Typo / Misspelling tolerance (Single Token or Whole Phrase)
+        if queryCount >= 4 {
+            // A. Word-level typo in text tokens:
+            let textTokens = cleanText.split(separator: " ", omittingEmptySubsequences: true)
+            for tToken in textTokens {
+                let tStr = String(tToken)
+                let tCount = tStr.count
+                if abs(tCount - queryCount) <= 1 {
+                    let d = fastEditDistance(tStr, cleanQuery, maxAllowed: 1)
+                    if d <= 1 {
+                        let ratio = Double(queryCount) / Double(max(tCount, 1))
+                        return 680 + Int(ratio * 70)
+                    }
+                } else if queryCount >= 7 && abs(tCount - queryCount) <= 2 {
+                    let d = fastEditDistance(tStr, cleanQuery, maxAllowed: 2)
+                    if d <= 2 {
+                        let ratio = Double(queryCount) / Double(max(tCount, 1))
+                        return 560 + Int(ratio * 60)
+                    }
+                }
+            }
+
+            // B. Whole-phrase typo:
+            if abs(textCount - queryCount) <= 1 {
+                let d = fastEditDistance(cleanText, cleanQuery, maxAllowed: 1)
+                if d <= 1 {
+                    return 700
+                }
+            } else if queryCount >= 7 && abs(textCount - queryCount) <= 2 {
+                let d = fastEditDistance(cleanText, cleanQuery, maxAllowed: 2)
+                if d <= 2 {
+                    return 580
+                }
+            }
+
+            // C. Collapsed whole-phrase typo:
+            if abs(collapsedText.count - collapsedQuery.count) <= 1 {
+                let d = fastEditDistance(collapsedText, collapsedQuery, maxAllowed: 1)
+                if d <= 1 {
+                    return 690
+                }
+            } else if collapsedQuery.count >= 7 && abs(collapsedText.count - collapsedQuery.count) <= 2 {
+                let d = fastEditDistance(collapsedText, collapsedQuery, maxAllowed: 2)
+                if d <= 2 {
+                    return 570
+                }
+            }
+        }
+
+        // 8. Subsequence / Acronym match (250 - 380)
         if queryCount >= 2 && queryCount <= textCount {
             if isSubsequence(query: cleanQuery, in: cleanText) {
                 let ratio = Double(queryCount) / Double(max(textCount, 1))

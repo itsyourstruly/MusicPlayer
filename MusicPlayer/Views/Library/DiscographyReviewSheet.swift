@@ -577,12 +577,7 @@ public struct DiscographyReviewSheet: View {
                     HapticFeedback.selectionChanged()
                     setAction(albumId: item.id, trackId: track.id, action: .moveToAlternates(reason: "Designated alternate cut"))
                 }) {
-                    HStack {
-                        Text("Move to Alternates")
-                        if currentAction.isMoveToAlternates {
-                            Image(systemName: "checkmark")
-                        }
-                    }
+                    Text(currentAction.isMoveToAlternates ? "MOVE TO ALTERNATES (SELECTED)" : "MOVE TO ALTERNATES")
                 }
 
                 if !otherAlbums.isEmpty {
@@ -603,12 +598,7 @@ public struct DiscographyReviewSheet: View {
                                     reason: "Manual move to \"\(targetAlbum.title)\""
                                 ))
                             }) {
-                                HStack {
-                                    Text(targetAlbum.title)
-                                    if currentAction.targetAlbumTitle == targetAlbum.title {
-                                        Image(systemName: "checkmark")
-                                    }
-                                }
+                                Text(currentAction.targetAlbumTitle == targetAlbum.title ? "\(targetAlbum.title.uppercased()) (SELECTED)" : targetAlbum.title.uppercased())
                             }
                         }
                     }
@@ -618,12 +608,7 @@ public struct DiscographyReviewSheet: View {
                     HapticFeedback.selectionChanged()
                     setAction(albumId: item.id, trackId: track.id, action: .keepInMain(reason: "User kept in tracklist"))
                 }) {
-                    HStack {
-                        Text("Keep in Main Tracklist")
-                        if currentAction.isKeepInMain {
-                            Image(systemName: "checkmark")
-                        }
-                    }
+                    Text(currentAction.isKeepInMain ? "KEEP IN MAIN TRACKLIST (SELECTED)" : "KEEP IN MAIN TRACKLIST")
                 }
             } label: {
                 HStack(spacing: 4) {

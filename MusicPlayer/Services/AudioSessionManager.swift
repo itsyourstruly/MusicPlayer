@@ -114,11 +114,31 @@ public final class AudioSessionManager: @unchecked Sendable {
         AppLogger.audio.warning("AVAudioSession media services were reset.")
     }
     
+    private var lastPausedTimestamp: Date?
+
+    public func markPaused() {
+        lock.withLock {
+            if lastPausedTimestamp == nil {
+                lastPausedTimestamp = Date()
+            }
+        }
+    }
+
+    public func markPlaying() {
+        lock.withLock {
+            lastPausedTimestamp = nil
+        }
+    }
+
     /// Deactivates the audio session when playback has completely stopped.
+    /// Never deactivates while a queue is loaded and paused for less than a few minutes.
     public func deactivateSession() {
         #if os(iOS)
         let wasActive = lock.withLock { () -> Bool in
             guard isSessionActive else { return false }
+            if let paused = lastPausedTimestamp, Date().timeIntervalSince(paused) < 300 {
+                return false
+            }
             isSessionActive = false
             return true
         }

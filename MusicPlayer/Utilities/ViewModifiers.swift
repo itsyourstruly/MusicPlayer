@@ -148,11 +148,7 @@ public struct AlbumContextMenuModifier: ViewModifier {
                     HapticFeedback.notificationSuccess()
                     libraryStore.toggleCollaborativeAlbum(album)
                 }) {
-                    if libraryStore.isCollaborativeAlbum(album) {
-                        Label("MAKE COLLABORATIVE ALBUM", systemImage: "checkmark")
-                    } else {
-                        Text("MAKE COLLABORATIVE ALBUM")
-                    }
+                    Text(libraryStore.isCollaborativeAlbum(album) ? "REVERT COLLABORATIVE ALBUM" : "MAKE COLLABORATIVE ALBUM")
                 }
 
                 Button(action: {

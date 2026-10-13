@@ -145,19 +145,19 @@ public struct HomeView: View {
                                         playerService.play(track: first, inQueue: tracks)
                                     }
                                 }) {
-                                    Label("PLAY ALBUM", systemImage: "play.fill")
+                                    Text("PLAY ALBUM")
                                 }
                                 Button(action: {
                                     let tracks = album.tracks
                                     playerService.playNext(tracks: tracks)
                                 }) {
-                                    Label("PLAY NEXT", systemImage: "text.line.first.and.arrowtriangle.forward")
+                                    Text("PLAY NEXT")
                                 }
                                 Button(action: {
                                     let tracks = album.tracks
                                     playerService.appendToQueue(tracks: tracks)
                                 }) {
-                                    Label("ADD TO QUEUE", systemImage: "text.line.last.and.arrowtriangle.forward")
+                                    Text("ADD TO QUEUE")
                                 }
                             }
                         }
@@ -200,7 +200,7 @@ public struct HomeView: View {
             return libraryStore.tracks.filter { artistTrackIDs.contains($0.id) || $0.artist.localizedCaseInsensitiveContains(name) }
         // Display title of the song
         case .album(let title, let artist):
-            return libraryStore.findAlbum(title: title, artist: artist)?.tracks ?? []
+            return libraryStore.findAlbum(title: title, artist: artist)?.tracks ?? libraryStore.tracks.filter { $0.album.localizedCaseInsensitiveCompare(title) == .orderedSame }
         // Unique track identifier
         case .playlist(let id, _):
             return libraryStore.tracks(forPlaylistID: id)
@@ -227,9 +227,9 @@ public struct HomeView: View {
         case .all:
             count = libraryStore.tracks.count
         case .artist(let name):
-            count = libraryStore.findArtist(name: name)?.tracks.count ?? 0
+            count = libraryStore.findArtist(name: name)?.tracks.count ?? libraryStore.tracks.filter { $0.artist.localizedCaseInsensitiveContains(name) }.count
         case .album(let title, let artist):
-            count = libraryStore.findAlbum(title: title, artist: artist)?.tracks.count ?? 0
+            count = libraryStore.findAlbum(title: title, artist: artist)?.tracks.count ?? libraryStore.tracks.filter { $0.album.localizedCaseInsensitiveCompare(title) == .orderedSame }.count
         case .playlist(let id, _):
             count = libraryStore.playlists.first(where: { $0.id == id })?.trackIDs.count ?? 0
         }

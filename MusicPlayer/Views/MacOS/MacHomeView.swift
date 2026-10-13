@@ -346,17 +346,17 @@ public struct MacHomeView: View {
                                         playerService.play(track: first, inQueue: tracks)
                                     }
                                 }) {
-                                    Label("Play Album", systemImage: "play.fill")
+                                    Text("PLAY ALBUM")
                                 }
                                 Button(action: {
                                     playerService.playNext(tracks: album.tracks)
                                 }) {
-                                    Label("Play Next", systemImage: "text.line.first.and.arrowtriangle.forward")
+                                    Text("PLAY NEXT")
                                 }
                                 Button(action: {
                                     playerService.appendToQueue(tracks: album.tracks)
                                 }) {
-                                    Label("Add to Queue", systemImage: "text.line.last.and.arrowtriangle.forward")
+                                    Text("ADD TO QUEUE")
                                 }
                             }
                         }

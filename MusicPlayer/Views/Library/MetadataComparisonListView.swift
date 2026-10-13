@@ -578,12 +578,7 @@ public struct SwipeableMetadataTrackCard: View {
                     HapticFeedback.selectionChanged()
                     onSelectAPI?(source)
                 }) {
-                    HStack {
-                        Text(source.displayName)
-                        if currentSource == source {
-                            Image(systemName: "checkmark")
-                        }
-                    }
+                    Text(currentSource == source ? "\(source.displayName) (SELECTED)" : source.displayName)
                 }
             }
         } label: {

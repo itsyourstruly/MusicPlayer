@@ -260,7 +260,7 @@ public struct FolderSettingsView: View {
                         serverToUnlink = server
                         showingUnlinkServerAlert = true
                     } label: {
-                        Label("REMOVE SERVER", systemImage: "trash")
+                        Text("REMOVE SERVER")
                     }
                 } label: {
                     Image(systemName: "gearshape.fill")
@@ -349,26 +349,26 @@ public struct FolderSettingsView: View {
                 .buttonStyle(.plain)
                 .disabled(libraryStore.isScanning)
                 .contextMenu {
-                    Button("Option Info") {
+                    Button {
                         activeDetail = SettingOptionCatalog.rescanFolder
+                    } label: {
+                        Text("OPTION INFO")
                     }
                 }
 
                 // Gear Icon with clean context menu
                 Menu {
-                    Button("CHANGE FOLDER") {
+                    Button(action: {
                         folderToChange = folder
                         showingFolderPicker = true
+                    }) {
+                        Text("CHANGE FOLDER")
                     }
 
                     Button {
                         libraryStore.toggleTagEnrichmentExclusion(for: folder.id)
                     } label: {
-                        if folder.isExcludedFromTagEnrichment {
-                            Label("EXCLUDE FROM TAG ENRICHMENT", systemImage: "checkmark")
-                        } else {
-                            Text("EXCLUDE FROM TAG ENRICHMENT")
-                        }
+                        Text(folder.isExcludedFromTagEnrichment ? "EXCLUDE FROM TAG ENRICHMENT (SELECTED)" : "EXCLUDE FROM TAG ENRICHMENT")
                     }
 
                     Divider()
@@ -439,8 +439,10 @@ public struct FolderSettingsView: View {
         }
         .buttonStyle(.plain)
         .contextMenu {
-            Button("Option Info") {
+            Button {
                 activeDetail = SettingOptionCatalog.findTrackTags
+            } label: {
+                Text("OPTION INFO")
             }
         }
     }

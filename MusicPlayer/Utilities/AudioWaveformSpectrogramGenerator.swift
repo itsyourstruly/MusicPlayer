@@ -41,7 +41,8 @@ public actor AudioWaveformSpectrogramGenerator {
             }
         }
 
-        guard FileManager.default.fileExists(atPath: effectiveURL.path) else { return nil }
+        guard FileManager.default.fileExists(atPath: effectiveURL.path),
+              CloudFileAvailability.isLocal(url: effectiveURL) else { return nil }
 
         let asset = AVURLAsset(url: effectiveURL, options: [AVURLAssetPreferPreciseDurationAndTimingKey: false])
         guard let track = try? await asset.loadTracks(withMediaType: .audio).first else {

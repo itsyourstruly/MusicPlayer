@@ -254,25 +254,25 @@ public actor ArtworkCacheService {
         } else {
             // MARK: - Fast Lightweight Thumbnail (Lists, Grids, MiniPlayer)
             if fileManager.fileExists(atPath: thumbFileURL.path),
-               let image = decodeThumbnailImage(from: thumbFileURL, maxDimension: maxDimension) {
+               let image = await decodeThumbnailImage(from: thumbFileURL, maxDimension: maxDimension) {
                 cacheDecoded(image: image, targetKey: targetKey)
                 return image
             }
 
             if fileManager.fileExists(atPath: origFileURL.path),
-               let image = decodeThumbnailImage(from: origFileURL, maxDimension: maxDimension) {
+               let image = await decodeThumbnailImage(from: origFileURL, maxDimension: maxDimension) {
                 cacheDecoded(image: image, targetKey: targetKey)
                 return image
             }
 
             if fileManager.fileExists(atPath: fullFileURL.path),
-               let image = decodeThumbnailImage(from: fullFileURL, maxDimension: maxDimension) {
+               let image = await decodeThumbnailImage(from: fullFileURL, maxDimension: maxDimension) {
                 cacheDecoded(image: image, targetKey: targetKey)
                 return image
             }
 
             if let rawData = rawDataCache.object(forKey: nsKey) as Data?,
-               let image = decodeThumbnailImage(from: rawData, maxDimension: maxDimension) {
+               let image = await decodeThumbnailImage(from: rawData, maxDimension: maxDimension) {
                 cacheDecoded(image: image, targetKey: targetKey)
                 return image
             }
@@ -281,7 +281,7 @@ public actor ArtworkCacheService {
                let thumbData = await loader(key, false),
                !thumbData.isEmpty {
                 saveArtwork(data: thumbData, key: key)
-                if let image = decodeThumbnailImage(from: thumbData, maxDimension: maxDimension) {
+                if let image = await decodeThumbnailImage(from: thumbData, maxDimension: maxDimension) {
                     cacheDecoded(image: image, targetKey: targetKey)
                     return image
                 }
@@ -292,14 +292,10 @@ public actor ArtworkCacheService {
     }
 
     /// Decodes a downsampled thumbnail from disk URL using hardware-accelerated ImageIO.
-    private func decodeThumbnailImage(from url: URL, maxDimension: CGFloat) -> PlatformImage? {
+    private func decodeThumbnailImage(from url: URL, maxDimension: CGFloat) async -> PlatformImage? {
         let imageSourceOptions = [kCGImageSourceShouldCache: false] as CFDictionary
         guard let imageSource = CGImageSourceCreateWithURL(url as CFURL, imageSourceOptions) else {
-            #if canImport(UIKit)
-            return UIImage(contentsOfFile: url.path)
-            #elseif canImport(AppKit)
-            return NSImage(contentsOf: url)
-            #endif
+            return nil
         }
 
         let maxPx = max(32, Int(maxDimension))
@@ -310,26 +306,23 @@ public actor ArtworkCacheService {
             kCGImageSourceThumbnailMaxPixelSize: maxPx
         ]
 
-        if let thumbCGImage = CGImageSourceCreateThumbnailAtIndex(imageSource, 0, decodeOptions as CFDictionary) {
-            #if canImport(UIKit)
-            return UIImage(cgImage: thumbCGImage)
-            #elseif canImport(AppKit)
-            return NSImage(cgImage: thumbCGImage, size: NSSize(width: thumbCGImage.width, height: thumbCGImage.height))
-            #endif
+        guard let thumbCGImage = CGImageSourceCreateThumbnailAtIndex(imageSource, 0, decodeOptions as CFDictionary) else {
+            return nil
         }
 
-        return decodeNativeImage(from: url)
+        #if canImport(UIKit)
+        let uiImage = UIImage(cgImage: thumbCGImage)
+        return await uiImage.byPreparingForDisplay() ?? uiImage
+        #elseif canImport(AppKit)
+        return NSImage(cgImage: thumbCGImage, size: NSSize(width: thumbCGImage.width, height: thumbCGImage.height))
+        #endif
     }
 
     /// Decodes a downsampled thumbnail from raw data using hardware-accelerated ImageIO.
-    private func decodeThumbnailImage(from data: Data, maxDimension: CGFloat) -> PlatformImage? {
+    private func decodeThumbnailImage(from data: Data, maxDimension: CGFloat) async -> PlatformImage? {
         let imageSourceOptions = [kCGImageSourceShouldCache: false] as CFDictionary
         guard let imageSource = CGImageSourceCreateWithData(data as CFData, imageSourceOptions) else {
-            #if canImport(UIKit)
-            return UIImage(data: data)
-            #elseif canImport(AppKit)
-            return NSImage(data: data)
-            #endif
+            return nil
         }
 
         let maxPx = max(32, Int(maxDimension))
@@ -340,15 +333,16 @@ public actor ArtworkCacheService {
             kCGImageSourceThumbnailMaxPixelSize: maxPx
         ]
 
-        if let thumbCGImage = CGImageSourceCreateThumbnailAtIndex(imageSource, 0, decodeOptions as CFDictionary) {
-            #if canImport(UIKit)
-            return UIImage(cgImage: thumbCGImage)
-            #elseif canImport(AppKit)
-            return NSImage(cgImage: thumbCGImage, size: NSSize(width: thumbCGImage.width, height: thumbCGImage.height))
-            #endif
+        guard let thumbCGImage = CGImageSourceCreateThumbnailAtIndex(imageSource, 0, decodeOptions as CFDictionary) else {
+            return nil
         }
 
-        return decodeNativeImage(from: data)
+        #if canImport(UIKit)
+        let uiImage = UIImage(cgImage: thumbCGImage)
+        return await uiImage.byPreparingForDisplay() ?? uiImage
+        #elseif canImport(AppKit)
+        return NSImage(cgImage: thumbCGImage, size: NSSize(width: thumbCGImage.width, height: thumbCGImage.height))
+        #endif
     }
 
     /// Decodes an image from disk URL preserving its full native quality, resolution, and color profile.

@@ -115,7 +115,7 @@ public struct PinnedSection: View {
                         libraryStore.togglePinPlaylist(id: playlist.id)
                     }
                 }) {
-                    Label("UNPIN", systemImage: "pin.slash")
+                    Text("UNPIN")
                 }
 
                 Divider()
@@ -127,7 +127,7 @@ public struct PinnedSection: View {
                         playerService.play(track: first, inQueue: tracks)
                     }
                 }) {
-                    Label("PLAY", systemImage: "play.fill")
+                    Text("PLAY")
                 }
 
                 Button(action: {
@@ -135,7 +135,7 @@ public struct PinnedSection: View {
                     let tracks = libraryStore.tracks(for: playlist)
                     playerService.playNext(tracks: tracks)
                 }) {
-                    Label("PLAY NEXT", systemImage: "text.line.first.and.arrowtriangle.forward")
+                    Text("PLAY NEXT")
                 }
 
                 Button(action: {
@@ -143,7 +143,7 @@ public struct PinnedSection: View {
                     let tracks = libraryStore.tracks(for: playlist)
                     playerService.appendToQueue(tracks: tracks)
                 }) {
-                    Label("ADD TO QUEUE", systemImage: "text.line.last.and.arrowtriangle.forward")
+                    Text("ADD TO QUEUE")
                 }
             }
 

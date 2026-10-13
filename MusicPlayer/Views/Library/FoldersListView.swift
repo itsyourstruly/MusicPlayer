@@ -194,7 +194,7 @@ public struct FoldersListView: View {
                     }
                 }
             } label: {
-                Label("RESCAN SOURCE", systemImage: "arrow.clockwise")
+                Text("RESCAN SOURCE")
             }
             .disabled(libraryStore.isScanning)
 
@@ -202,7 +202,7 @@ public struct FoldersListView: View {
                 HapticFeedback.selectionChanged()
                 libraryStore.toggleFolderEnabled(source.id)
             } label: {
-                Label(isEnabled ? "DISABLE IN LIBRARY" : "ENABLE IN LIBRARY", systemImage: isEnabled ? "eye.slash" : "eye")
+                Text(isEnabled ? "DISABLE IN LIBRARY" : "ENABLE IN LIBRARY")
             }
         }
     }

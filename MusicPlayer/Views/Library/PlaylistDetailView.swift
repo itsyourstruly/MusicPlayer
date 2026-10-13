@@ -169,13 +169,14 @@ public struct PlaylistDetailView: View {
 
                             Spacer()
 
-                            let jellyfinTracks = playlistTracks.filter { $0.isJellyfinItem || $0.metadataSource == .server }
-                            let isJellyfinPlaylist = !jellyfinTracks.isEmpty
-                            let downloadedCount = jellyfinTracks.filter { JellyfinDownloadManager.shared.isDownloaded(trackId: $0.id) }.count
-                            let isAllDownloaded = isJellyfinPlaylist && downloadedCount == jellyfinTracks.count
-                            let isAnyDownloading = jellyfinTracks.contains { JellyfinDownloadManager.shared.downloadStates[$0.id]?.isDownloading == true }
+                            let summary = JellyfinDownloadManager.shared.playlistSummary(for: playlistTracks)
+                            let isJellyfinPlaylist = summary.total > 0
+                            let isAllDownloaded = summary.isAllDownloaded
+                            let isAnyDownloading = summary.isAnyDownloading
 
                             if isJellyfinPlaylist {
+                                let jellyfinTracks = playlistTracks.filter { $0.isJellyfinItem || $0.metadataSource == .server }
+                                let downloadedCount = summary.downloaded
                                 Button {
                                     HapticFeedback.selectionChanged()
                                     if isAllDownloaded {
@@ -267,7 +268,7 @@ public struct PlaylistDetailView: View {
                                                 selectedSortCriteria = .custom
                                             }
                                         }) {
-                                            Label("Custom", systemImage: selectedSortCriteria == .custom ? "checkmark" : "slider.horizontal.3")
+                                            Text(selectedSortCriteria == .custom ? "CUSTOM (SELECTED)" : "CUSTOM")
                                         }
 
                                         Divider()
@@ -278,7 +279,7 @@ public struct PlaylistDetailView: View {
                                                 selectedSortCriteria = .name
                                             }
                                         }) {
-                                            Label("Name", systemImage: selectedSortCriteria == .name ? "checkmark" : "textformat")
+                                            Text(selectedSortCriteria == .name ? "NAME (SELECTED)" : "NAME")
                                         }
                                         Button(action: {
                                             HapticFeedback.selectionChanged()
@@ -286,7 +287,7 @@ public struct PlaylistDetailView: View {
                                                 selectedSortCriteria = .artist
                                             }
                                         }) {
-                                            Label("Artist", systemImage: selectedSortCriteria == .artist ? "checkmark" : "person.fill")
+                                            Text(selectedSortCriteria == .artist ? "ARTIST (SELECTED)" : "ARTIST")
                                         }
                                         Button(action: {
                                             HapticFeedback.selectionChanged()
@@ -294,7 +295,7 @@ public struct PlaylistDetailView: View {
                                                 selectedSortCriteria = .album
                                             }
                                         }) {
-                                            Label("Album", systemImage: selectedSortCriteria == .album ? "checkmark" : "opticaldisc")
+                                            Text(selectedSortCriteria == .album ? "ALBUM (SELECTED)" : "ALBUM")
                                         }
                                         Button(action: {
                                             HapticFeedback.selectionChanged()
@@ -302,7 +303,7 @@ public struct PlaylistDetailView: View {
                                                 selectedSortCriteria = .favorite
                                             }
                                         }) {
-                                            Label("Favorite (Most Plays)", systemImage: selectedSortCriteria == .favorite ? "checkmark" : "star.fill")
+                                            Text(selectedSortCriteria == .favorite ? "FAVORITE (MOST PLAYS) (SELECTED)" : "FAVORITE (MOST PLAYS)")
                                         }
                                         Button(action: {
                                             HapticFeedback.selectionChanged()
@@ -310,7 +311,7 @@ public struct PlaylistDetailView: View {
                                                 selectedSortCriteria = .newest
                                             }
                                         }) {
-                                            Label("Newest", systemImage: selectedSortCriteria == .newest ? "checkmark" : "calendar.badge.plus")
+                                            Text(selectedSortCriteria == .newest ? "NEWEST (SELECTED)" : "NEWEST")
                                         }
                                         Button(action: {
                                             HapticFeedback.selectionChanged()
@@ -318,7 +319,7 @@ public struct PlaylistDetailView: View {
                                                 selectedSortCriteria = .oldest
                                             }
                                         }) {
-                                            Label("Oldest", systemImage: selectedSortCriteria == .oldest ? "checkmark" : "calendar.badge.minus")
+                                            Text(selectedSortCriteria == .oldest ? "OLDEST (SELECTED)" : "OLDEST")
                                         }
                                     } label: {
                                         HStack(spacing: 6) {

@@ -203,8 +203,10 @@ public struct GlobalSearchView: View {
     @State private var selectedTrackForInfo: Track? = nil
     @State private var selectedTrackForPlaylist: Track? = nil
 
-    // Debounced async search task
-    @State private var searchTask: Task<Void, Never>? = nil
+    // Serialized asynchronous search pipeline state
+    @State private var activeSearchTask: Task<Void, Never>? = nil
+    @State private var inFlightQuery: String? = nil
+    @State private var pendingSearchQuery: String? = nil
 
     // Online Search Mode State
     @State private var isOnlineMode: Bool = false
@@ -312,91 +314,57 @@ public struct GlobalSearchView: View {
             playlistPickerSheet(for: track)
         }
         .task {
-            // Proactively warm SearchEngine index in the background if not yet populated
-            if await !SearchEngine.shared.isAlreadyIndexed && !libraryStore.tracks.isEmpty {
-                let t = libraryStore.tracks
-                let alb = libraryStore.albums
-                let art = libraryStore.artists
-                let pl = libraryStore.playlists
-                let j = libraryStore.settings.joinedArtists
-                Task.detached(priority: .utility) {
-                    await SearchEngine.shared.updateIndex(
-                        tracks: t,
-                        albums: alb,
-                        artists: art,
-                        playlists: pl,
-                        joinedArtists: j
-                    )
-                }
-            }
-            // Allow the push transition to completely settle (380ms) so the search controller is safely mounted
-            try? await Task.sleep(nanoseconds: 380_000_000)
-            guard !Task.isCancelled else { return }
-            if searchQuery.isEmpty {
+            let initial = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !initial.isEmpty {
+                dispatchSearch(for: initial)
+            } else {
                 isSearchPresented = true
             }
         }
-        .onDisappear {
-            previewManager.stop()
-            isSearchPresented = false
-            #if os(iOS)
-            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
-            #endif
-        }
-        .task(id: "\(searchQuery)_\(isOnlineMode)_\(libraryStore.tracks.count)") {
+        .task(id: searchQuery) {
             let clean = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !clean.isEmpty else {
-                if self.results.hasResults || self.isSearching {
+                activeSearchTask?.cancel()
+                activeSearchTask = nil
+                inFlightQuery = nil
+                pendingSearchQuery = nil
+                withAnimation(.easeInOut(duration: 0.15)) {
                     self.results = .empty
                     self.expandedArtistIDs = []
                     self.expandedAlbumIDs = []
                     self.isSearching = false
+                    self.onlineResults = OnlineSearchResults()
+                    self.isOnlineSearching = false
                 }
                 return
             }
 
             if isOnlineMode {
-                triggerOnlineSearch(query: searchQuery, immediate: false)
+                dispatchOnlineSearch(for: clean)
                 return
             }
 
-            do {
-                // Responsive debounce (25ms) allowing instant fluid typing
-                try await Task.sleep(nanoseconds: 25_000_000)
-                guard !Task.isCancelled else { return }
+            // 60-80 ms debounce
+            try? await Task.sleep(nanoseconds: 70_000_000)
+            guard !Task.isCancelled else { return }
 
-                self.isSearching = true
-
-                // Ultra-fast in-memory search pass (runs in ~2-5ms with prioritized artists)
-                let searchResults = await SearchEngine.shared.search(
-                    query: clean,
-                    tracksFallback: libraryStore.tracks,
-                    albumsFallback: libraryStore.albums,
-                    artistsFallback: libraryStore.artists,
-                    playlistsFallback: libraryStore.playlists,
-                    joinedArtistsFallback: libraryStore.settings.joinedArtists
-                )
-
-                guard !Task.isCancelled, self.searchQuery.trimmingCharacters(in: .whitespacesAndNewlines) == clean else { return }
-
-                let topArtistID = searchResults.artistTreeNodes.first?.id
-                let topAlbumID = searchResults.artistTreeNodes.first?.albums.first?.id ?? searchResults.directMatchedAlbums.first?.album.id
-
-                var newExpandedArtists: Set<String> = []
-                var newExpandedAlbums: Set<String> = []
-                if let topArtistID { newExpandedArtists.insert(topArtistID) }
-                if let topAlbumID { newExpandedAlbums.insert(topAlbumID) }
-
-                self.results = searchResults
-                if self.expandedArtistIDs.isEmpty {
-                    self.expandedArtistIDs = newExpandedArtists
-                }
-                if self.expandedAlbumIDs.isEmpty {
-                    self.expandedAlbumIDs = newExpandedAlbums
-                }
-                self.isSearching = false
-            } catch {
-                // Preempted by next keystroke: cancelled cleanly with 0 CPU overhead
+            startSearchRunner(query: clean)
+        }
+        .onDisappear {
+            previewManager.stop()
+            isSearchPresented = false
+            activeSearchTask?.cancel()
+            activeSearchTask = nil
+            inFlightQuery = nil
+            pendingSearchQuery = nil
+            #if os(iOS)
+            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+            #endif
+        }
+        .onChange(of: isOnlineMode) { _, _ in
+            let q = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !q.isEmpty {
+                dispatchSearch(for: q)
             }
         }
     }
@@ -411,16 +379,6 @@ public struct GlobalSearchView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 16)
                     .padding(.vertical, 12)
-                    .padding(.bottom, 140)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .scrollDismissesKeyboard(.interactively)
-            .scrollBounceBehavior(.always)
-            .ignoresSafeArea(.keyboard, edges: .bottom)
-        } else if isSearching && results.artistTreeNodes.isEmpty && results.playlists.isEmpty {
-            ScrollView(.vertical, showsIndicators: false) {
-                searchingIndicatorView
-                    .frame(maxWidth: .infinity, minHeight: 350, alignment: .top)
                     .padding(.bottom, 140)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -483,6 +441,16 @@ public struct GlobalSearchView: View {
             )
             .equatable()
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if isSearching {
+            ScrollView(.vertical, showsIndicators: false) {
+                searchingIndicatorView
+                    .frame(maxWidth: .infinity, minHeight: 350, alignment: .top)
+                    .padding(.bottom, 140)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .scrollDismissesKeyboard(.interactively)
+            .scrollBounceBehavior(.always)
+            .ignoresSafeArea(.keyboard, edges: .bottom)
         } else {
             ScrollView(.vertical, showsIndicators: false) {
                 emptyResultsView
@@ -885,36 +853,152 @@ public struct GlobalSearchView: View {
         }
     }
 
-    // MARK: - Online Search Execution
+    // MARK: - Serialized Search Pipeline
 
-    private func triggerOnlineSearch(query: String, immediate: Bool) {
-        searchTask?.cancel()
-        let clean = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard clean.count >= 2 else {
-            withAnimation(.easeInOut(duration: 0.18)) {
+    private func dispatchSearch(for rawQuery: String) {
+        let clean = rawQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !clean.isEmpty else {
+            // Cancel active in-flight task and reset pending queries
+            activeSearchTask?.cancel()
+            activeSearchTask = nil
+            inFlightQuery = nil
+            pendingSearchQuery = nil
+            withAnimation(.easeInOut(duration: 0.15)) {
+                self.results = .empty
+                self.expandedArtistIDs = []
+                self.expandedAlbumIDs = []
+                self.isSearching = false
                 self.onlineResults = OnlineSearchResults()
                 self.isOnlineSearching = false
             }
             return
         }
 
-        self.isOnlineSearching = true
-        searchTask = Task.detached(priority: .userInitiated) {
-            if !immediate {
-                try? await Task.sleep(nanoseconds: 120_000_000)
-            }
-            guard !Task.isCancelled else { return }
+        if isOnlineMode {
+            dispatchOnlineSearch(for: clean)
+            return
+        }
 
-            let results = await OnlineDiscoveryService.shared.search(query: clean)
-            guard !Task.isCancelled else { return }
+        // Immediately cancel any in-flight search task so outdated queries abort cooperatively
+        activeSearchTask?.cancel()
+        startSearchRunner(query: clean)
+    }
 
-            await MainActor.run {
-                guard self.searchQuery.trimmingCharacters(in: .whitespacesAndNewlines) == clean else { return }
-                withAnimation(.easeInOut(duration: 0.20)) {
-                    self.onlineResults = results
-                    self.isOnlineSearching = false
+    private func startSearchRunner(query: String) {
+        activeSearchTask?.cancel()
+        inFlightQuery = query
+        pendingSearchQuery = nil
+        isSearching = true
+
+        activeSearchTask = Task { @MainActor in
+            defer {
+                if !Task.isCancelled {
+                    self.activeSearchTask = nil
+                    self.inFlightQuery = nil
+                    self.pendingSearchQuery = nil
+                    self.isSearching = false
                 }
             }
+            var currentQuery = query
+
+            while !Task.isCancelled {
+                self.inFlightQuery = currentQuery
+
+                // Ultra-fast in-memory search pass (runs in ~0.5ms across 30k+ tracks)
+                let searchResults = await SearchEngine.shared.search(
+                    query: currentQuery,
+                    maxTrackResults: 80,
+                    maxAlbumResults: 40,
+                    maxArtistResults: 40
+                )
+
+                guard !Task.isCancelled else { break }
+
+                applySearchResults(searchResults, for: currentQuery)
+
+                // Check if user continued typing while search was running
+                let latestTrimmed = self.searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+                if let pending = self.pendingSearchQuery, pending != currentQuery, !pending.isEmpty {
+                    self.pendingSearchQuery = nil
+                    currentQuery = pending
+                } else if latestTrimmed != currentQuery && !latestTrimmed.isEmpty {
+                    self.pendingSearchQuery = nil
+                    currentQuery = latestTrimmed
+                } else {
+                    break
+                }
+            }
+        }
+    }
+
+    private func applySearchResults(_ searchResults: GlobalSearchResults, for query: String) {
+        let topArtistID = searchResults.artistTreeNodes.first?.id
+        let topAlbumID = searchResults.artistTreeNodes.first?.albums.first?.id ?? searchResults.directMatchedAlbums.first?.album.id
+
+        var newExpandedArtists: Set<String> = []
+        var newExpandedAlbums: Set<String> = []
+        if let topArtistID { newExpandedArtists.insert(topArtistID) }
+        if let topAlbumID { newExpandedAlbums.insert(topAlbumID) }
+
+        self.results = searchResults
+        self.expandedArtistIDs = newExpandedArtists
+        self.expandedAlbumIDs = newExpandedAlbums
+    }
+
+    private func dispatchOnlineSearch(for clean: String) {
+        guard clean.count >= 2 else {
+            withAnimation(.easeInOut(duration: 0.15)) {
+                self.onlineResults = OnlineSearchResults()
+                self.isOnlineSearching = false
+                self.pendingSearchQuery = nil
+                self.inFlightQuery = nil
+            }
+            return
+        }
+
+        if activeSearchTask != nil && inFlightQuery != nil {
+            pendingSearchQuery = clean
+            return
+        }
+
+        startOnlineSearchRunner(query: clean)
+    }
+
+    private func startOnlineSearchRunner(query: String) {
+        activeSearchTask?.cancel()
+        inFlightQuery = query
+        pendingSearchQuery = nil
+        isOnlineSearching = true
+
+        activeSearchTask = Task { @MainActor in
+            var currentQuery = query
+
+            while !Task.isCancelled {
+                self.inFlightQuery = currentQuery
+
+                let results = await OnlineDiscoveryService.shared.search(query: currentQuery)
+
+                guard !Task.isCancelled else { break }
+
+                withAnimation(.easeInOut(duration: 0.18)) {
+                    self.onlineResults = results
+                }
+
+                let latestTrimmed = self.searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+                if let pending = self.pendingSearchQuery, pending != currentQuery, pending.count >= 2 {
+                    self.pendingSearchQuery = nil
+                    currentQuery = pending
+                } else if latestTrimmed != currentQuery && latestTrimmed.count >= 2 {
+                    self.pendingSearchQuery = nil
+                    currentQuery = latestTrimmed
+                } else {
+                    self.inFlightQuery = nil
+                    self.pendingSearchQuery = nil
+                    self.isOnlineSearching = false
+                    break
+                }
+            }
+            self.activeSearchTask = nil
         }
     }
 }
@@ -1139,7 +1223,9 @@ public struct SearchAlbumTreeNodeRow: View, Equatable {
     public static func == (lhs: SearchAlbumTreeNodeRow, rhs: SearchAlbumTreeNodeRow) -> Bool {
         lhs.albumNode.id == rhs.albumNode.id &&
         lhs.albumNode.relevanceScore == rhs.albumNode.relevanceScore &&
-        lhs.isExpanded == rhs.isExpanded
+        lhs.isExpanded == rhs.isExpanded &&
+        lhs.playerService.currentTrack?.id == rhs.playerService.currentTrack?.id &&
+        lhs.playerService.playbackStatus.isPlaying == rhs.playerService.playbackStatus.isPlaying
     }
 
     public var body: some View {
@@ -1250,7 +1336,9 @@ public struct SearchArtistTreeNodeRow: View, Equatable {
         lhs.artistNode.id == rhs.artistNode.id &&
         lhs.artistNode.relevanceScore == rhs.artistNode.relevanceScore &&
         lhs.isExpanded == rhs.isExpanded &&
-        lhs.expandedAlbumIDs == rhs.expandedAlbumIDs
+        lhs.expandedAlbumIDs == rhs.expandedAlbumIDs &&
+        lhs.playerService.currentTrack?.id == rhs.playerService.currentTrack?.id &&
+        lhs.playerService.playbackStatus.isPlaying == rhs.playerService.playbackStatus.isPlaying
     }
 
     public var body: some View {
@@ -1483,7 +1571,9 @@ public struct LibrarySearchResultsContainer: View, Equatable {
         lhs.expandedArtistIDs == rhs.expandedArtistIDs &&
         lhs.expandedAlbumIDs == rhs.expandedAlbumIDs &&
         lhs.collapseTrigger == rhs.collapseTrigger &&
-        lhs.isPlaylistsCollapsed == rhs.isPlaylistsCollapsed
+        lhs.isPlaylistsCollapsed == rhs.isPlaylistsCollapsed &&
+        lhs.playerService.currentTrack?.id == rhs.playerService.currentTrack?.id &&
+        lhs.playerService.playbackStatus.isPlaying == rhs.playerService.playbackStatus.isPlaying
     }
 
     public var body: some View {
@@ -1498,7 +1588,7 @@ public struct LibrarySearchResultsContainer: View, Equatable {
                 case .albums:
                     filteredAlbumsList
                 case .tracks:
-                    filteredTracksList
+                    tracksCategoryTreeView
                 case nil:
                     if !results.artistTreeNodes.isEmpty {
                         // Tree Nodes (Artist -> Album -> Track)
@@ -1521,7 +1611,7 @@ public struct LibrarySearchResultsContainer: View, Equatable {
                     } else if !results.directMatchedAlbums.isEmpty {
                         filteredAlbumsList
                     } else if !results.directMatchedTracks.isEmpty {
-                        filteredTracksList
+                        tracksCategoryTreeView
                     }
 
                     // Playlists Section (if matched)
@@ -1726,55 +1816,91 @@ public struct LibrarySearchResultsContainer: View, Equatable {
         }
     }
 
-    private var filteredTracksList: some View {
-        let list = results.matchedTracks
-        let allTracks = list.map { $0.track }
-        let currentTrackID = playerService.currentTrack?.id
-        let isCurrentPlaying = playerService.playbackStatus.isPlaying
-        let nextTrackID = playerService.nextTrack?.id
-        let playNextSet = Set(playerService.playNextQueue.map { $0.id })
-        let isTapToPlayNext = libraryStore.settings.tapToPlayNext
-
-        return LazyVStack(alignment: .leading, spacing: 4) {
-            ForEach(Array(list.enumerated()), id: \.element.id) { index, trackNode in
-                let track = trackNode.track
-                TrackRowView(
-                    track: track,
-                    isCurrentTrack: track.id == currentTrackID,
-                    isPlaying: isCurrentPlaying && track.id == currentTrackID,
-                    isNextTrack: track.id == nextTrackID,
-                    isInPlayNext: playNextSet.contains(track.id),
-                    isTapToPlayNextEnabled: isTapToPlayNext,
-                    onPlay: {
-                        libraryStore.recordSearchPlayedTrack(track)
-                        playerService.play(track: track, inQueue: allTracks, startIndex: index)
-                    },
-                    onPlayNext: {
-                        playerService.insertPlayNextFront(track: track)
-                    },
-                    onQueueNext: {
-                        playerService.playNext(track: track)
-                    },
-                    onAddToQueue: {
-                        playerService.appendToQueue(track: track)
-                    },
-                    onAddToPlaylist: {
-                        onSelectTrackForPlaylist(track)
-                    },
-                    onShowInfo: {
-                        onSelectTrackForInfo(track)
-                    },
-                    onSelectArtist: { artistName in
-                        if let artistObj = libraryStore.findArtist(name: artistName) {
-                            onSelectArtist(artistObj)
-                        }
-                    },
-                    onSelectAlbum: {
-                        if let albumObj = libraryStore.findAlbum(title: track.album, artist: track.artist) {
-                            onSelectAlbum(albumObj)
-                        }
-                    }
+    private var tracksCategoryTreeView: some View {
+        var matchingArtistNodes: [SearchTreeArtistNode] = results.artistTreeNodes.compactMap { artistNode in
+            let filteredAlbums = artistNode.albums.compactMap { albumNode -> SearchTreeAlbumNode? in
+                let matched = albumNode.tracks.filter { $0.isDirectlyMatched || $0.relevanceScore > 0 }
+                let effectiveTracks = !matched.isEmpty ? matched : albumNode.tracks
+                guard !effectiveTracks.isEmpty else { return nil }
+                return SearchTreeAlbumNode(
+                    id: albumNode.id,
+                    album: albumNode.album,
+                    tracks: effectiveTracks,
+                    isDirectlyMatched: albumNode.isDirectlyMatched,
+                    relevanceScore: albumNode.relevanceScore,
+                    category: albumNode.category
                 )
+            }
+            guard !filteredAlbums.isEmpty else { return nil }
+            return SearchTreeArtistNode(
+                id: artistNode.id,
+                artist: artistNode.artist,
+                albums: filteredAlbums,
+                isDirectlyMatched: artistNode.isDirectlyMatched,
+                relevanceScore: artistNode.relevanceScore
+            )
+        }
+
+        if matchingArtistNodes.isEmpty && !results.directMatchedTracks.isEmpty {
+            var grouped: [String: (artist: Artist, albums: [String: (album: Album, tracks: [SearchTreeTrackNode])])] = [:]
+            for trackNode in results.directMatchedTracks {
+                let track = trackNode.track
+                let artistName = track.artist.isEmpty ? "Unknown Artist" : track.artist
+                let artistKey = ArtistParser.canonicalArtistKey(artistName)
+                let albumTitle = track.album.isEmpty ? "Singles" : track.album
+                let albumKey = "\(artistKey)_\(albumTitle.lowercased())"
+
+                if grouped[artistKey] == nil {
+                    let artistObj = libraryStore.findArtist(name: artistName) ?? Artist(name: artistName, albums: [])
+                    grouped[artistKey] = (artist: artistObj, albums: [:])
+                }
+                if grouped[artistKey]!.albums[albumKey] == nil {
+                    let albumObj = libraryStore.findAlbum(title: albumTitle, artist: artistName) ?? Album(title: albumTitle, artist: artistName, tracks: [track])
+                    grouped[artistKey]!.albums[albumKey] = (album: albumObj, tracks: [])
+                }
+                grouped[artistKey]!.albums[albumKey]!.tracks.append(trackNode)
+            }
+
+            for (artistKey, group) in grouped {
+                var albumNodes: [SearchTreeAlbumNode] = []
+                for (_, albGroup) in group.albums {
+                    albumNodes.append(SearchTreeAlbumNode(
+                        id: "synth_album_\(albGroup.album.id)",
+                        album: albGroup.album,
+                        tracks: albGroup.tracks,
+                        isDirectlyMatched: true,
+                        relevanceScore: albGroup.tracks.map { $0.relevanceScore }.max() ?? 50_000,
+                        category: albGroup.album.isSingle ? .singles : .albums
+                    ))
+                }
+                matchingArtistNodes.append(SearchTreeArtistNode(
+                    id: "synth_artist_\(artistKey)",
+                    artist: group.artist,
+                    albums: albumNodes,
+                    isDirectlyMatched: true,
+                    relevanceScore: albumNodes.map { $0.relevanceScore }.max() ?? 50_000
+                ))
+            }
+        }
+
+        let allMatchingAlbumIDs = Set(matchingArtistNodes.flatMap { $0.albums.map { $0.id } })
+
+        return LazyVStack(alignment: .leading, spacing: 14) {
+            ForEach(matchingArtistNodes) { artistNode in
+                SearchArtistTreeNodeRow(
+                    artistNode: artistNode,
+                    isExpanded: true,
+                    expandedAlbumIDs: allMatchingAlbumIDs,
+                    libraryStore: libraryStore,
+                    playerService: playerService,
+                    onSelectArtist: onSelectArtist,
+                    onSelectAlbum: onSelectAlbum,
+                    onSelectTrackForPlaylist: onSelectTrackForPlaylist,
+                    onSelectTrackForInfo: onSelectTrackForInfo,
+                    onToggleArtistExpansion: onToggleArtistExpansion,
+                    onToggleAlbumExpansion: onToggleAlbumExpansion
+                )
+                .equatable()
             }
         }
     }

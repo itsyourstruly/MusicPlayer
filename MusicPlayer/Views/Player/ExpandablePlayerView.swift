@@ -1460,7 +1460,7 @@ private struct MorphingPlayerCard: View, Animatable {
                                 HapticFeedback.notificationSuccess()
                                 playAlbumNext(for: track)
                             } label: {
-                                Label("PLAY ALBUM NEXT", systemImage: "text.line.first.and.arrowtriangle.forward")
+                                Text("PLAY ALBUM NEXT")
                             }
                         }
                         .simultaneousGesture(

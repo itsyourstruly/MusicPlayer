@@ -42,7 +42,7 @@ public struct AudioScannerService: Sendable {
     private let supportedExtensions: Set<String> = [
         "mp3", "m4a", "m4b", "m4p", "m4r", "mp4", "mpeg", "mpg", "mp2", "mpa",
         "aac", "flac", "wav", "wave", "aiff", "aif", "aifc", "caf", "alac",
-        "ogg", "oga", "opus", "3gp"
+        "ogg", "oga", "opus", "3gp", "wma"
     ]
 
     private static let commonArtworkFilenames: [String] = [
@@ -395,7 +395,24 @@ public struct AudioScannerService: Sendable {
         let trackID = TrackIdentity.localTrackID(folderID: folderID, relativePath: relativePath)
 
         if !CloudFileAvailability.isLocal(url: url) {
-            let parsed = FolderPathMetadataParser.parse(relativePath: relativePath)
+            let cleanRelPath: String = {
+                if url.pathExtension.lowercased() == "icloud" {
+                    var c = relativePath
+                    if c.hasSuffix(".icloud") { c = String(c.dropLast(7)) }
+                    let comp = c.components(separatedBy: "/")
+                    let last = comp.last ?? ""
+                    var cleanLast = last
+                    while cleanLast.hasPrefix("._") || cleanLast.hasPrefix(".") {
+                        if cleanLast.hasPrefix("._") { cleanLast = String(cleanLast.dropFirst(2)) }
+                        else if cleanLast.hasPrefix(".") { cleanLast = String(cleanLast.dropFirst(1)) }
+                    }
+                    var prefix = comp.dropLast().joined(separator: "/")
+                    if !prefix.isEmpty { prefix += "/" }
+                    return prefix + cleanLast
+                }
+                return relativePath
+            }()
+            let parsed = FolderPathMetadataParser.parse(relativePath: cleanRelPath)
             return Track(
                 id: trackID,
                 title: parsed.title,
@@ -484,7 +501,7 @@ public struct AudioScannerService: Sendable {
                         }
                     }
                 }
-                if fallback.artworkData == nil && (commonKey == .commonKeyArtwork || keyLower.contains("art") || keyLower.contains("covr") || idLower.contains("art") || idLower.contains("covr") || keyLower.contains("apic")) {
+                if CloudFileAvailability.isLocal(url: url) && fallback.artworkData == nil && (commonKey == .commonKeyArtwork || keyLower.contains("art") || keyLower.contains("covr") || idLower.contains("art") || idLower.contains("covr") || keyLower.contains("apic")) {
                     fallback.artworkData = await extractArtwork(from: item)
                 }
                 if fallback.lyrics == nil {
@@ -528,7 +545,23 @@ public struct AudioScannerService: Sendable {
         if meta.duration <= 0 { meta.duration = 1.0 }
 
         // MARK: - Metadata Resolution (Strictly Attached File Metadata with Filename Fallback for Title)
-        let fileNameWithoutExtension = url.deletingPathExtension().lastPathComponent
+        let isICloudDataless = url.pathExtension.lowercased() == "icloud"
+        var cleanFileName = url.deletingPathExtension().lastPathComponent
+        if isICloudDataless {
+            while cleanFileName.hasPrefix("._") || cleanFileName.hasPrefix(".") {
+                if cleanFileName.hasPrefix("._") {
+                    cleanFileName = String(cleanFileName.dropFirst(2))
+                } else if cleanFileName.hasPrefix(".") {
+                    cleanFileName = String(cleanFileName.dropFirst(1))
+                }
+            }
+            let innerURL = URL(fileURLWithPath: cleanFileName)
+            let innerExt = innerURL.pathExtension.lowercased()
+            if supportedExtensions.contains(innerExt) {
+                cleanFileName = innerURL.deletingPathExtension().lastPathComponent
+            }
+        }
+        let fileNameWithoutExtension = cleanFileName
         let fnMetadata = parseFilenameMetadata(filename: fileNameWithoutExtension)
 
         // Resolve Final Title: embedded tag -> filename parsed title -> raw filename
@@ -570,9 +603,10 @@ public struct AudioScannerService: Sendable {
         let finalTrackNumber = meta.trackNumber ?? fnMetadata.trackNumber
 
         // Attach embedded artwork or folder artwork and cache raw bytes deduplicated by album
+        let isLocalAudio = CloudFileAvailability.isLocal(url: url)
         var artworkKey: String?
-        var artworkData: Data? = meta.artworkData
-        if artworkData == nil || artworkData?.isEmpty == true {
+        var artworkData: Data? = isLocalAudio ? meta.artworkData : nil
+        if isLocalAudio && (artworkData == nil || artworkData?.isEmpty == true) {
             artworkData = findFolderArtwork(for: url)
         }
         if let art = artworkData, !art.isEmpty {

@@ -402,8 +402,10 @@ public struct SettingsView: View {
                 }
                 .buttonStyle(.plain)
                 .contextMenu {
-                    Button("Option Info") {
+                    Button {
                         activeDetail = SettingOptionCatalog.resetHomeShuffle
+                    } label: {
+                        Text("OPTION INFO")
                     }
                 }
             }
@@ -419,7 +421,7 @@ public struct SettingsView: View {
                         Button {
                             showingLogsSheet = true
                         } label: {
-                            Text("show logs. for debugging use.")
+                            Text("SHOW LOGS")
                         }
                     }
                 Spacer()

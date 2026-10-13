@@ -82,6 +82,8 @@ public struct FastAudioMetadataReader: Sendable {
             return readWAV(handle: handle, fileSize: fileSize)
         case "aiff", "aif", "aifc":
             return readAIFF(handle: handle, fileSize: fileSize)
+        case "ogg", "oga", "opus":
+            return readOgg(handle: handle, fileSize: fileSize, isOpus: ext == "opus")
         default:
             return nil
         }
@@ -845,6 +847,143 @@ public struct FastAudioMetadataReader: Sendable {
             } else if blockType == 6 && meta.artworkData == nil && blockLength > 32 {
                 // PICTURE
                 meta.artworkData = parseFLACPictureBlock(data: blockData)
+            }
+        }
+
+        if meta.duration > 0 && fileSize > 0 {
+            meta.bitRate = Double(fileSize * 8) / meta.duration
+        }
+
+        return meta
+    }
+
+    // MARK: - Ogg (Vorbis & Opus) Binary Decoder
+
+    private static func readOgg(handle: FileHandle, fileSize: Int64, isOpus: Bool) -> ParsedAudioMetadata? {
+        try? handle.seek(toOffset: 0)
+        guard let initialData = try? handle.read(upToCount: min(Int(fileSize), 256 * 1024)), initialData.count > 27 else {
+            return nil
+        }
+        guard initialData[0] == 0x4F && initialData[1] == 0x67 && initialData[2] == 0x67 && initialData[3] == 0x53 else {
+            return nil
+        }
+
+        var meta = ParsedAudioMetadata()
+        meta.formatDescription = isOpus ? "Opus Audio" : "Ogg Vorbis"
+        meta.sampleRate = isOpus ? 48000.0 : 44100.0
+        meta.channelCount = 2
+
+        var offset = 0
+        var bitstreamSerial: UInt32 = 0
+        var foundComments = false
+        var sampleRateForDuration: Double = meta.sampleRate
+
+        while offset + 27 <= initialData.count {
+            guard initialData[offset] == 0x4F && initialData[offset+1] == 0x67 &&
+                  initialData[offset+2] == 0x67 && initialData[offset+3] == 0x53 else {
+                offset += 1
+                continue
+            }
+
+            let segCount = Int(initialData[offset + 26])
+            guard offset + 27 + segCount <= initialData.count else { break }
+
+            let pageSerial = UInt32(initialData[offset + 14]) |
+                             (UInt32(initialData[offset + 15]) << 8) |
+                             (UInt32(initialData[offset + 16]) << 16) |
+                             (UInt32(initialData[offset + 17]) << 24)
+
+            var bodyLen = 0
+            for i in 0..<segCount {
+                bodyLen += Int(initialData[offset + 27 + i])
+            }
+
+            let bodyStart = offset + 27 + segCount
+            guard bodyStart + bodyLen <= initialData.count else { break }
+
+            let bodyData = initialData.subdata(in: bodyStart..<(bodyStart + bodyLen))
+
+            if bitstreamSerial == 0 {
+                bitstreamSerial = pageSerial
+            }
+
+            // Identification header
+            if bodyData.count >= 8 {
+                if !isOpus && bodyData.count >= 16 && bodyData[0] == 0x01 &&
+                   bodyData[1] == 0x76 && bodyData[2] == 0x6F && bodyData[3] == 0x72 &&
+                   bodyData[4] == 0x62 && bodyData[5] == 0x69 && bodyData[6] == 0x73 {
+                    // Vorbis ID header: channels at byte 11, sample rate at bytes 12..15
+                    let ch = Int(bodyData[11])
+                    let sr = UInt32(bodyData[12]) | (UInt32(bodyData[13]) << 8) |
+                             (UInt32(bodyData[14]) << 16) | (UInt32(bodyData[15]) << 24)
+                    if sr > 0 {
+                        meta.sampleRate = Double(sr)
+                        sampleRateForDuration = Double(sr)
+                    }
+                    if ch > 0 { meta.channelCount = ch }
+                } else if isOpus && bodyData.count >= 19 &&
+                          bodyData[0] == 0x4F && bodyData[1] == 0x70 && bodyData[2] == 0x75 && bodyData[3] == 0x73 &&
+                          bodyData[4] == 0x48 && bodyData[5] == 0x65 && bodyData[6] == 0x61 && bodyData[7] == 0x64 {
+                    // OpusHead
+                    let ch = Int(bodyData[9])
+                    let inputRate = UInt32(bodyData[12]) | (UInt32(bodyData[13]) << 8) |
+                                   (UInt32(bodyData[14]) << 16) | (UInt32(bodyData[15]) << 24)
+                    meta.sampleRate = inputRate > 0 ? Double(inputRate) : 48000.0
+                    meta.channelCount = ch > 0 ? ch : 2
+                    sampleRateForDuration = 48000.0
+                }
+            }
+
+            // Comment header
+            if !foundComments && bodyData.count >= 7 {
+                if bodyData[0] == 0x03 && bodyData[1] == 0x76 && bodyData[2] == 0x6F &&
+                   bodyData[3] == 0x72 && bodyData[4] == 0x62 && bodyData[5] == 0x69 && bodyData[6] == 0x73 {
+                    let commentPayload = bodyData.subdata(in: 7..<bodyData.count)
+                    parseVorbisComment(data: commentPayload, meta: &meta)
+                    foundComments = true
+                } else if bodyData.count >= 8 &&
+                          bodyData[0] == 0x4F && bodyData[1] == 0x70 && bodyData[2] == 0x75 && bodyData[3] == 0x73 &&
+                          bodyData[4] == 0x54 && bodyData[5] == 0x61 && bodyData[6] == 0x67 && bodyData[7] == 0x73 {
+                    let commentPayload = bodyData.subdata(in: 8..<bodyData.count)
+                    parseVorbisComment(data: commentPayload, meta: &meta)
+                    foundComments = true
+                }
+            }
+
+            offset = bodyStart + bodyLen
+        }
+
+        // Fast duration calculation from final Ogg page granule position
+        let tailSize = min(Int(fileSize), 65536)
+        let tailOffset = UInt64(fileSize - Int64(tailSize))
+        try? handle.seek(toOffset: tailOffset)
+        if let tailData = try? handle.read(upToCount: tailSize), tailData.count >= 27 {
+            var search = tailData.count - 27
+            while search >= 0 {
+                if tailData[search] == 0x4F && tailData[search+1] == 0x67 &&
+                   tailData[search+2] == 0x67 && tailData[search+3] == 0x53 {
+                    let pageSerial = UInt32(tailData[search + 14]) |
+                                     (UInt32(tailData[search + 15]) << 8) |
+                                     (UInt32(tailData[search + 16]) << 16) |
+                                     (UInt32(tailData[search + 17]) << 24)
+
+                    if bitstreamSerial == 0 || pageSerial == bitstreamSerial {
+                        let granule = UInt64(tailData[search + 6]) |
+                                      (UInt64(tailData[search + 7]) << 8) |
+                                      (UInt64(tailData[search + 8]) << 16) |
+                                      (UInt64(tailData[search + 9]) << 24) |
+                                      (UInt64(tailData[search + 10]) << 32) |
+                                      (UInt64(tailData[search + 11]) << 40) |
+                                      (UInt64(tailData[search + 12]) << 48) |
+                                      (UInt64(tailData[search + 13]) << 56)
+
+                        if granule != UInt64.max && granule > 0 && sampleRateForDuration > 0 {
+                            meta.duration = Double(granule) / sampleRateForDuration
+                            break
+                        }
+                    }
+                }
+                search -= 1
             }
         }
 

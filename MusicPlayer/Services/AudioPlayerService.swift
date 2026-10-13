@@ -35,10 +35,20 @@ public final class AudioPlayerService {
             #endif
         }
     }
+    // Dedicated progress model observed by scrubber and progress bar
+    public let progress = AudioProgressModel()
     // Elapsed playback time in seconds
-    public private(set) var currentTime: TimeInterval = 0
+    public private(set) var currentTime: TimeInterval = 0 {
+        didSet {
+            progress.currentTime = currentTime
+        }
+    }
     // Total audio duration in seconds
-    public private(set) var duration: TimeInterval = 0
+    public private(set) var duration: TimeInterval = 0 {
+        didSet {
+            progress.duration = duration
+        }
+    }
     // Upcoming track queue
     public private(set) var queue: [Track] = [] {
         didSet {
@@ -57,9 +67,17 @@ public final class AudioPlayerService {
     public var shuffleMode: ShuffleMode = .off
     
     // True while the user is dragging the scrub bar
-    public var isSeeking: Bool = false
+    public var isSeeking: Bool = false {
+        didSet {
+            progress.isSeeking = isSeeking
+        }
+    }
     // Target seek timestamp during scrubber interaction
-    public var seekPosition: TimeInterval = 0
+    public var seekPosition: TimeInterval = 0 {
+        didSet {
+            progress.seekPosition = seekPosition
+        }
+    }
     // Audio stream buffering progress ratio
     public var bufferProgress: Double { 1.0 }
     // Connected audio output route name (e.g., "THIS DEVICE", "AIRPODS PRO", "HEADPHONES")
@@ -205,8 +223,6 @@ public final class AudioPlayerService {
     @ObservationIgnored private var prewarmedTrackID: UUID?
     @ObservationIgnored private var prewarmedPlayerItem: AVPlayerItem?
     @ObservationIgnored private var prewarmTask: Task<Void, Never>?
-    @ObservationIgnored private var playerItemStalledObserver: Any?
-    @ObservationIgnored private var itemLikelyToKeepUpObserver: NSKeyValueObservation?
     
     // MARK: - Playback Position Helpers
     
@@ -327,8 +343,13 @@ public final class AudioPlayerService {
     @ObservationIgnored private var isTransitioningTrack: Bool = false
     @ObservationIgnored private var transitionTimeoutTask: Task<Void, Never>?
     @ObservationIgnored private var isRoutingChanging: Bool = false
+    @ObservationIgnored private var boundaryObserverTokens: [Any] = []
+    @ObservationIgnored private var itemLikelyToKeepUpObserver: NSKeyValueObservation?
+    @ObservationIgnored private var itemBufferEmptyObserver: NSKeyValueObservation?
+    @ObservationIgnored private var playerItemStalledObserver: (any NSObjectProtocol)?
+    @ObservationIgnored private var wasPlayingBeforeInterruption: Bool = false
+    @ObservationIgnored private var userPausedManually: Bool = false
 #if os(iOS)
-    @ObservationIgnored private var backgroundTaskID: UIBackgroundTaskIdentifier = .invalid
     @ObservationIgnored private var appLifecycleObservers: [any NSObjectProtocol] = []
 #endif
     
@@ -374,6 +395,18 @@ public final class AudioPlayerService {
         }
         itemStatusObserver?.invalidate()
         itemStatusObserver = nil
+        itemLikelyToKeepUpObserver?.invalidate()
+        itemLikelyToKeepUpObserver = nil
+        itemBufferEmptyObserver?.invalidate()
+        itemBufferEmptyObserver = nil
+        if let stalledObs = playerItemStalledObserver {
+            NotificationCenter.default.removeObserver(stalledObs)
+            playerItemStalledObserver = nil
+        }
+        for token in boundaryObserverTokens {
+            player?.removeTimeObserver(token)
+        }
+        boundaryObserverTokens.removeAll()
         playerTimeControlObserver?.invalidate()
         playerTimeControlObserver = nil
         player?.pause()
@@ -388,12 +421,6 @@ public final class AudioPlayerService {
             NotificationCenter.default.removeObserver(resetObs)
         }
 #if os(iOS)
-        let taskID = backgroundTaskID
-        if taskID != .invalid {
-            Task { @MainActor in
-                UIApplication.shared.endBackgroundTask(taskID)
-            }
-        }
         for obs in appLifecycleObservers {
             NotificationCenter.default.removeObserver(obs)
         }
@@ -599,10 +626,13 @@ public final class AudioPlayerService {
             await AudioSessionManager.shared.activateSessionIfNeeded()
         }
         
+        userPausedManually = false
+        AudioSessionManager.shared.markPlaying()
         let speed = Float(EqualizerManager.shared.playbackSpeed)
         player.defaultRate = speed
         player.isMuted = isMuted
-        player.automaticallyWaitsToMinimizeStalling = false
+        let isRemote = (currentTrack?.isJellyfinItem == true || currentTrack?.metadataSource == .server) && JellyfinDownloadManager.shared.localFileURL(for: currentTrack?.id ?? UUID()) == nil
+        player.automaticallyWaitsToMinimizeStalling = isRemote
 
         let wasFadingOut = isFadingOutPause
         playPauseFadeTask?.cancel()
@@ -660,9 +690,8 @@ public final class AudioPlayerService {
         isSmoothSkipping = false
         pendingSmoothSkipAction = nil
 
-        playPauseFadeTask?.cancel()
-        playPauseFadeTask = nil
-        isFadingInPlay = false
+        userPausedManually = true
+        AudioSessionManager.shared.markPaused()
 
         guard let player = player else {
             playbackStatus = .paused
@@ -1267,6 +1296,8 @@ public final class AudioPlayerService {
             if needsTranscode {
                 queryItems.append(URLQueryItem(name: "audioCodec", value: "aac"))
                 queryItems.append(URLQueryItem(name: "transcodingContainer", value: "ts"))
+                queryItems.append(URLQueryItem(name: "audioBitRate", value: "320000"))
+                queryItems.append(URLQueryItem(name: "maxStreamingBitrate", value: "140000000"))
             }
             components?.queryItems = queryItems
             resolvedURL = components?.url ?? track.url
@@ -1296,9 +1327,6 @@ public final class AudioPlayerService {
 
     // Load and play
     private func loadAndPlay(track: Track) {
-#if os(iOS)
-        beginBackgroundTaskAssertion()
-#endif
         if let current = currentTrack, current.id != track.id {
             saveCurrentPlaybackPositionIfNeeded()
         }
@@ -1323,28 +1351,42 @@ public final class AudioPlayerService {
         self.playbackAccumulatedTime = 0
 
         // If track is a file URL but not downloaded yet, pause/buffer and wait for download
-        if track.url.isFileURL && !CloudFileAvailability.isLocal(url: track.url) {
-            self.playbackStatus = .buffering
-            self.cloudWaitTrackID = track.id
-            cloudDownloadTask = Task { @MainActor [weak self] in
-                guard let self = self else { return }
-                do {
-                    _ = try await CloudDownloadCenter.shared.ensureLocal(track: track)
-                    guard self.cloudWaitTrackID == track.id, self.currentTrack?.id == track.id else {
-                        return
-                    }
-                    self.cloudWaitTrackID = nil
-                    self.finishLoadAndPlay(track: track, resumePosition: resumePosition)
-                } catch {
-                    guard self.cloudWaitTrackID == track.id else { return }
-                    self.cloudWaitTrackID = nil
-                    self.playbackStatus = .paused
-                    self.cloudPlaybackError = error.localizedDescription
-                    HapticFeedback.notificationError()
-                    AppLogger.audio.error("Failed to download cloud track: \(error.localizedDescription)")
+        if track.url.isFileURL && (!CloudFileAvailability.isLocal(url: track.url) || CloudFileAvailability.isCloudItem(url: track.url)) {
+            let isCurrentOnDisk: Bool = {
+                if let res = try? track.url.resourceValues(forKeys: [.isUbiquitousItemKey, .ubiquitousItemDownloadingStatusKey]),
+                   res.isUbiquitousItem == true {
+                    return res.ubiquitousItemDownloadingStatus == .current
                 }
+                return CloudFileAvailability.isLocal(url: track.url)
+            }()
+
+            if !isCurrentOnDisk {
+                self.playbackStatus = .buffering
+                self.cloudWaitTrackID = track.id
+                cloudDownloadTask = Task { @MainActor [weak self] in
+                    guard let self = self else { return }
+                    do {
+                        let localURL = try await CloudDownloadCenter.shared.ensureLocal(track: track)
+                        guard self.cloudWaitTrackID == track.id, self.currentTrack?.id == track.id else {
+                            return
+                        }
+                        if let res = try? localURL.resourceValues(forKeys: [.ubiquitousItemDownloadingStatusKey]),
+                           res.ubiquitousItemDownloadingStatus != .current {
+                            throw CloudDownloadError.downloadFailed("FILE STILL MATERIALIZING")
+                        }
+                        self.cloudWaitTrackID = nil
+                        self.finishLoadAndPlay(track: track, resumePosition: resumePosition)
+                    } catch {
+                        guard self.cloudWaitTrackID == track.id else { return }
+                        self.cloudWaitTrackID = nil
+                        self.playbackStatus = .paused
+                        self.cloudPlaybackError = error.localizedDescription
+                        HapticFeedback.notificationError()
+                        AppLogger.audio.error("Failed to download cloud track: \(error.localizedDescription)")
+                    }
+                }
+                return
             }
-            return
         }
 
         self.cloudWaitTrackID = nil
@@ -1390,7 +1432,7 @@ public final class AudioPlayerService {
         }
 
         if player == nil {
-            let newPlayer = AVPlayer(playerItem: playerItem)
+            let newPlayer = AVQueuePlayer(playerItem: playerItem)
             newPlayer.automaticallyWaitsToMinimizeStalling = isRemoteStream
             newPlayer.allowsExternalPlayback = true
             #if os(iOS)
@@ -1405,7 +1447,15 @@ public final class AudioPlayerService {
             #if os(iOS)
             player?.usesExternalPlaybackWhileExternalScreenIsActive = true
             #endif
-            player?.replaceCurrentItem(with: playerItem)
+            if !isCrossfadeEnabled, let qPlayer = player as? AVQueuePlayer {
+                qPlayer.insert(playerItem, after: qPlayer.currentItem)
+                qPlayer.advanceToNextItem()
+            } else {
+                player?.replaceCurrentItem(with: playerItem)
+            }
+        }
+        if let pl = player {
+            setupBoundaryTimeObservers(for: pl, track: track, duration: track.duration)
         }
         player?.volume = isSmoothSkipping ? 0.0 : volume
         player?.isMuted = isMuted
@@ -1520,21 +1570,10 @@ public final class AudioPlayerService {
 
     /// Dynamically ensures the audio mix DSP tap is attached on the currently playing item if needed.
     public func updateAudioMixForCurrentItem() {
-        guard let item = player?.currentItem else { return }
-        let isEQ = EqualizerManager.shared.isEqualizerEnabled
-        let boost = EqualizerManager.shared.volumeBoosterDB
-        let needsDSP = isEQ || abs(boost) > 0.05
-
-        if needsDSP {
-            if item.audioMix == nil {
-                attachAudioMix(to: item)
-            }
-        } else {
-            if item.audioMix != nil {
-                item.audioMix = nil
-                AppLogger.audio.info("Detached AudioDSPProcessor tap (DSP inactive).")
-            }
-        }
+        // Do not attach or detach audioMix on a live playing item.
+        // Toggling audioMix rebuilds the render chain and causes an audible gap.
+        // Live parameter changes are applied lock-free to AudioDSPProcessor.
+        // The tap is attached once at item creation and detached only on track change.
     }
 
     // Pre-warms the next track in queue asynchronously so skipping to it is instantaneous
@@ -1558,7 +1597,8 @@ public final class AudioPlayerService {
         prewarmTask = Task { [weak self] in
             guard let self = self else { return }
             let item = self.makePlayerItem(for: next)
-            item.preferredForwardBufferDuration = 0.0
+            let isRemoteNext = (next.isJellyfinItem || next.metadataSource == .server) && JellyfinDownloadManager.shared.localFileURL(for: next.id) == nil
+            item.preferredForwardBufferDuration = isRemoteNext ? 30.0 : 0.0
             
             // Only prewarm waveform amplitude peaks for local files
             if next.canReadLocalBytes {
@@ -1595,8 +1635,20 @@ public final class AudioPlayerService {
         }
         itemLikelyToKeepUpObserver?.invalidate()
         itemLikelyToKeepUpObserver = nil
+        itemBufferEmptyObserver?.invalidate()
+        itemBufferEmptyObserver = nil
         itemStatusObserver?.invalidate()
         itemStatusObserver = nil
+        clearBoundaryTimeObservers()
+    }
+
+    // Clear boundary time observers
+    private func clearBoundaryTimeObservers(for targetPlayer: AVPlayer? = nil) {
+        let p = targetPlayer ?? self.player
+        for token in boundaryObserverTokens {
+            p?.removeTimeObserver(token)
+        }
+        boundaryObserverTokens.removeAll()
     }
 
     // Teardown all player and item observers (used on deinit or stopAndClear)
@@ -1626,26 +1678,6 @@ public final class AudioPlayerService {
                 case .paused:
                     // If currently loading / replacing a track item, seeking, switching routes, smoothly fading out, or transitioning tracks, do not let the transient state trigger an unexpected pause
                     if self.isTransitioningTrack || self.isSeeking || self.isRoutingChanging || self.isFadingOutPause || self.isSmoothSkipping || self.isStaggeredTransitioning {
-                        // Safety: if playback status is .playing but the player is actually paused,
-                        // schedule a recovery attempt after a delay to prevent permanent stall
-                        if self.playbackStatus == .playing {
-                            Task { @MainActor [weak self] in
-                                try? await Task.sleep(nanoseconds: 2_000_000_000) // 2s safety timeout
-                                guard let self = self else { return }
-                                // Only recover if player is still actually paused (not buffering/waitingToPlay)
-                                if self.playbackStatus == .playing,
-                                   let player = self.player,
-                                   player.timeControlStatus == .paused {
-                                    self.isRoutingChanging = false
-                                    self.isTransitioningTrack = false
-                                    self.transitionTimeoutTask?.cancel()
-                                    let speed = Float(EqualizerManager.shared.playbackSpeed)
-                                    player.defaultRate = speed
-                                    player.play()
-                                    AppLogger.audio.info("Safety recovery: forced playback after 2s paused stall")
-                                }
-                            }
-                        }
                         return
                     }
                     if self.playbackStatus != .stopped {
@@ -1656,10 +1688,7 @@ public final class AudioPlayerService {
                     if let reason = p.reasonForWaitingToPlay {
                         AppLogger.audio.info("Player waiting to play: \(reason.rawValue)")
                     }
-                    // Only display buffering if player was previously stopped
-                    if self.playbackStatus == .stopped {
-                        self.playbackStatus = .buffering
-                    }
+                    self.playbackStatus = .buffering
                 @unknown default:
                     break
                 }
@@ -1679,7 +1708,11 @@ public final class AudioPlayerService {
                     let dSec = CMTimeGetSeconds(item.duration)
                     if !dSec.isNaN && !dSec.isInfinite && dSec > 0 {
                         self.duration = dSec
+                        self.progress.duration = dSec
                         self.updateNowPlayingDuration(dSec)
+                    }
+                    if let p = self.player {
+                        self.setupBoundaryTimeObservers(for: p, track: track, duration: self.duration)
                     }
                     if self.playbackStatus != .stopped {
                         self.playbackStatus = .playing
@@ -1687,9 +1720,6 @@ public final class AudioPlayerService {
                     let speed = Float(EqualizerManager.shared.playbackSpeed)
                     self.player?.defaultRate = speed
                     self.player?.play()
-#if os(iOS)
-                    self.endBackgroundTaskAssertion()
-#endif
                     AppLogger.audio.info("AVPlayerItem ready to play: \(track.title) (duration: \(self.duration)s) at \(speed)x")
                 case .failed:
                     self.isTransitioningTrack = false
@@ -1699,9 +1729,6 @@ public final class AudioPlayerService {
                     let errorLogs = item.errorLog()?.events.compactMap { $0.errorComment }.joined(separator: "; ") ?? "None"
                     AppLogger.audio.error("AVPlayerItem failed for \(track.title). Item Error: \(itemErr). Player Error: \(playerErr). ErrorLog: \(errorLogs)")
                     self.playbackStatus = .stopped
-#if os(iOS)
-                    self.endBackgroundTaskAssertion()
-#endif
                 case .unknown:
                     break
                 @unknown default:
@@ -1733,9 +1760,7 @@ public final class AudioPlayerService {
                 AppLogger.audio.warning("AVPlayerItem playback error: \(errorDesc)")
                 guard let self = self else { return }
 
-                // If playback failed while audio processing tap was attached, the connected output route
-                // (e.g. car head unit) may have rejected dynamic CoreMedia tap format negotiation (-12885 / -12082).
-                // Detach audioMix immediately and resume native playback so audio never stops.
+                // If playback failed while audio processing tap was attached, detach audioMix immediately
                 if playerItem.audioMix != nil {
                     AppLogger.audio.warning("Output route rejected audio processing tap. Detaching audioMix and recovering playback immediately.")
                     playerItem.audioMix = nil
@@ -1747,19 +1772,19 @@ public final class AudioPlayerService {
 
                 if self.duration > 0 && self.currentTime >= self.duration - 2.0 {
                     self.handleTrackEnded()
-                } else if self.playbackStatus == .playing, let player = self.player {
-                    AppLogger.audio.info("Attempting auto-recovery from transient audio stall")
-                    let speed = Float(EqualizerManager.shared.playbackSpeed)
-                    player.defaultRate = speed
-                    player.play()
+                } else if self.playbackStatus == .playing || self.playbackStatus == .buffering {
+                    if playerItem.isPlaybackLikelyToKeepUp {
+                        let speed = Float(EqualizerManager.shared.playbackSpeed)
+                        self.player?.defaultRate = speed
+                        self.player?.play()
+                    } else {
+                        self.playbackStatus = .buffering
+                    }
                 } else if !self.queue.isEmpty {
                     AppLogger.audio.info("Advancing to next track after unrecoverable stall")
                     self.next()
                 } else {
                     self.playbackStatus = .stopped
-#if os(iOS)
-                    self.endBackgroundTaskAssertion()
-#endif
                 }
             }
         }
@@ -1791,63 +1816,112 @@ public final class AudioPlayerService {
                 }
             }
         }
+        
+        // 6. Observe isPlaybackBufferEmpty to detect network starvation
+        itemBufferEmptyObserver = playerItem.observe(\.isPlaybackBufferEmpty, options: [.new]) { [weak self] item, _ in
+            Task { @MainActor [weak self] in
+                guard let self = self else { return }
+                if item.isPlaybackBufferEmpty && self.playbackStatus == .playing {
+                    AppLogger.audio.info("AVPlayerItem buffer empty, entering buffering state")
+                    self.playbackStatus = .buffering
+                }
+            }
+        }
     }
-    
-    // Setup periodic time observer
+
+    // Setup boundary time observers for one-time triggers:
+    // - 10s Wi-Fi prefetch
+    // - 15s play count (or 90% if track is shorter than 15s)
+    // - Crossfade trigger at (duration - crossfadeDuration)
+    private func setupBoundaryTimeObservers(for targetPlayer: AVPlayer, track: Track, duration: Double) {
+        clearBoundaryTimeObservers(for: targetPlayer)
+        
+        var times: [CMTime] = []
+        
+        let prefetchTime = CMTime(seconds: 10.0, preferredTimescale: 600)
+        times.append(prefetchTime)
+        
+        let countSeconds = (duration > 0 && duration < 15.0) ? (duration * 0.9) : 15.0
+        let countTime = CMTime(seconds: countSeconds, preferredTimescale: 600)
+        times.append(countTime)
+        
+        if isCrossfadeEnabled && crossfadeDuration >= 0.5 && duration > (crossfadeDuration * 1.2) {
+            let xfadeSeconds = max(0.0, duration - crossfadeDuration)
+            let xfadeTime = CMTime(seconds: xfadeSeconds, preferredTimescale: 600)
+            times.append(xfadeTime)
+        }
+        
+        let nsValues = times.map { NSValue(time: $0) }
+        let token = targetPlayer.addBoundaryTimeObserver(forTimes: nsValues, queue: .main) { [weak self] in
+            guard let self = self else { return }
+            let cur = self.currentTime
+            
+            // 1. Wi-Fi prefetch check
+            if !self.hasTriggeredWiFiPrefetch && cur >= 9.8 {
+                self.hasTriggeredWiFiPrefetch = true
+                if self.downloadNextSongOnWiFi,
+                   let nextTarget = self.nextPlaybackTarget()?.track,
+                   !nextTarget.canReadLocalBytes,
+                   nextTarget.metadataSource != .server,
+                   CloudDownloadCenter.shared.isWiFiConnected {
+                    Task {
+                        _ = try? await CloudDownloadCenter.shared.ensureLocal(track: nextTarget)
+                    }
+                }
+            }
+            
+            // 2. Play count check
+            if !self.hasCountedCurrentPlay && (cur >= countSeconds - 0.2) {
+                self.hasCountedCurrentPlay = true
+                if let current = self.currentTrack {
+                    self.onTrackPlay?(current.id)
+                }
+            }
+            
+            // 3. Crossfade check
+            if self.isCrossfadeEnabled && !self.isCrossfading && self.duration > 0 {
+                let remaining = self.duration - cur
+                if remaining <= self.crossfadeDuration + 0.2 && remaining > 0 {
+                    self.checkAndTriggerCrossfadeIfNeeded()
+                }
+            }
+        }
+        boundaryObserverTokens.append(token)
+    }
+
+    // Setup periodic time observer (raised interval to 0.35s to eliminate main thread pressure)
     private func setupPeriodicTimeObserver() {
         if timeObserverToken != nil { return }
-        let interval = CMTime(seconds: 0.08, preferredTimescale: 600)
+        let interval = CMTime(seconds: 0.35, preferredTimescale: 600)
         timeObserverToken = player?.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self] time in
             guard let self = self, !self.isSeeking else { return }
             let seconds = CMTimeGetSeconds(time)
-            if !seconds.isNaN && !seconds.isInfinite {
-                self.currentTime = seconds
-                if self.duration <= 0, let itemDur = self.player?.currentItem?.duration {
-                    let dSec = CMTimeGetSeconds(itemDur)
-                    if !dSec.isNaN && !dSec.isInfinite && dSec > 0 {
-                        self.duration = dSec
+            guard !seconds.isNaN && !seconds.isInfinite else { return }
+            self.currentTime = seconds
+            self.progress.currentTime = seconds
+            
+            if self.duration <= 0, let itemDur = self.player?.currentItem?.duration {
+                let dSec = CMTimeGetSeconds(itemDur)
+                if !dSec.isNaN && !dSec.isInfinite && dSec > 0 {
+                    self.duration = dSec
+                    self.progress.duration = dSec
+                    if let p = self.player, let cur = self.currentTrack {
+                        self.setupBoundaryTimeObservers(for: p, track: cur, duration: dSec)
                     }
                 }
-                
-                // Count as a listen if track is played for more than 15 seconds (or finishes if shorter)
-                if self.playbackStatus == .playing && !self.hasCountedCurrentPlay {
-                    self.playbackAccumulatedTime += 0.08
-                    if self.playbackAccumulatedTime >= 15.0 || self.currentTime >= 15.0 || (self.duration > 0 && self.duration < 15.0 && self.currentTime >= self.duration * 0.9) {
-                        self.hasCountedCurrentPlay = true
-                        if let track = self.currentTrack {
-                            self.onTrackPlay?(track.id)
-                        }
-                    }
-                }
-                
-                self.checkAndTriggerCrossfadeIfNeeded()
-                
-                // 10-second Wi-Fi prefetch check for next song
-                if !self.hasTriggeredWiFiPrefetch && seconds >= 10.0 {
-                    self.hasTriggeredWiFiPrefetch = true
-                    if self.downloadNextSongOnWiFi,
-                       let nextTarget = self.nextPlaybackTarget()?.track,
-                       !nextTarget.canReadLocalBytes,
-                       nextTarget.metadataSource != .server,
-                       CloudDownloadCenter.shared.isWiFiConnected {
-                        Task {
-                            _ = try? await CloudDownloadCenter.shared.ensureLocal(track: nextTarget)
-                        }
-                    }
-                }
-                
-                // Periodic Jellyfin progress reporting (every 10s)
-                if let track = self.currentTrack, track.metadataSource == .server {
-                    if Int(seconds) / 10 != Int(self.lastJellyfinReportedSeconds) / 10 {
-                        self.lastJellyfinReportedSeconds = seconds
-                        if let match = self.getJellyfinServer(for: track.folderID) {
-                            JellyfinPlaybackReporter.shared.reportPlaybackProgress(
-                                track: track,
-                                positionSeconds: seconds,
-                                isPaused: self.playbackStatus != .playing,
-                                serverLink: match
-                            )
-                        }
+            }
+            
+            // Periodic Jellyfin progress reporting (every 10s)
+            if let track = self.currentTrack, track.metadataSource == .server {
+                if Int(seconds) / 10 != Int(self.lastJellyfinReportedSeconds) / 10 {
+                    self.lastJellyfinReportedSeconds = seconds
+                    if let match = self.getJellyfinServer(for: track.folderID) {
+                        JellyfinPlaybackReporter.shared.reportPlaybackProgress(
+                            track: track,
+                            positionSeconds: seconds,
+                            isPaused: self.playbackStatus != .playing,
+                            serverLink: match
+                        )
                     }
                 }
             }
@@ -1856,9 +1930,6 @@ public final class AudioPlayerService {
     
     // Handle track ended
     private func handleTrackEnded() {
-#if os(iOS)
-        beginBackgroundTaskAssertion()
-#endif
         if let track = currentTrack, track.metadataSource == .server {
             if let match = getJellyfinServer(for: track.folderID) {
                 JellyfinPlaybackReporter.shared.reportPlaybackStopped(track: track, positionSeconds: duration, serverLink: match)
@@ -1954,22 +2025,19 @@ public final class AudioPlayerService {
         self.currentIndex = nextIndex
         self.duration = nextTrack.duration
         self.currentTime = 0.0
+        self.progress.currentTime = 0.0
+        self.progress.duration = nextTrack.duration
         self.setupNowPlayingInfo(for: nextTrack)
         
-        // Remove time observer from outgoing player
-        if let token = self.timeObserverToken {
-            outgoingPlayer?.removeTimeObserver(token)
-            self.timeObserverToken = nil
-        }
-        
         // Attach real-time observer to incoming player so UI progress bar tracks next track smoothly from 0.0s
-        let interval = CMTime(seconds: 0.1, preferredTimescale: 600)
+        let interval = CMTime(seconds: 0.35, preferredTimescale: 600)
         self.fadeTimeObserverToken = incomingPlayer.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self] time in
             Task { @MainActor [weak self] in
                 guard let self = self, !self.isSeeking else { return }
                 let seconds = CMTimeGetSeconds(time)
                 if !seconds.isNaN && !seconds.isInfinite {
                     self.currentTime = seconds
+                    self.progress.currentTime = seconds
                 }
             }
         }
@@ -2004,9 +2072,19 @@ public final class AudioPlayerService {
             // Ensure preconditions are met before proceeding
             guard !Task.isCancelled else { return }
             
-            // Finalize crossfade handoff
+            // Finalize crossfade handoff: pause and zero volume
             outgoingPlayer?.pause()
             outgoingPlayer?.volume = 0.0
+            
+            // Teardown outgoing player's tap and observers after volume ramp reached 0
+            if let outgoing = outgoingPlayer {
+                if let token = self.timeObserverToken {
+                    outgoing.removeTimeObserver(token)
+                    self.timeObserverToken = nil
+                }
+                self.clearBoundaryTimeObservers(for: outgoing)
+                outgoing.currentItem?.audioMix = nil
+            }
             
             if let token = self.fadeTimeObserverToken {
                 incomingPlayer.removeTimeObserver(token)
@@ -2436,6 +2514,7 @@ public final class AudioPlayerService {
                 self?.updateCurrentAudioRoute()
                 switch type {
                 case .began:
+                    self?.wasPlayingBeforeInterruption = (self?.playbackStatus == .playing)
                     AudioSessionManager.shared.notifyInterruptionBegan()
                     self?.pause()
                 case .ended:
@@ -2445,7 +2524,7 @@ public final class AudioPlayerService {
                     let options = AVAudioSession.InterruptionOptions(rawValue: optionsValue)
                     let shouldResume = options.contains(.shouldResume)
                     let reactivated = await AudioSessionManager.shared.notifyInterruptionEnded(shouldResume: shouldResume)
-                    if reactivated && shouldResume {
+                    if reactivated && shouldResume && (self?.wasPlayingBeforeInterruption == true) && (self?.userPausedManually == false) {
                         // Delay resume slightly to let car stereo re-establish A2DP audio sink
                         try? await Task.sleep(nanoseconds: 300_000_000) // 300ms
                         self?.play()
@@ -2491,10 +2570,11 @@ public final class AudioPlayerService {
                     self.pause(smooth: false)
 
                 case .newDeviceAvailable, .routeConfigurationChange, .override, .categoryChange, .wakeFromSleep:
-                    // Hardware route changed or settled. AVPlayer natively handles audio routing to the new destination.
-                    // Do not force-reactivate the audio session or hammer player.play(), allowing Bluetooth A2DP
-                    // and vehicle head unit DAC clock handshakes to complete cleanly.
-                    break
+                    // Re-read AVAudioSession sample rate and hand it to DSP
+                    let currentSR = AVAudioSession.sharedInstance().sampleRate
+                    if currentSR > 0 {
+                        AudioDSPProcessor.shared.updateSampleRate(currentSR)
+                    }
 
                 default:
                     break
@@ -2531,8 +2611,6 @@ public final class AudioPlayerService {
             Task { @MainActor [weak self] in
                 guard let self = self else { return }
                 if self.playbackStatus == .playing {
-                    // Begin background assertion to prevent suspension during car stereo playback
-                    self.beginBackgroundTaskAssertion()
                     self.updateNowPlayingPlaybackState()
                 }
             }
@@ -2575,22 +2653,6 @@ public final class AudioPlayerService {
             }
         }
         appLifecycleObservers.append(resignObs)
-    }
-    
-    // Begin background execution assertion to prevent suspension during track transitions
-    private func beginBackgroundTaskAssertion() {
-        endBackgroundTaskAssertion()
-        backgroundTaskID = UIApplication.shared.beginBackgroundTask(withName: "AudioPlaybackTransition") { [weak self] in
-            self?.endBackgroundTaskAssertion()
-        }
-    }
-    
-    // End background execution assertion safely
-    private func endBackgroundTaskAssertion() {
-        if backgroundTaskID != .invalid {
-            UIApplication.shared.endBackgroundTask(backgroundTaskID)
-            backgroundTaskID = .invalid
-        }
     }
 #endif
     
