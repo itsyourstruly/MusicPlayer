@@ -7,7 +7,7 @@
         "key": "DELETE PLAYLIST",
         "location": {
           "startingColumn": 20,
-          "startingLine": 457
+          "startingLine": 459
         }
       },
       {
@@ -63,7 +63,7 @@
         "key": "TRACKLIST (%lld)",
         "location": {
           "startingColumn": 34,
-          "startingLine": 370
+          "startingLine": 372
         }
       },
       {
@@ -207,7 +207,7 @@
         "key": "DELETE PLAYLIST",
         "location": {
           "startingColumn": 34,
-          "startingLine": 410
+          "startingLine": 411
         }
       },
       {
@@ -215,7 +215,7 @@
         "key": "CANCEL",
         "location": {
           "startingColumn": 24,
-          "startingLine": 458
+          "startingLine": 460
         }
       },
       {
@@ -223,7 +223,7 @@
         "key": "DELETE",
         "location": {
           "startingColumn": 24,
-          "startingLine": 459
+          "startingLine": 461
         }
       },
       {
@@ -231,7 +231,7 @@
         "key": "Are you sure you want to delete '%@'? Audio files on disk will not be affected.",
         "location": {
           "startingColumn": 22,
-          "startingLine": 464
+          "startingLine": 466
         }
       },
       {
@@ -239,7 +239,7 @@
         "key": "PLAYLIST",
         "location": {
           "startingColumn": 22,
-          "startingLine": 564
+          "startingLine": 566
         }
       },
       {
@@ -247,7 +247,7 @@
         "key": "ADD TO PLAYLIST",
         "location": {
           "startingColumn": 30,
-          "startingLine": 762
+          "startingLine": 764
         }
       },
       {
@@ -255,7 +255,7 @@
         "key": "ADD",
         "location": {
           "startingColumn": 38,
-          "startingLine": 752
+          "startingLine": 754
         }
       },
       {
@@ -263,7 +263,7 @@
         "key": "EDIT PLAYLIST",
         "location": {
           "startingColumn": 30,
-          "startingLine": 932
+          "startingLine": 934
         }
       },
       {
@@ -271,7 +271,7 @@
         "key": "PLAYLIST NAME",
         "location": {
           "startingColumn": 25,
-          "startingLine": 845
+          "startingLine": 847
         }
       },
       {
@@ -279,7 +279,7 @@
         "key": "PLAYLIST COVER ARTWORK",
         "location": {
           "startingColumn": 25,
-          "startingLine": 854
+          "startingLine": 856
         }
       },
       {
@@ -287,7 +287,7 @@
         "key": "ADD IMAGE FROM DEVICE",
         "location": {
           "startingColumn": 25,
-          "startingLine": 904
+          "startingLine": 906
         }
       },
       {
@@ -295,7 +295,7 @@
         "key": "NAME",
         "location": {
           "startingColumn": 31,
-          "startingLine": 846
+          "startingLine": 848
         }
       },
       {
@@ -303,7 +303,7 @@
         "key": "DESCRIPTION (OPTIONAL)",
         "location": {
           "startingColumn": 31,
-          "startingLine": 849
+          "startingLine": 851
         }
       },
       {
@@ -311,7 +311,7 @@
         "key": "USE DEFAULT (AUTOMATIC)",
         "location": {
           "startingColumn": 34,
-          "startingLine": 859
+          "startingLine": 861
         }
       },
       {
@@ -319,7 +319,7 @@
         "key": "CHOOSE FROM PHOTOS",
         "location": {
           "startingColumn": 35,
-          "startingLine": 907
+          "startingLine": 909
         }
       },
       {
@@ -327,7 +327,7 @@
         "key": "CHOOSE FROM FILES",
         "location": {
           "startingColumn": 35,
-          "startingLine": 920
+          "startingLine": 922
         }
       },
       {
@@ -335,7 +335,7 @@
         "key": "CANCEL",
         "location": {
           "startingColumn": 28,
-          "startingLine": 936
+          "startingLine": 938
         }
       },
       {
@@ -343,7 +343,7 @@
         "key": "SAVE",
         "location": {
           "startingColumn": 28,
-          "startingLine": 943
+          "startingLine": 945
         }
       }
     ]

@@ -33,27 +33,20 @@ public struct AllTracksListView: View {
             if tracks.isEmpty {
                 let hasSources = !libraryStore.settings.linkedFolders.isEmpty || !libraryStore.settings.jellyfinServers.isEmpty
                 if (!libraryStore.isInitialLoading || !hasSources) && !libraryStore.searchModel.isSearching {
-                    EmptyStateView(
-                        title: "NO TRACKS FOUND",
-                        message: libraryStore.searchQuery.isEmpty
-                            ? (!hasSources
-                                ? "Link a music directory or Jellyfin server in Settings."
-                                : "No tracks found in library.")
-                            : "No tracks match '\(libraryStore.searchQuery)'."
-                    )
+                    EmptyStateView(title: "EMPTY", message: "")
                     .padding(.top, 24)
                 }
             } else {
                 let currentTrackID = playerService.currentTrack?.id
                 let isCurrentPlaying = playerService.playbackStatus.isPlaying
-                let nextTrackID = playerService.nextTrack?.id
-                let playNextSet = Set(playerService.playNextQueue.map { $0.id })
+                let nextTrackID = playerService.queueBadges.nextTrackID
+                let playNextSet = playerService.queueBadges.playNextTrackIDs
                 let isTapToPlayNext = libraryStore.settings.tapToPlayNext
-                let visibleCount = min(tracks.count, displayLimit)
+                let visibleTracks = Array(tracks.prefix(displayLimit))
+                let visibleCount = visibleTracks.count
 
                 LazyVStack(spacing: 4) {
-                    ForEach(0..<visibleCount, id: \.self) { index in
-                        let track = tracks[index]
+                    ForEach(Array(visibleTracks.enumerated()), id: \.element.id) { index, track in
                         AllTracksRowItem(
                             track: track,
                             indexNumber: index + 1,

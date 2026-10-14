@@ -6,7 +6,7 @@
 	<integer>13</integer>
 	<key>logs</key>
 	<dict>
-		<key>0F33C532-60BA-478B-B084-BD8AE844198E</key>
+		<key>2E2CC7FF-6EC2-454C-9A5A-E189916F5D6B</key>
 		<dict>
 			<key>className</key>
 			<string>IDECommandLineBuildLog</string>
@@ -15,7 +15,7 @@
 			<key>domainType</key>
 			<string>Xcode.IDEActivityLogDomainType.BuildLog</string>
 			<key>fileName</key>
-			<string>0F33C532-60BA-478B-B084-BD8AE844198E.xcactivitylog</string>
+			<string>2E2CC7FF-6EC2-454C-9A5A-E189916F5D6B.xcactivitylog</string>
 			<key>hasPrimaryLog</key>
 			<true/>
 			<key>primaryObservable</key>
@@ -29,7 +29,7 @@
 				<key>totalNumberOfTestFailures</key>
 				<integer>0</integer>
 				<key>totalNumberOfWarnings</key>
-				<integer>91</integer>
+				<integer>364</integer>
 			</dict>
 			<key>schemeIdentifier-containerName</key>
 			<string>MusicPlayer project</string>
@@ -40,15 +40,15 @@
 			<key>signature</key>
 			<string>Building project MusicPlayer with scheme MusicPlayer</string>
 			<key>timeStartedRecording</key>
-			<real>813582678.90580404</real>
+			<real>813607247.99268794</real>
 			<key>timeStoppedRecording</key>
-			<real>813582716.62188494</real>
+			<real>813607294.68845499</real>
 			<key>title</key>
 			<string>Building project MusicPlayer with scheme MusicPlayer</string>
 			<key>uniqueIdentifier</key>
-			<string>0F33C532-60BA-478B-B084-BD8AE844198E</string>
+			<string>2E2CC7FF-6EC2-454C-9A5A-E189916F5D6B</string>
 		</dict>
-		<key>825E3351-EA1E-419D-8503-302CFBF76BE3</key>
+		<key>8EAE9640-16DC-421E-8854-B6E1803FBB07</key>
 		<dict>
 			<key>className</key>
 			<string>IDECommandLineBuildLog</string>
@@ -57,21 +57,21 @@
 			<key>domainType</key>
 			<string>Xcode.IDEActivityLogDomainType.BuildLog</string>
 			<key>fileName</key>
-			<string>825E3351-EA1E-419D-8503-302CFBF76BE3.xcactivitylog</string>
+			<string>8EAE9640-16DC-421E-8854-B6E1803FBB07.xcactivitylog</string>
 			<key>hasPrimaryLog</key>
 			<true/>
 			<key>primaryObservable</key>
 			<dict>
 				<key>highLevelStatus</key>
-				<string>W</string>
+				<string>E</string>
 				<key>totalNumberOfAnalyzerIssues</key>
 				<integer>0</integer>
 				<key>totalNumberOfErrors</key>
-				<integer>0</integer>
+				<integer>1</integer>
 				<key>totalNumberOfTestFailures</key>
 				<integer>0</integer>
 				<key>totalNumberOfWarnings</key>
-				<integer>87</integer>
+				<integer>35</integer>
 			</dict>
 			<key>schemeIdentifier-containerName</key>
 			<string>MusicPlayer project</string>
@@ -82,13 +82,13 @@
 			<key>signature</key>
 			<string>Building project MusicPlayer with scheme MusicPlayer</string>
 			<key>timeStartedRecording</key>
-			<real>813582048.55600297</real>
+			<real>813607144.31287301</real>
 			<key>timeStoppedRecording</key>
-			<real>813582064.34332895</real>
+			<real>813607174.62120998</real>
 			<key>title</key>
 			<string>Building project MusicPlayer with scheme MusicPlayer</string>
 			<key>uniqueIdentifier</key>
-			<string>825E3351-EA1E-419D-8503-302CFBF76BE3</string>
+			<string>8EAE9640-16DC-421E-8854-B6E1803FBB07</string>
 		</dict>
 	</dict>
 </dict>

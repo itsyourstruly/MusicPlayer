@@ -291,11 +291,17 @@ public struct TrackRowView: View {
             }
             .offset(x: currentOffset)
             // Interactive drag and touch gesture handling
-            .highPriorityGesture(
-                isSwipeDisabled ? nil : DragGesture(minimumDistance: 24, coordinateSpace: .local)
+            .simultaneousGesture(
+                isSwipeDisabled ? nil : DragGesture(minimumDistance: 24, coordinateSpace: .global)
                     .updating($gestureDragOffset) { value, state, _ in
                         let translationX = value.translation.width
                         let translationY = value.translation.height
+
+                        // Yield immediately to system screen-edge swipe-to-go-back gesture
+                        if value.startLocation.x <= 44 && translationX > 0 {
+                            state = 0
+                            return
+                        }
 
                         // Immediately yield to vertical scrolling if any vertical motion occurs
                         if abs(translationY) > 4 && abs(translationY) * 1.2 >= abs(translationX) {
@@ -321,6 +327,16 @@ public struct TrackRowView: View {
                     .onEnded { value in
                         let translationX = value.translation.width
                         let translationY = value.translation.height
+
+                        // Yield immediately if swipe originated near the left screen edge
+                        if value.startLocation.x <= 44 && translationX > 0 {
+                            if dragOffset != 0 {
+                                withAnimation(.spring(response: 0.22, dampingFraction: 0.88)) {
+                                    dragOffset = 0
+                                }
+                            }
+                            return
+                        }
 
                         // Require clearly horizontal motion
                         let isSwipeRight = translationX >= leadingActivationThreshold && translationX > abs(translationY) * 1.8

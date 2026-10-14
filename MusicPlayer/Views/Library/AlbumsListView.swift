@@ -35,21 +35,13 @@ public struct AlbumsListView: View {
             if albums.isEmpty {
                 let hasSources = !libraryStore.settings.linkedFolders.isEmpty || !libraryStore.settings.jellyfinServers.isEmpty
                 if (!libraryStore.isInitialLoading || !hasSources) && !libraryStore.searchModel.isSearching {
-                    EmptyStateView(
-                        title: "NO ALBUMS FOUND",
-                        message: libraryStore.searchQuery.isEmpty
-                            ? (!hasSources
-                                ? "Link a music directory or Jellyfin server in Settings."
-                                : "No albums found in library.")
-                            : "No albums match '\(libraryStore.searchQuery)'."
-                    )
+                    EmptyStateView(title: "EMPTY", message: "")
                 }
             } else {
-                let visibleCount = min(albums.count, displayLimit)
+                let visibleAlbums = Array(albums.prefix(displayLimit))
 
                 LazyVGrid(columns: columns, spacing: 18) {
-                    ForEach(0..<visibleCount, id: \.self) { index in
-                        let album = albums[index]
+                    ForEach(Array(visibleAlbums.enumerated()), id: \.element.id) { index, album in
                         // Flag indicating if pinned
                         let isPinned = libraryStore.isAlbumPinned(album)
                         Button(action: {
@@ -98,7 +90,7 @@ public struct AlbumsListView: View {
                         .buttonStyle(.plain)
                         .albumContextMenu(album: album, libraryStore: libraryStore, playerService: playerService)
                         .onAppear {
-                            if index >= visibleCount - 20 && visibleCount < albums.count {
+                            if index >= visibleAlbums.count - 20 && visibleAlbums.count < albums.count {
                                 displayLimit = min(albums.count, displayLimit + 80)
                             }
                         }

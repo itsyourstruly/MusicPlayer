@@ -1510,6 +1510,12 @@ public final class LibraryStore {
                 return true
             }
 
+            // Fast path: server reported no changes, so skip the full library rebuild and saves.
+            if filteredUpserted.isEmpty && removedIDs.isEmpty {
+                AppLogger.library.info("Jellyfin sync: no changes for \(serverLink.serverName); skipped rebuild.")
+                return
+            }
+
             let newState = await LibraryRepository.shared.applyChangeSet(
                 upserted: filteredUpserted,
                 removedIDs: removedIDs,
@@ -1518,17 +1524,20 @@ public final class LibraryStore {
                 downloadedMetadataCache: self.downloadedMetadataCache
             )
             self.applyLoadedLibraryState(newState)
-            self.cachedFolderStats = Self.computeFolderStats(
-                tracks: self.tracks,
-                linkedFolders: self.settings.linkedFolders,
-                jellyfinServers: self.settings.jellyfinServers
-            )
-            self.settings.totalScannedFiles = self.tracks.count
+            let allTracks = self.tracks
+            let statsFolders = self.settings.linkedFolders
+            let statsServers = self.settings.jellyfinServers
+            let serverID = serverLink.id
+            let (stats, currentServerTracks) = await Task.detached(priority: .userInitiated) {
+                (LibraryStore.computeFolderStats(tracks: allTracks, linkedFolders: statsFolders, jellyfinServers: statsServers),
+                 allTracks.filter { $0.folderID == serverID })
+            }.value
+            self.cachedFolderStats = stats
+            self.settings.totalScannedFiles = allTracks.count
             saveLibrary()
 
             let serverBinURL = self.jellyfinServerCacheURL(for: serverLink.id)
             let serverJSONURL = self.jellyfinServerJSONURL(for: serverLink.id)
-            let currentServerTracks = self.tracks.filter { $0.folderID == serverLink.id }
             Task.detached(priority: .utility) {
                 Self.saveFast(currentServerTracks, to: serverBinURL, jsonURL: serverJSONURL)
             }
@@ -1676,6 +1685,8 @@ public final class LibraryStore {
         }.value
 
         _ = await progressTask.result
+        let tScanDone = Date()
+        AppLogger.library.info("SCAN TIMING: file scan finished, \(scannedTracks.count) tracks")
 
         var filteredTracks = scannedTracks
             .filter { !removedPaths.contains($0.url.standardizedFileURL.path) }
@@ -1735,10 +1746,21 @@ public final class LibraryStore {
             }
         }
 
+        AppLogger.library.info("SCAN TIMING: metadata reattach \(String(format: "%.2f", Date().timeIntervalSince(tScanDone)))s")
         let existingFolderIDs = Set(folderTracks.map(\.id))
         let scannedIDs = Set(filteredTracks.map(\.id))
         let removedFolderIDs = existingFolderIDs.subtracting(scannedIDs)
 
+        // Fast path: nothing in this folder changed, so skip the full library rebuild and saves.
+        if removedFolderIDs.isEmpty && Set(filteredTracks) == Set(folderTracks) {
+            self.settings.lastScanDate = Date()
+            self.scanProgress = 1.0
+            self.scanStatusText = "Scan complete for \(folderName). No changes."
+            AppLogger.library.info("Folder [\(folderName)] unchanged; skipped rebuild.")
+            return
+        }
+
+        let tRebuild = Date()
         let newState = await LibraryRepository.shared.applyChangeSet(
             upserted: filteredTracks,
             removedIDs: removedFolderIDs,
@@ -1747,15 +1769,21 @@ public final class LibraryStore {
             downloadedMetadataCache: metadataCache
         )
 
+        AppLogger.library.info("SCAN TIMING: library rebuild \(String(format: "%.2f", Date().timeIntervalSince(tRebuild)))s")
+        let tApply = Date()
         self.applyLoadedLibraryState(newState)
-        self.cachedFolderStats = Self.computeFolderStats(
-            tracks: self.tracks,
-            linkedFolders: self.settings.linkedFolders,
-            jellyfinServers: self.settings.jellyfinServers
-        )
+        AppLogger.library.info("SCAN TIMING: apply to UI \(String(format: "%.2f", Date().timeIntervalSince(tApply)))s")
+        let statsTracks = self.tracks
+        let statsFolders = self.settings.linkedFolders
+        let statsServers = self.settings.jellyfinServers
+        self.cachedFolderStats = await Task.detached(priority: .userInitiated) {
+            LibraryStore.computeFolderStats(tracks: statsTracks, linkedFolders: statsFolders, jellyfinServers: statsServers)
+        }.value
 
         // Cache baseline metadata for newly indexed tracks non-blockingly
+        let tCache = Date()
         self.cacheScannedTracks(filteredTracks)
+        AppLogger.library.info("SCAN TIMING: metadata cache \(String(format: "%.2f", Date().timeIntervalSince(tCache)))s, total after scan \(String(format: "%.2f", Date().timeIntervalSince(tScanDone)))s")
 
         self.settings.lastScanDate = Date()
         self.settings.totalScannedFiles = self.tracks.count
@@ -2194,6 +2222,7 @@ public final class LibraryStore {
             albumTitleBuckets[baseNormAlbum, default: []].append(item)
         }
 
+        let tBuild = Date()
         var rawAlbumClusters: [[Track]] = []
 
         // Process each album title bucket: merge tracks into unified albums
@@ -2242,6 +2271,7 @@ public final class LibraryStore {
             rawAlbumClusters.append(contentsOf: subClusters.map { $0.map { $0.track } })
         }
 
+        AppLogger.library.info("REBUILD TIMING: album clustering \(String(format: "%.2f", Date().timeIntervalSince(tBuild)))s")
         var newAlbums: [Album] = []
         newAlbums.reserveCapacity(rawAlbumClusters.count + standaloneSingleTracks.count)
 
@@ -2431,6 +2461,7 @@ public final class LibraryStore {
             $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending
         }
 
+        AppLogger.library.info("REBUILD TIMING: albums built \(String(format: "%.2f", Date().timeIntervalSince(tBuild)))s")
         // 2. High-Speed Inverted Index for Track -> Albums
         var trackIDToAlbumsMap: [UUID: [Album]] = [:]
         trackIDToAlbumsMap.reserveCapacity(workingTracks.count)
@@ -2505,18 +2536,16 @@ public final class LibraryStore {
                 let canonicalKey = ArtistParser.canonicalArtistKey(artistName)
                 guard !canonicalKey.isEmpty else { continue }
 
-                if var existing = artistTracksMap[canonicalKey] {
-                    if existing.seenTrackIDs.insert(track.id).inserted {
-                        existing.tracks.append(track)
-                    }
-                    existing.variantCounts[artistName, default: 0] += 1
-                    artistTracksMap[canonicalKey] = existing
-                } else {
-                    artistTracksMap[canonicalKey] = (variantCounts: [artistName: 1], tracks: [track], seenTrackIDs: [track.id])
+                // Mutate in place so the artist's track array isn't copied on every track (was O(n^2)).
+                let emptyEntry: (variantCounts: [String: Int], tracks: [Track], seenTrackIDs: Set<UUID>) = (variantCounts: [:], tracks: [], seenTrackIDs: [])
+                if artistTracksMap[canonicalKey, default: emptyEntry].seenTrackIDs.insert(track.id).inserted {
+                    artistTracksMap[canonicalKey, default: emptyEntry].tracks.append(track)
                 }
+                artistTracksMap[canonicalKey, default: emptyEntry].variantCounts[artistName, default: 0] += 1
             }
         }
 
+        AppLogger.library.info("REBUILD TIMING: artist grouping \(String(format: "%.2f", Date().timeIntervalSince(tBuild)))s")
         // 4. Instantaneous Artist Synthesis using Inverted Track-to-Album Map
         var newArtists: [Artist] = []
         newArtists.reserveCapacity(artistTracksMap.count)
@@ -2581,6 +2610,7 @@ public final class LibraryStore {
             }
         }
 
+        AppLogger.library.info("REBUILD TIMING: total \(String(format: "%.2f", Date().timeIntervalSince(tBuild)))s")
         return AlbumsAndArtistsResult(
             tracks: workingTracks,
             albums: sortedAlbums,

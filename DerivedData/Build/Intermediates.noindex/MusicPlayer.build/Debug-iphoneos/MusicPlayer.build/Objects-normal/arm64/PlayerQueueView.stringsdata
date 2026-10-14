@@ -7,15 +7,7 @@
         "key": "QUEUE",
         "location": {
           "startingColumn": 30,
-          "startingLine": 186
-        }
-      },
-      {
-        "comment": "",
-        "key": "PAST SONGS (%lld)",
-        "location": {
-          "startingColumn": 38,
-          "startingLine": 95
+          "startingLine": 270
         }
       },
       {
@@ -23,7 +15,15 @@
         "key": "NOW PLAYING",
         "location": {
           "startingColumn": 38,
-          "startingLine": 111
+          "startingLine": 53
+        }
+      },
+      {
+        "comment": "",
+        "key": "PAST SONGS (%lld)",
+        "location": {
+          "startingColumn": 46,
+          "startingLine": 110
         }
       },
       {
@@ -31,7 +31,7 @@
         "key": "CLEAR",
         "location": {
           "startingColumn": 22,
-          "startingLine": 231
+          "startingLine": 329
         }
       },
       {
@@ -39,7 +39,7 @@
         "key": "PLAYING",
         "location": {
           "startingColumn": 67,
-          "startingLine": 397
+          "startingLine": 427
         }
       },
       {
@@ -47,23 +47,23 @@
         "key": "PAUSED",
         "location": {
           "startingColumn": 79,
-          "startingLine": 397
+          "startingLine": 427
         }
       },
       {
         "comment": "",
         "key": "GO TO ARTIST",
         "location": {
-          "startingColumn": 30,
-          "startingLine": 440
+          "startingColumn": 26,
+          "startingLine": 469
         }
       },
       {
         "comment": "",
         "key": "GO TO ARTIST",
         "location": {
-          "startingColumn": 30,
-          "startingLine": 452
+          "startingColumn": 26,
+          "startingLine": 481
         }
       },
       {
@@ -71,39 +71,7 @@
         "key": "GO TO ALBUM",
         "location": {
           "startingColumn": 26,
-          "startingLine": 461
-        }
-      },
-      {
-        "comment": "",
-        "key": "MOVE TO QUEUE",
-        "location": {
-          "startingColumn": 22,
-          "startingLine": 509
-        }
-      },
-      {
-        "comment": "",
-        "key": "GO TO ARTIST",
-        "location": {
-          "startingColumn": 30,
-          "startingLine": 518
-        }
-      },
-      {
-        "comment": "",
-        "key": "GO TO ARTIST",
-        "location": {
-          "startingColumn": 30,
-          "startingLine": 530
-        }
-      },
-      {
-        "comment": "",
-        "key": "GO TO ALBUM",
-        "location": {
-          "startingColumn": 26,
-          "startingLine": 539
+          "startingLine": 489
         }
       },
       {
@@ -111,111 +79,63 @@
         "key": "NEXT",
         "location": {
           "startingColumn": 30,
-          "startingLine": 561
+          "startingLine": 546
         }
       },
       {
         "comment": "",
         "key": "REMOVE",
         "location": {
-          "startingColumn": 22,
-          "startingLine": 608
+          "startingColumn": 26,
+          "startingLine": 591
         }
       },
       {
         "comment": "",
         "key": "TO UP NEXT",
         "location": {
-          "startingColumn": 22,
-          "startingLine": 618
-        }
-      },
-      {
-        "comment": "",
-        "key": "MOVE TO UP NEXT",
-        "location": {
-          "startingColumn": 22,
-          "startingLine": 628
-        }
-      },
-      {
-        "comment": "",
-        "key": "GO TO ARTIST",
-        "location": {
-          "startingColumn": 30,
-          "startingLine": 637
-        }
-      },
-      {
-        "comment": "",
-        "key": "GO TO ARTIST",
-        "location": {
-          "startingColumn": 30,
-          "startingLine": 649
-        }
-      },
-      {
-        "comment": "",
-        "key": "GO TO ALBUM",
-        "location": {
-          "startingColumn": 26,
-          "startingLine": 658
-        }
-      },
-      {
-        "comment": "",
-        "key": "REMOVE FROM QUEUE",
-        "location": {
-          "startingColumn": 22,
-          "startingLine": 667
-        }
-      },
-      {
-        "comment": "",
-        "key": "NEXT",
-        "location": {
-          "startingColumn": 30,
-          "startingLine": 688
-        }
-      },
-      {
-        "comment": "",
-        "key": "REMOVE",
-        "location": {
-          "startingColumn": 22,
-          "startingLine": 735
+          "startingColumn": 46,
+          "startingLine": 601
         }
       },
       {
         "comment": "",
         "key": "TO QUEUE",
         "location": {
-          "startingColumn": 22,
-          "startingLine": 745
+          "startingColumn": 61,
+          "startingLine": 601
+        }
+      },
+      {
+        "comment": "",
+        "key": "MOVE TO UP NEXT",
+        "location": {
+          "startingColumn": 46,
+          "startingLine": 611
         }
       },
       {
         "comment": "",
         "key": "MOVE TO QUEUE",
         "location": {
-          "startingColumn": 22,
-          "startingLine": 755
+          "startingColumn": 66,
+          "startingLine": 611
         }
       },
       {
         "comment": "",
         "key": "GO TO ARTIST",
         "location": {
-          "startingColumn": 30,
-          "startingLine": 764
+          "startingColumn": 26,
+          "startingLine": 620
         }
       },
       {
         "comment": "",
         "key": "GO TO ARTIST",
         "location": {
-          "startingColumn": 30,
-          "startingLine": 776
+          "startingColumn": 26,
+          "startingLine": 632
         }
       },
       {
@@ -223,15 +143,23 @@
         "key": "GO TO ALBUM",
         "location": {
           "startingColumn": 26,
-          "startingLine": 785
+          "startingLine": 640
+        }
+      },
+      {
+        "comment": "",
+        "key": "REMOVE FROM QUEUE",
+        "location": {
+          "startingColumn": 46,
+          "startingLine": 646
         }
       },
       {
         "comment": "",
         "key": "REMOVE FROM UP NEXT",
         "location": {
-          "startingColumn": 22,
-          "startingLine": 794
+          "startingColumn": 68,
+          "startingLine": 646
         }
       }
     ]

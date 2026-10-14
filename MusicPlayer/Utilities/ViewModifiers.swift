@@ -211,6 +211,100 @@ public extension View {
     }
 }
 
+// MARK: - Interactive Swipe-to-Go-Back Navigation Enabler
+
+#if os(iOS)
+/// Attaches to UINavigationController to ensure interactive swipe-to-go-back
+/// takes precedence over child scroll views and drag gestures when initiated from the left screen edge.
+public struct InteractivePopGestureEnablerModifier: ViewModifier {
+    public init() {}
+
+    public func body(content: Content) -> some View {
+        content
+            .background(InteractivePopGestureHelperView())
+    }
+}
+
+private struct InteractivePopGestureHelperView: UIViewControllerRepresentable {
+    func makeUIViewController(context: Context) -> InteractivePopGestureController {
+        InteractivePopGestureController()
+    }
+
+    func updateUIViewController(_ uiViewController: InteractivePopGestureController, context: Context) {
+        uiViewController.configureNavigationController()
+    }
+
+    static func dismantleUIViewController(_ uiViewController: InteractivePopGestureController, coordinator: ()) {
+        uiViewController.tearDownNavigationController()
+    }
+}
+
+private final class InteractivePopGestureController: UIViewController, UIGestureRecognizerDelegate {
+    private weak var configuredNavController: UINavigationController?
+
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        configureNavigationController()
+    }
+
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        configureNavigationController()
+    }
+
+    override func didMove(toParent parent: UIViewController?) {
+        super.didMove(toParent: parent)
+        configureNavigationController()
+    }
+
+    func configureNavigationController() {
+        guard let nav = navigationController else { return }
+        if configuredNavController !== nav {
+            configuredNavController = nav
+        }
+        nav.interactivePopGestureRecognizer?.isEnabled = true
+        nav.interactivePopGestureRecognizer?.delegate = self
+    }
+
+    func tearDownNavigationController() {
+        if let nav = configuredNavController, nav.interactivePopGestureRecognizer?.delegate === self {
+            nav.interactivePopGestureRecognizer?.delegate = nil
+        }
+        configuredNavController = nil
+    }
+
+    // MARK: - UIGestureRecognizerDelegate
+
+    func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        guard let nav = configuredNavController ?? navigationController else { return false }
+        return nav.viewControllers.count > 1
+    }
+
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldBeRequiredToFailBy otherGestureRecognizer: UIGestureRecognizer) -> Bool {
+        guard let nav = configuredNavController ?? navigationController else { return false }
+        return gestureRecognizer == nav.interactivePopGestureRecognizer && nav.viewControllers.count > 1
+    }
+
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
+        return false
+    }
+}
+
+public extension View {
+    /// Ensures that swiping right from the left screen edge reliably triggers interactive pop navigation,
+    /// preventing child scroll views and gestures from hijacking edge swipes.
+    func enableInteractivePopGesture() -> some View {
+        modifier(InteractivePopGestureEnablerModifier())
+    }
+}
+#else
+public extension View {
+    func enableInteractivePopGesture() -> some View {
+        self
+    }
+}
+#endif
+
 // MARK: - Cross-Platform Compatibility Shims for macOS
 
 #if !os(iOS)

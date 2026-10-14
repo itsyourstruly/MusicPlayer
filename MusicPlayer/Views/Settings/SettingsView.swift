@@ -316,7 +316,7 @@ public struct SettingsView: View {
             NavigationLink(destination: FolderSettingsView(libraryStore: libraryStore)) {
                 VStack(alignment: .leading, spacing: 6) {
                     HStack(alignment: .top) {
-                        Text("FOLDER")
+                        Text("SOURCES")
                             .font(.system(size: 15, weight: .black, design: .monospaced))
                             .foregroundStyle(Color.black)
 
@@ -327,7 +327,11 @@ public struct SettingsView: View {
                             .foregroundStyle(Color.black.opacity(0.6))
                     }
 
-                    Text(libraryStore.settings.linkedFolderName ?? "NO FOLDER LINKED")
+                    Text({
+                        let names = libraryStore.settings.linkedFolders.map { $0.name.uppercased() }
+                            + libraryStore.settings.jellyfinServers.map { $0.serverName.uppercased() }
+                        return names.isEmpty ? "NO SOURCES" : names.joined(separator: " - ")
+                    }())
                         .font(.system(size: 11.5, weight: .bold, design: .monospaced))
                         .foregroundStyle(Color.black.opacity(0.7))
                         .lineLimit(1)

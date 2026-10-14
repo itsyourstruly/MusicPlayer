@@ -456,7 +456,7 @@ public final class JellyfinSyncService: Sendable {
         progressHandler: ((Int, Int) -> Void)?
     ) async throws -> [JellyfinAudioItem] {
         let firstPageLimit = 100
-        let pageLimit = 250
+        let pageLimit = 1000
 
         // Fetch first page to obtain items and total count quickly
         let firstPage = try await fetchItemsPage(
@@ -486,7 +486,7 @@ public final class JellyfinSyncService: Sendable {
         }
 
         let remainingIndices = Array(stride(from: firstPageLimit, to: totalRecordCount, by: pageLimit))
-        let maxConcurrent = 2
+        let maxConcurrent = 4
         var indexIterator = remainingIndices.makeIterator()
         var lastProgressDate = Date()
 

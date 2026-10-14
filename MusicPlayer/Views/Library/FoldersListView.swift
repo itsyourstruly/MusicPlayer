@@ -88,12 +88,7 @@ public struct FoldersListView: View {
             )
 
             if allSources.isEmpty {
-                EmptyStateView(
-                    title: isSourcesPlural ? "NO SOURCES FOUND" : "NO FOLDERS FOUND",
-                    message: libraryStore.searchQuery.isEmpty
-                        ? "Link music folders or add a Jellyfin server in Settings to see them here."
-                        : "No sources match '\(libraryStore.searchQuery)'."
-                )
+                EmptyStateView(title: "EMPTY", message: "")
                 .padding(.top, 24)
             } else {
                 LazyVStack(alignment: .leading, spacing: 14) {
@@ -109,7 +104,6 @@ public struct FoldersListView: View {
 
     private func sourceRow(for source: SourceItem) -> some View {
         let isEnabled = libraryStore.isFolderEnabled(source.id)
-        let isThisScanning = libraryStore.currentlyScanningFolderID == source.id
 
         return Button {
             HapticFeedback.selectionChanged()
@@ -117,64 +111,13 @@ public struct FoldersListView: View {
                 libraryStore.toggleFolderEnabled(source.id)
             }
         } label: {
-            HStack(spacing: 12) {
-                // Source Icon
-                Image(systemName: source.isJellyfin ? "server.rack" : "folder.fill")
-                    .font(.system(size: 20))
-                    .foregroundStyle(
-                        isEnabled
-                            ? (source.isJellyfin ? Color.blue : appTheme.accentColor)
-                            : Color.secondary.opacity(0.35)
-                    )
-                    .frame(width: 28, height: 28)
-
-                VStack(alignment: .leading, spacing: 3) {
-                    HStack(spacing: 8) {
-                        Text(source.name)
-                            .font(.system(size: 19, weight: .bold))
-                            .foregroundStyle(isEnabled ? Color.primary : Color.secondary.opacity(0.35))
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.85)
-
-                        if isThisScanning {
-                            ProgressView()
-                                .progressViewStyle(CircularProgressViewStyle(tint: appTheme.accentColor))
-                                .scaleEffect(0.65)
-                                .frame(width: 12, height: 12)
-                        }
-                    }
-
-                    HStack(spacing: 6) {
-                        Text(source.typeLabel)
-                            .font(.system(size: 10, weight: .bold, design: .monospaced))
-                            .foregroundStyle(isEnabled ? appTheme.accentColor : Color.secondary.opacity(0.35))
-
-                        Text("•")
-                            .font(.system(size: 10))
-                            .foregroundStyle(.secondary.opacity(0.5))
-
-                        Text("\(source.trackCount) TRACKS")
-                            .font(.system(size: 10, design: .monospaced))
-                            .foregroundStyle(.secondary)
-
-                        if source.albumCount > 0 {
-                            Text("•")
-                                .font(.system(size: 10))
-                                .foregroundStyle(.secondary.opacity(0.5))
-
-                            Text("\(source.albumCount) ALBUMS")
-                                .font(.system(size: 10, design: .monospaced))
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                }
-
-                Spacer()
-
-                // Checkmark / State Indicator
-                Image(systemName: isEnabled ? "checkmark.circle.fill" : "circle")
-                    .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(isEnabled ? appTheme.accentColor : Color.secondary.opacity(0.35))
+            HStack {
+                Text(source.name)
+                    .font(.system(size: 19, weight: .bold))
+                    .foregroundStyle(isEnabled ? Color.white : Color.secondary.opacity(0.35))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
+                Spacer(minLength: 0)
             }
             .contentShape(Rectangle())
             .padding(.horizontal, 16)

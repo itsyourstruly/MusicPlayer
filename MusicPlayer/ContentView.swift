@@ -122,8 +122,8 @@ public struct ContentView: View {
         .onChange(of: libraryStore.settings.rememberPlaybackPositionMinMinutes) { _, minMinutes in
             playerService.rememberPlaybackPositionMinMinutes = minMinutes
         }
-        .onChange(of: libraryStore.settings.downloadNextSongOnWiFi) { _, isWiFiDownload in
-            playerService.downloadNextSongOnWiFi = isWiFiDownload
+        .onChange(of: libraryStore.settings.downloadNextSongOnWiFi) { _, _ in
+            playerService.downloadNextSongOnWiFi = true
         }
         .preferredColorScheme(.dark)
         #else
@@ -142,6 +142,7 @@ public struct ContentView: View {
                             showingSettings = true
                         }
                     )
+                    .enableInteractivePopGesture()
                 }
                 .tabItem {
                     Label("Home", systemImage: "house.fill")
@@ -158,6 +159,7 @@ public struct ContentView: View {
                             showingSettings = true
                         }
                     )
+                    .enableInteractivePopGesture()
                 }
                 .tabItem {
                     Label("Library", systemImage: "music.note.list")
@@ -210,8 +212,8 @@ public struct ContentView: View {
         .onChange(of: libraryStore.settings.rememberPlaybackPositionMinMinutes) { _, minMinutes in
             playerService.rememberPlaybackPositionMinMinutes = minMinutes
         }
-        .onChange(of: libraryStore.settings.downloadNextSongOnWiFi) { _, isWiFiDownload in
-            playerService.downloadNextSongOnWiFi = isWiFiDownload
+        .onChange(of: libraryStore.settings.downloadNextSongOnWiFi) { _, _ in
+            playerService.downloadNextSongOnWiFi = true
         }
         .onChange(of: libraryStore.settings.jellyfinServers) { _, servers in
             playerService.jellyfinServers = servers
@@ -260,14 +262,18 @@ public struct ContentView: View {
         playerService.autoPlayNext = libraryStore.settings.autoPlayNext
         playerService.rememberPlaybackPosition = libraryStore.settings.rememberPlaybackPosition
         playerService.rememberPlaybackPositionMinMinutes = libraryStore.settings.rememberPlaybackPositionMinMinutes
-        playerService.downloadNextSongOnWiFi = libraryStore.settings.downloadNextSongOnWiFi
+        playerService.downloadNextSongOnWiFi = true
         playerService.jellyfinServers = libraryStore.settings.jellyfinServers
-        playerService.autoDownloadOnPlay = libraryStore.settings.autoDownloadOnPlay
-        playerService.downloadOnCellular = libraryStore.settings.downloadOnCellular
-        JellyfinDownloadManager.shared.allowsCellularAccess = libraryStore.settings.downloadOnCellular
+        playerService.autoDownloadOnPlay = false
+        playerService.downloadOnCellular = true
+        JellyfinDownloadManager.shared.allowsCellularAccess = true
 
         CloudDownloadCenter.shared.onTrackDownloaded = { [weak libraryStore] trackID, url in
             libraryStore?.upgradeTrackAfterDownload(trackID: trackID, fileURL: url)
+        }
+
+        playerService.onResolveTrack = { [weak libraryStore] trackID in
+            libraryStore?.tracksByID[trackID]
         }
 
         // Weak capture prevents a retain cycle between the service and the store

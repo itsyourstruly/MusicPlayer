@@ -269,13 +269,12 @@ public struct ArtistDetailView: View {
 
                     let currentTrackID = playerService.currentTrack?.id
                     let isCurrentPlaying = playerService.playbackStatus.isPlaying
-                    let nextTrackID = playerService.nextTrack?.id
-                    let playNextSet = Set(playerService.playNextQueue.map { $0.id })
+                    let nextTrackID = playerService.queueBadges.nextTrackID
+                    let playNextSet = playerService.queueBadges.playNextTrackIDs
                     let isTapToPlayNext = libraryStore.settings.tapToPlayNext
 
                     LazyVStack(spacing: 4) {
-                        ForEach(tracksList.indices, id: \.self) { index in
-                            let track = tracksList[index]
+                        ForEach(Array(tracksList.enumerated()), id: \.element.id) { index, track in
                             let count = libraryStore.playCount(for: track.id)
                             let trailingLabel = showingFavorites ? (count == 1 ? "1 PLAY" : "\(count) PLAYS") : nil
 
@@ -377,6 +376,7 @@ public struct ArtistDetailView: View {
                 playerService: playerService
             )
         }
+        .enableInteractivePopGesture()
     }
 
     // Playlist picker sheet

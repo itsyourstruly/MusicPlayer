@@ -255,9 +255,7 @@ public struct GlobalSearchView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(libraryStore.settings.appTheme.backgroundColor.ignoresSafeArea())
-        #if os(iOS)
-        .background(InteractivePopGestureEnabler())
-        #endif
+
         .simultaneousGesture(
             DragGesture(minimumDistance: 20)
                 .onEnded { value in
@@ -371,6 +369,7 @@ public struct GlobalSearchView: View {
                 dispatchSearch(for: q)
             }
         }
+        .enableInteractivePopGesture()
     }
 
     // MARK: - Library Tree Content View
@@ -803,22 +802,7 @@ public struct GlobalSearchView: View {
     }
 
     private var emptyResultsView: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "slash.circle")
-                .font(.system(size: 32))
-                .foregroundStyle(.tertiary)
-                .padding(.top, 40)
-
-            Text("No results for \"\(trimmedQuery)\"")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(Color.primary)
-
-            Text("Try searching for alternative spellings or part of a name.")
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 260)
-        }
+        EmptyStateView(title: "EMPTY", message: "")
     }
 
     private var emptyOnlineResultsView: some View {
@@ -2016,52 +2000,3 @@ public struct LibrarySearchResultsContainer: View, Equatable {
         }
     }
 }
-
-// MARK: - Interactive Pop Gesture Enabler
-
-#if os(iOS)
-private struct InteractivePopGestureEnabler: UIViewControllerRepresentable {
-    func makeUIViewController(context: Context) -> UIViewController {
-        let vc = UIViewController()
-        DispatchQueue.main.async {
-            if let nav = vc.navigationController {
-                context.coordinator.navigationController = nav
-                nav.interactivePopGestureRecognizer?.isEnabled = true
-                nav.interactivePopGestureRecognizer?.delegate = context.coordinator
-            }
-        }
-        return vc
-    }
-
-    func updateUIViewController(_ uiViewController: UIViewController, context: Context) {
-        DispatchQueue.main.async {
-            if let nav = uiViewController.navigationController {
-                context.coordinator.navigationController = nav
-                nav.interactivePopGestureRecognizer?.isEnabled = true
-                nav.interactivePopGestureRecognizer?.delegate = context.coordinator
-            }
-        }
-    }
-
-    static func dismantleUIViewController(_ uiViewController: UIViewController, coordinator: Coordinator) {
-        coordinator.navigationController?.interactivePopGestureRecognizer?.delegate = nil
-    }
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator()
-    }
-
-    class Coordinator: NSObject, UIGestureRecognizerDelegate {
-        weak var navigationController: UINavigationController?
-
-        func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
-            let nav = navigationController ?? (gestureRecognizer.view?.next as? UINavigationController)
-            return (nav?.viewControllers.count ?? 2) > 1
-        }
-
-        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
-            false
-        }
-    }
-}
-#endif

@@ -8,6 +8,32 @@ import os
 import CoreAudio
 #endif
 
+/// Lightweight, stable identifier and track reference for an item in the playback queue.
+public struct QueueEntry: Identifiable, Sendable, Equatable, Hashable {
+    public let id: UUID
+    public let trackID: UUID
+
+    public init(id: UUID = UUID(), trackID: UUID) {
+        self.id = id
+        self.trackID = trackID
+    }
+}
+
+/// Lightweight observable model publishing queue badge states so list rows do not observe the entire player service.
+@Observable
+@MainActor
+public final class QueueBadgesModel {
+    public var playNextTrackIDs: Set<UUID> = []
+    public var nextTrackID: UUID? = nil
+
+    public init() {}
+
+    public func update(playNextEntries: [QueueEntry], nextTrackID: UUID?) {
+        self.playNextTrackIDs = Set(playNextEntries.map { $0.trackID })
+        self.nextTrackID = nextTrackID
+    }
+}
+
 /// High-performance, concurrency-safe audio playback manager isolated to the `@MainActor`.
 /// Leverages AVFoundation, modern Observation, and MediaPlayer Remote Command integration.
 @Observable
@@ -49,16 +75,54 @@ public final class AudioPlayerService {
             progress.duration = duration
         }
     }
+    public private(set) var queueBadges = QueueBadgesModel()
+
+    @ObservationIgnored private var localTrackLookupMap: [UUID: Track] = [:]
+    public var onResolveTrack: ((UUID) -> Track?)? = nil
+
+    /// Registers one or more tracks into the local fast lookup table
+    public func registerTracks(_ tracks: [Track]) {
+        for t in tracks {
+            localTrackLookupMap[t.id] = t
+        }
+    }
+
+    /// Resolves a track by its UUID from local cache, current playing track, or external store
+    public func track(for trackID: UUID) -> Track? {
+        if let local = localTrackLookupMap[trackID] {
+            return local
+        }
+        if let current = currentTrack, current.id == trackID {
+            return current
+        }
+        if let resolved = onResolveTrack?(trackID) {
+            return resolved
+        }
+        return nil
+    }
+
+    /// Resolves a track from a queue entry
+    public func track(for entry: QueueEntry) -> Track? {
+        track(for: entry.trackID)
+    }
+
+    /// Updates the queue badges model with latest playNext set and next track ID
+    public func updateQueueBadges() {
+        let nextID = nextPlaybackTarget()?.track.id
+        queueBadges.update(playNextEntries: playNextQueue, nextTrackID: nextID)
+    }
+
     // Upcoming track queue
-    public private(set) var queue: [Track] = [] {
+    public private(set) var queue: [QueueEntry] = [] {
         didSet {
+            updateQueueBadges()
             prewarmNextTrackIfNeeded()
         }
     }
     // Index of current track in active queue
     public private(set) var currentIndex: Int? {
         didSet {
-            prewarmNextTrackIfNeeded()
+            updateQueueBadges()
         }
     }
     // Active repeat configuration (off, all, one)
@@ -164,8 +228,9 @@ public final class AudioPlayerService {
     @ObservationIgnored private var localPlaybackPositions: [UUID: TimeInterval] = [:]
     
     // Priority queue for tracks explicitly marked to play next
-    public var playNextQueue: [Track] = [] {
+    public var playNextQueue: [QueueEntry] = [] {
         didSet {
+            updateQueueBadges()
             prewarmNextTrackIfNeeded()
         }
     }
@@ -222,6 +287,7 @@ public final class AudioPlayerService {
     // Pre-warming state for instant zero-latency track transitions
     @ObservationIgnored private var prewarmedTrackID: UUID?
     @ObservationIgnored private var prewarmedPlayerItem: AVPlayerItem?
+    @ObservationIgnored private var prewarmingTrackID: UUID?
     @ObservationIgnored private var prewarmTask: Task<Void, Never>?
     
     // MARK: - Playback Position Helpers
@@ -331,12 +397,15 @@ public final class AudioPlayerService {
     @ObservationIgnored private var timeObserverToken: Any?
     @ObservationIgnored private var playerItemEndObserver: (any NSObjectProtocol)?
     @ObservationIgnored private var playerItemFailedObserver: (any NSObjectProtocol)?
+    @ObservationIgnored private var playerItemErrorLogObserver: (any NSObjectProtocol)?
+    @ObservationIgnored private var playerItemAccessLogObserver: (any NSObjectProtocol)?
+    public private(set) var lastPlaybackError: String?
     @ObservationIgnored private var itemStatusObserver: NSKeyValueObservation?
     @ObservationIgnored private var playerTimeControlObserver: NSKeyValueObservation?
     @ObservationIgnored private var audioInterruptionObserver: (any NSObjectProtocol)?
     @ObservationIgnored private var audioRouteChangeObserver: (any NSObjectProtocol)?
     @ObservationIgnored private var mediaServicesResetObserver: (any NSObjectProtocol)?
-    @ObservationIgnored private var originalQueue: [Track] = []
+    @ObservationIgnored private var originalQueue: [QueueEntry] = []
     @ObservationIgnored private var activeTrackSecurityScopeURL: URL?
     @ObservationIgnored private var hasCountedCurrentPlay: Bool = false
     @ObservationIgnored private var playbackAccumulatedTime: TimeInterval = 0
@@ -352,6 +421,11 @@ public final class AudioPlayerService {
 #if os(iOS)
     @ObservationIgnored private var appLifecycleObservers: [any NSObjectProtocol] = []
 #endif
+
+    // WAV Diagnostic state
+    @ObservationIgnored private var wavDiagnosticPlayer: AVPlayer?
+    @ObservationIgnored private var wavDiagnosticObserver: NSKeyValueObservation?
+    @ObservationIgnored private var wavDiagnosticTimeoutTask: Task<Void, Never>?
     
     // Initialize with configured properties
     public init() {
@@ -393,6 +467,14 @@ public final class AudioPlayerService {
             NotificationCenter.default.removeObserver(failedObs)
             playerItemFailedObserver = nil
         }
+        if let errLogObs = playerItemErrorLogObserver {
+            NotificationCenter.default.removeObserver(errLogObs)
+            playerItemErrorLogObserver = nil
+        }
+        if let accLogObs = playerItemAccessLogObserver {
+            NotificationCenter.default.removeObserver(accLogObs)
+            playerItemAccessLogObserver = nil
+        }
         itemStatusObserver?.invalidate()
         itemStatusObserver = nil
         itemLikelyToKeepUpObserver?.invalidate()
@@ -409,6 +491,12 @@ public final class AudioPlayerService {
         boundaryObserverTokens.removeAll()
         playerTimeControlObserver?.invalidate()
         playerTimeControlObserver = nil
+        wavDiagnosticTimeoutTask?.cancel()
+        wavDiagnosticTimeoutTask = nil
+        wavDiagnosticObserver?.invalidate()
+        wavDiagnosticObserver = nil
+        wavDiagnosticPlayer?.pause()
+        wavDiagnosticPlayer = nil
         player?.pause()
         player = nil
         if let intObs = audioInterruptionObserver {
@@ -462,14 +550,14 @@ public final class AudioPlayerService {
 
     /// Returns the next playback target tuple, prioritizing Up Next (playNextQueue), then repeat and queue order.
     public func nextPlaybackTarget() -> (track: Track, isFromPlayNext: Bool, nextIndex: Int?)? {
-        if let firstPlayNext = playNextQueue.first {
-            return (track: firstPlayNext, isFromPlayNext: true, nextIndex: currentIndex)
+        if let firstPlayNext = playNextQueue.first, let t = track(for: firstPlayNext) {
+            return (track: t, isFromPlayNext: true, nextIndex: currentIndex)
         }
         guard let index = currentIndex, !queue.isEmpty else { return nil }
-        if index + 1 < queue.count {
-            return (track: queue[index + 1], isFromPlayNext: false, nextIndex: index + 1)
-        } else if repeatMode == .all {
-            return (track: queue[0], isFromPlayNext: false, nextIndex: 0)
+        if index + 1 < queue.count, let t = track(for: queue[index + 1]) {
+            return (track: t, isFromPlayNext: false, nextIndex: index + 1)
+        } else if repeatMode == .all, let first = queue.first, let t = track(for: first) {
+            return (track: t, isFromPlayNext: false, nextIndex: 0)
         }
         return nil
     }
@@ -478,18 +566,20 @@ public final class AudioPlayerService {
     
     /// Plays a track within the active queue: inserts immediately after the current song and starts playback.
     public func playInCurrentQueue(track: Track) {
+        registerTracks([track])
+        let entry = QueueEntry(trackID: track.id)
         if smoothSkippingEnabled && playbackStatus == .playing && currentTrack?.id != track.id {
             guard !queue.isEmpty, let idx = currentIndex else {
-                performPlayInCurrentQueue(track: track)
+                performPlay(track: track, inQueue: [track], startIndex: 0)
                 return
             }
             let insertIndex = idx + 1
             startStaggeredSkipTransition(to: track, nextIndex: insertIndex) { [weak self] in
                 guard let self = self else { return }
                 if insertIndex <= self.queue.count {
-                    self.queue.insert(track, at: insertIndex)
+                    self.queue.insert(entry, at: insertIndex)
                 } else {
-                    self.queue.append(track)
+                    self.queue.append(entry)
                 }
                 self.currentIndex = insertIndex
             }
@@ -501,17 +591,17 @@ public final class AudioPlayerService {
     private func performPlayInCurrentQueue(track: Track) {
         cancelCrossfade()
         cancelStaggeredTransition()
-        // Ensure preconditions are met before proceeding
+        registerTracks([track])
+        let entry = QueueEntry(trackID: track.id)
         guard !queue.isEmpty, let idx = currentIndex else {
-            performPlay(track: track, inQueue: [], startIndex: nil)
+            performPlay(track: track, inQueue: [track], startIndex: 0)
             return
         }
-        // Insert index
         let insertIndex = idx + 1
         if insertIndex <= queue.count {
-            queue.insert(track, at: insertIndex)
+            queue.insert(entry, at: insertIndex)
         } else {
-            queue.append(track)
+            queue.append(entry)
         }
         self.currentIndex = insertIndex
         loadAndPlay(track: track)
@@ -519,17 +609,22 @@ public final class AudioPlayerService {
     
     /// Begins playback of a specific track within a provided playlist or queue context.
     public func play(track: Track, inQueue newQueue: [Track] = [], startIndex: Int? = nil) {
+        registerTracks([track])
+        if !newQueue.isEmpty {
+            registerTracks(newQueue)
+        }
         if playTrackInCurrentQueue && !queue.isEmpty && currentIndex != nil {
             playInCurrentQueue(track: track)
             return
         }
+        let queueEntries = newQueue.map { QueueEntry(trackID: $0.id) }
+        let targetIdx = startIndex ?? newQueue.firstIndex(where: { $0.id == track.id })
         if smoothSkippingEnabled && playbackStatus == .playing && currentTrack?.id != track.id {
-            let targetIdx = startIndex ?? newQueue.firstIndex(where: { $0.id == track.id })
             startStaggeredSkipTransition(to: track, nextIndex: targetIdx) { [weak self] in
                 guard let self = self else { return }
-                if !newQueue.isEmpty {
-                    self.originalQueue = newQueue
-                    self.queue = newQueue
+                if !queueEntries.isEmpty {
+                    self.originalQueue = queueEntries
+                    self.queue = queueEntries
                     self.currentIndex = targetIdx
                 }
             }
@@ -540,38 +635,52 @@ public final class AudioPlayerService {
 
     private func performPlay(track: Track, inQueue newQueue: [Track], startIndex: Int?) {
         cancelCrossfade()
-        // Serial queue for active queue
-        let activeQueue = newQueue.isEmpty ? [track] : newQueue
-        self.originalQueue = activeQueue
+        registerTracks([track])
+        if !newQueue.isEmpty {
+            registerTracks(newQueue)
+        }
+        let entries = newQueue.isEmpty ? [QueueEntry(trackID: track.id)] : newQueue.map { QueueEntry(trackID: $0.id) }
+        self.originalQueue = entries
         
         if shuffleMode == .on {
-            // Shuffled
-            var shuffled = activeQueue
-            // Keep the selected track at the head of the shuffled queue
-            if let idx = shuffled.firstIndex(where: { $0.id == track.id }) {
-                shuffled.remove(at: idx)
-                shuffled.insert(track, at: 0)
+            var shuffled = entries
+            if let idx = shuffled.firstIndex(where: { $0.trackID == track.id }) {
+                let first = shuffled.remove(at: idx)
+                shuffled.insert(first, at: 0)
             }
             self.queue = shuffled
             self.currentIndex = 0
         } else {
-            self.queue = activeQueue
-            self.currentIndex = startIndex ?? activeQueue.firstIndex(where: { $0.id == track.id }) ?? 0
+            self.queue = entries
+            self.currentIndex = startIndex ?? entries.firstIndex(where: { $0.trackID == track.id }) ?? 0
         }
         
         loadAndPlay(track: track)
+    }
+
+    /// Sets the queue directly from existing QueueEntry items without copying Track models
+    public func setQueue(_ entries: [QueueEntry], currentIndex: Int?) {
+        self.queue = entries
+        self.originalQueue = entries
+        self.currentIndex = currentIndex
+    }
+
+    /// Plays a track identified by its QueueEntry UUID
+    public func playQueueEntry(id entryID: UUID) {
+        guard let index = queue.firstIndex(where: { $0.id == entryID }) else { return }
+        playTrackInQueue(at: index)
     }
     
     /// Remaps track IDs across active playback queues during migration.
     public func remapTrackIDs(using map: [UUID: UUID]) {
         for i in 0..<queue.count {
-            if let newID = map[queue[i].id] {
-                queue[i] = queue[i].withIdentity(id: newID, relativePath: queue[i].relativePath, metadataSource: queue[i].metadataSource, tagSnapshot: queue[i].tagSnapshot)
+            if let newID = map[queue[i].trackID] {
+                queue[i] = QueueEntry(id: queue[i].id, trackID: newID)
             }
         }
         for i in 0..<playNextQueue.count {
-            if let newID = map[playNextQueue[i].id] {
-                playNextQueue[i] = playNextQueue[i].withIdentity(id: newID, relativePath: playNextQueue[i].relativePath, metadataSource: playNextQueue[i].metadataSource, tagSnapshot: playNextQueue[i].tagSnapshot)
+            if let newID = map[playNextQueue[i].trackID] {
+                playNextQueue[i] = QueueEntry(id: playNextQueue[i].id, trackID: newID)
             }
         }
         if let cur = currentTrack, let newID = map[cur.id] {
@@ -594,7 +703,10 @@ public final class AudioPlayerService {
         if let player = player {
             player.defaultRate = clamped
             if let currentItem = player.currentItem, let currentURL = currentTrack?.url {
-                currentItem.audioTimePitchAlgorithm = appropriateTimePitchAlgorithm(for: currentURL)
+                if let algo = appropriateTimePitchAlgorithm(for: currentURL) {
+                    currentItem.audioTimePitchAlgorithm = algo
+                }
+                AppLogger.audio.info("Applied live playback speed: \(clamped)x, item audioTimePitchAlgorithm: \(currentItem.audioTimePitchAlgorithm.rawValue), EqualizerManager.playbackSpeed: \(EqualizerManager.shared.playbackSpeed)")
             }
             if playbackStatus == .playing || player.timeControlStatus == .playing {
                 player.rate = clamped
@@ -609,7 +721,7 @@ public final class AudioPlayerService {
     public func play() {
         // Ensure preconditions are met before proceeding
         guard let player = player, player.currentItem != nil else {
-            if let track = currentTrack ?? queue.first {
+            if let track = currentTrack ?? (queue.first.flatMap { track(for: $0) }) {
                 loadAndPlay(track: track)
             }
             return
@@ -748,7 +860,8 @@ public final class AudioPlayerService {
     private func getNextTrackInfo() -> (track: Track, index: Int?, commit: () -> Void)? {
         // 1. Dedicated Play Next queue
         if !playNextQueue.isEmpty {
-            let nextSong = playNextQueue[0]
+            let nextEntry = playNextQueue[0]
+            guard let nextSong = track(for: nextEntry) else { return nil }
             return (nextSong, currentIndex, { [weak self] in
                 guard let self = self, !self.playNextQueue.isEmpty else { return }
                 self.playNextQueue.removeFirst()
@@ -758,12 +871,12 @@ public final class AudioPlayerService {
         // 2. Standard queue
         guard !queue.isEmpty, let idx = currentIndex else { return nil }
         let nextIdx = idx + 1
-        if nextIdx < queue.count {
-            return (queue[nextIdx], nextIdx, { [weak self] in
+        if nextIdx < queue.count, let nextSong = track(for: queue[nextIdx]) {
+            return (nextSong, nextIdx, { [weak self] in
                 self?.currentIndex = nextIdx
             })
-        } else if repeatMode == .all {
-            return (queue[0], 0, { [weak self] in
+        } else if repeatMode == .all, let first = queue.first, let firstSong = track(for: first) {
+            return (firstSong, 0, { [weak self] in
                 self?.currentIndex = 0
             })
         }
@@ -777,8 +890,10 @@ public final class AudioPlayerService {
         
         // 1. Play from dedicated Play Next queue if available
         if !playNextQueue.isEmpty {
-            let nextSong = playNextQueue.removeFirst()
-            loadAndPlay(track: nextSong)
+            let nextEntry = playNextQueue.removeFirst()
+            if let nextSong = track(for: nextEntry) {
+                loadAndPlay(track: nextSong)
+            }
             return
         }
         
@@ -788,10 +903,14 @@ public final class AudioPlayerService {
         let nextIdx = idx + 1
         if nextIdx < queue.count {
             currentIndex = nextIdx
-            loadAndPlay(track: queue[nextIdx])
+            if let nextSong = track(for: queue[nextIdx]) {
+                loadAndPlay(track: nextSong)
+            }
         } else if repeatMode == .all {
             currentIndex = 0
-            loadAndPlay(track: queue[0])
+            if let first = queue.first, let firstSong = track(for: first) {
+                loadAndPlay(track: firstSong)
+            }
         } else {
             pause(smooth: false)
             seek(to: 0)
@@ -826,13 +945,13 @@ public final class AudioPlayerService {
     private func getPreviousTrackInfo() -> (track: Track, index: Int?, commit: () -> Void)? {
         guard !queue.isEmpty, let idx = currentIndex else { return nil }
         let prevIdx = idx - 1
-        if prevIdx >= 0 {
-            return (queue[prevIdx], prevIdx, { [weak self] in
+        if prevIdx >= 0, let prevSong = track(for: queue[prevIdx]) {
+            return (prevSong, prevIdx, { [weak self] in
                 self?.currentIndex = prevIdx
             })
-        } else if repeatMode == .all {
+        } else if repeatMode == .all, let last = queue.last, let lastSong = track(for: last) {
             let lastIdx = queue.count - 1
-            return (queue[lastIdx], lastIdx, { [weak self] in
+            return (lastSong, lastIdx, { [weak self] in
                 self?.currentIndex = lastIdx
             })
         }
@@ -848,11 +967,15 @@ public final class AudioPlayerService {
         let prevIdx = idx - 1
         if prevIdx >= 0 {
             currentIndex = prevIdx
-            loadAndPlay(track: queue[prevIdx])
+            if let prevSong = track(for: queue[prevIdx]) {
+                loadAndPlay(track: prevSong)
+            }
         } else if repeatMode == .all {
             let lastIdx = queue.count - 1
             currentIndex = lastIdx
-            loadAndPlay(track: queue[lastIdx])
+            if let last = queue.last, let lastSong = track(for: last) {
+                loadAndPlay(track: lastSong)
+            }
         } else {
             seek(to: 0)
             let speed = Float(EqualizerManager.shared.playbackSpeed)
@@ -982,13 +1105,14 @@ public final class AudioPlayerService {
         
         if shuffleMode == .on {
             // Remaining
-            var remaining = queue.filter { $0.id != current.id }
+            var remaining = queue.filter { $0.trackID != current.id }
             remaining.shuffle()
-            self.queue = [current] + remaining
+            let currentEntry = queue.first(where: { $0.trackID == current.id }) ?? QueueEntry(trackID: current.id)
+            self.queue = [currentEntry] + remaining
             self.currentIndex = 0
         } else {
             self.queue = originalQueue
-            self.currentIndex = originalQueue.firstIndex(where: { $0.id == current.id }) ?? 0
+            self.currentIndex = originalQueue.firstIndex(where: { $0.trackID == current.id }) ?? 0
         }
         AppLogger.audio.info("Shuffle mode updated: \(self.shuffleMode.label)")
     }
@@ -1003,7 +1127,7 @@ public final class AudioPlayerService {
     public func moveQueueItem(fromOffsets source: IndexSet, toOffset destination: Int) {
         queue.move(fromOffsets: source, toOffset: destination)
         if let current = currentTrack {
-            self.currentIndex = queue.firstIndex(where: { $0.id == current.id })
+            self.currentIndex = queue.firstIndex(where: { $0.trackID == current.id })
         }
     }
     
@@ -1011,23 +1135,23 @@ public final class AudioPlayerService {
     public func removeQueueItem(at index: Int) {
         // Ensure preconditions are met before proceeding
         guard queue.indices.contains(index) else { return }
-        // Removed track
-        let removedTrack = queue.remove(at: index)
+        // Removed track entry
+        let removedEntry = queue.remove(at: index)
         
         if let current = currentTrack {
-            if removedTrack.id == current.id {
+            if removedEntry.trackID == current.id {
                 // If removing current track, play next
-                if index < queue.count {
+                if index < queue.count, let song = track(for: queue[index]) {
                     self.currentIndex = index
-                    loadAndPlay(track: queue[index])
-                } else if !queue.isEmpty {
+                    loadAndPlay(track: song)
+                } else if !queue.isEmpty, let song = track(for: queue[0]) {
                     self.currentIndex = 0
-                    loadAndPlay(track: queue[0])
+                    loadAndPlay(track: song)
                 } else {
                     stopAndClear()
                 }
             } else {
-                self.currentIndex = queue.firstIndex(where: { $0.id == current.id })
+                self.currentIndex = queue.firstIndex(where: { $0.trackID == current.id })
             }
         }
     }
@@ -1035,21 +1159,23 @@ public final class AudioPlayerService {
     /// Adds a track to the dedicated Play Next queue (played before upcoming playlist tracks).
     /// By default, adding multiple tracks to play next will add them to the end of the play next queue.
     public func playNext(track: Track) {
+        registerTracks([track])
         if currentTrack == nil && queue.isEmpty {
             play(track: track)
             return
         }
-        playNextQueue.append(track)
+        playNextQueue.append(QueueEntry(trackID: track.id))
         AppLogger.audio.info("Added track to Play Next queue: \(track.title)")
     }
     
     /// Inserts a track to the very front of the Play Next queue (to play immediately next).
     public func insertPlayNextFront(track: Track) {
+        registerTracks([track])
         if currentTrack == nil && queue.isEmpty {
             play(track: track)
             return
         }
-        playNextQueue.insert(track, at: 0)
+        playNextQueue.insert(QueueEntry(trackID: track.id), at: 0)
         AppLogger.audio.info("Inserted track at front of Play Next queue: \(track.title)")
     }
     
@@ -1057,13 +1183,15 @@ public final class AudioPlayerService {
     public func playNext(tracks: [Track]) {
         // Ensure preconditions are met before proceeding
         guard !tracks.isEmpty else { return }
+        registerTracks(tracks)
         if currentTrack == nil && queue.isEmpty {
             if let first = tracks.first {
                 play(track: first, inQueue: tracks)
             }
             return
         }
-        playNextQueue.append(contentsOf: tracks)
+        let entries = tracks.map { QueueEntry(trackID: $0.id) }
+        playNextQueue.append(contentsOf: entries)
         AppLogger.audio.info("Added \(tracks.count) tracks to Play Next queue.")
     }
     
@@ -1071,13 +1199,15 @@ public final class AudioPlayerService {
     public func insertPlayNextFront(tracks: [Track]) {
         // Ensure preconditions are met before proceeding
         guard !tracks.isEmpty else { return }
+        registerTracks(tracks)
         if currentTrack == nil && queue.isEmpty {
             if let first = tracks.first {
                 play(track: first, inQueue: tracks)
             }
             return
         }
-        playNextQueue.insert(contentsOf: tracks, at: 0)
+        let entries = tracks.map { QueueEntry(trackID: $0.id) }
+        playNextQueue.insert(contentsOf: entries, at: 0)
         AppLogger.audio.info("Inserted \(tracks.count) tracks at front of Play Next queue.")
     }
     
@@ -1096,22 +1226,22 @@ public final class AudioPlayerService {
     /// Moves a track from the Play Next queue to the main queue at a destination index.
     public func moveFromPlayNextToQueue(playNextIndex: Int, queueDestinationIndex: Int) {
         guard playNextQueue.indices.contains(playNextIndex) else { return }
-        let track = playNextQueue.remove(at: playNextIndex)
+        let entry = playNextQueue.remove(at: playNextIndex)
         let clampedIndex = max(0, min(queueDestinationIndex, queue.count))
-        queue.insert(track, at: clampedIndex)
+        queue.insert(entry, at: clampedIndex)
         if let current = currentTrack {
-            self.currentIndex = queue.firstIndex(where: { $0.id == current.id })
+            self.currentIndex = queue.firstIndex(where: { $0.trackID == current.id })
         }
     }
 
     /// Moves a track from the main queue to the Play Next queue at a destination index.
     public func moveFromQueueToPlayNext(queueIndex: Int, playNextDestinationIndex: Int) {
         guard queue.indices.contains(queueIndex) else { return }
-        let track = queue.remove(at: queueIndex)
+        let entry = queue.remove(at: queueIndex)
         let clampedIndex = max(0, min(playNextDestinationIndex, playNextQueue.count))
-        playNextQueue.insert(track, at: clampedIndex)
+        playNextQueue.insert(entry, at: clampedIndex)
         if let current = currentTrack {
-            self.currentIndex = queue.firstIndex(where: { $0.id == current.id })
+            self.currentIndex = queue.firstIndex(where: { $0.trackID == current.id })
         }
     }
     
@@ -1123,8 +1253,7 @@ public final class AudioPlayerService {
     /// Immediately plays a track selected directly from the Play Next queue.
     public func playFromPlayNext(at index: Int) {
         // Ensure preconditions are met before proceeding
-        guard playNextQueue.indices.contains(index) else { return }
-        let track = playNextQueue[index]
+        guard playNextQueue.indices.contains(index), let track = track(for: playNextQueue[index]) else { return }
         if smoothSkippingEnabled && playbackStatus == .playing && currentTrack?.id != track.id {
             startStaggeredSkipTransition(to: track, nextIndex: currentIndex) { [weak self] in
                 guard let self = self, self.playNextQueue.indices.contains(index) else { return }
@@ -1132,16 +1261,17 @@ public final class AudioPlayerService {
             }
             return
         }
-        let removed = playNextQueue.remove(at: index)
-        loadAndPlay(track: removed)
+        playNextQueue.remove(at: index)
+        loadAndPlay(track: track)
     }
     
     /// Appends a track to the end of the current queue.
     public func appendToQueue(track: Track) {
+        registerTracks([track])
         if queue.isEmpty {
             play(track: track)
         } else {
-            queue.append(track)
+            queue.append(QueueEntry(trackID: track.id))
         }
     }
     
@@ -1154,13 +1284,15 @@ public final class AudioPlayerService {
     public func appendToQueue(tracks: [Track]) {
         // Ensure preconditions are met before proceeding
         guard !tracks.isEmpty else { return }
+        registerTracks(tracks)
         if queue.isEmpty {
             if let first = tracks.first {
                 play(track: first, inQueue: tracks)
             }
             return
         }
-        queue.append(contentsOf: tracks)
+        let entries = tracks.map { QueueEntry(trackID: $0.id) }
+        queue.append(contentsOf: entries)
     }
     
     /// Convenience alias for appendToQueue(tracks:).
@@ -1185,6 +1317,7 @@ public final class AudioPlayerService {
         prewarmTask = nil
         prewarmedTrackID = nil
         prewarmedPlayerItem = nil
+        prewarmingTrackID = nil
         teardownPlayerObservers()
         player?.pause()
         player = nil
@@ -1204,7 +1337,8 @@ public final class AudioPlayerService {
     /// Clears upcoming tracks from the queue while keeping current track playing.
     public func clearQueue() {
         if let current = currentTrack {
-            queue = [current]
+            let entry = queue.first(where: { $0.trackID == current.id }) ?? QueueEntry(trackID: current.id)
+            queue = [entry]
             currentIndex = 0
         } else {
             queue = []
@@ -1219,27 +1353,17 @@ public final class AudioPlayerService {
 
     /// Refreshes in-memory metadata of the current playing track and queue if it was edited externally.
     public func syncTrackMetadata(updatedTrack: Track) {
+        localTrackLookupMap[updatedTrack.id] = updatedTrack
         if currentTrack?.id == updatedTrack.id {
             self.currentTrack = updatedTrack
             self.setupNowPlayingInfo(for: updatedTrack)
-        }
-        for i in 0..<queue.count {
-            if queue[i].id == updatedTrack.id {
-                queue[i] = updatedTrack
-            }
-        }
-        for i in 0..<originalQueue.count {
-            if originalQueue[i].id == updatedTrack.id {
-                originalQueue[i] = updatedTrack
-            }
         }
     }
     
     /// Plays a specific track in the existing queue by its queue index.
     public func playTrackInQueue(at index: Int) {
         // Ensure preconditions are met before proceeding
-        guard queue.indices.contains(index) else { return }
-        let track = queue[index]
+        guard queue.indices.contains(index), let track = track(for: queue[index]) else { return }
         if smoothSkippingEnabled && playbackStatus == .playing && currentTrack?.id != track.id {
             startStaggeredSkipTransition(to: track, nextIndex: index) { [weak self] in
                 self?.currentIndex = index
@@ -1260,8 +1384,15 @@ public final class AudioPlayerService {
         if let downloadedURL = JellyfinDownloadManager.shared.localFileURL(for: track.id),
            FileManager.default.fileExists(atPath: downloadedURL.path) {
             resolvedURL = downloadedURL
+            AppLogger.audio.debug("Resolved Jellyfin downloaded local file: \(downloadedURL.path)")
         } else if track.url.isFileURL {
             resolvedURL = SecurityScopedBookmark.shared.ensureAccess(for: track.url, folderID: track.folderID)
+            let exists = FileManager.default.fileExists(atPath: resolvedURL.path)
+            if !exists {
+                AppLogger.audio.warning("Local track file does not exist at resolved path: \(resolvedURL.path) (original track url: \(track.url.path))")
+            } else {
+                AppLogger.audio.debug("Resolved local audio file (\(exists ? "EXISTS" : "MISSING")): \(resolvedURL.path)")
+            }
         } else if track.isJellyfinItem || track.metadataSource == .server {
             let matchedServer = getJellyfinServer(for: track.folderID) ?? jellyfinServers.first
             let sessionInfo: (serverURL: URL, token: String)?
@@ -1301,6 +1432,7 @@ public final class AudioPlayerService {
             }
             components?.queryItems = queryItems
             resolvedURL = components?.url ?? track.url
+            AppLogger.audio.debug("Resolved Jellyfin remote stream URL (itemId: \(itemId), transcode: \(needsTranscode), ext: \(ext)): \(resolvedURL.absoluteString)")
 
             if !token.isEmpty {
                 assetOptions["AVURLAssetHTTPHeaderFieldsKey"] = [
@@ -1309,11 +1441,15 @@ public final class AudioPlayerService {
             }
         } else {
             resolvedURL = track.url
+            AppLogger.audio.debug("Resolved standard track URL: \(resolvedURL.absoluteString)")
         }
 
-        let asset = AVURLAsset(url: resolvedURL, options: assetOptions)
-        let item = AVPlayerItem(asset: asset)
-        item.audioTimePitchAlgorithm = appropriateTimePitchAlgorithm(for: resolvedURL)
+        let isPCMFile = ["wav", "wave", "aif", "aiff", "caf"].contains(resolvedURL.pathExtension.lowercased())
+        let item = isPCMFile ? AVPlayerItem(url: resolvedURL) : AVPlayerItem(asset: AVURLAsset(url: resolvedURL, options: assetOptions))
+        if let algorithm = appropriateTimePitchAlgorithm(for: resolvedURL) {
+            item.audioTimePitchAlgorithm = algorithm
+        }
+        AppLogger.audio.info("Item audioTimePitchAlgorithm: \(item.audioTimePitchAlgorithm.rawValue), EqualizerManager.playbackSpeed: \(EqualizerManager.shared.playbackSpeed)")
         let isRemoteJellyfin = (track.isJellyfinItem || track.metadataSource == .server) && JellyfinDownloadManager.shared.localFileURL(for: track.id) == nil
         if isRemoteJellyfin {
             item.preferredForwardBufferDuration = 30.0
@@ -1343,12 +1479,20 @@ public final class AudioPlayerService {
         self.currentTrack = track
         self.duration = track.duration
         self.hasTriggeredWiFiPrefetch = false
-        self.cloudPlaybackError = nil
+        if self.cloudPlaybackError != "CAN'T PLAY FILE" {
+            self.cloudPlaybackError = nil
+        }
+        self.lastPlaybackError = nil
 
         let resumePosition = savedPlaybackPosition(for: track) ?? 0.0
         self.currentTime = resumePosition
         self.hasCountedCurrentPlay = false
         self.playbackAccumulatedTime = 0
+
+        let ext = (track.fileInfo?.fileExtension ?? track.url.pathExtension).uppercased()
+        let isLocal = track.url.isFileURL && FileManager.default.fileExists(atPath: track.url.path)
+        let isJellyfin = track.isJellyfinItem || track.metadataSource == .server
+        AppLogger.audio.info("Initiating playback: \"\(track.title)\" by \"\(track.artist)\" [ID: \(track.id.uuidString)] [Type: .\(ext)] [Local: \(isLocal ? "YES" : "NO")] [Jellyfin: \(isJellyfin ? "YES" : "NO")] [Resume: \(resumePosition > 0 ? "\(String(format: "%.2f", resumePosition))s" : "start")]")
 
         // If track is a file URL but not downloaded yet, pause/buffer and wait for download
         if track.url.isFileURL && (!CloudFileAvailability.isLocal(url: track.url) || CloudFileAvailability.isCloudItem(url: track.url)) {
@@ -1407,10 +1551,12 @@ public final class AudioPlayerService {
 
         // 2. Use pre-warmed item if available, otherwise instantiate with pristine audio algorithm
         let playerItem: AVPlayerItem
+        let isLocalPCM = ["wav", "wave", "aif", "aiff", "caf"].contains(track.url.pathExtension.lowercased())
         if prewarmedTrackID == track.id, let prewarmed = prewarmedPlayerItem {
             playerItem = prewarmed
             prewarmedTrackID = nil
             prewarmedPlayerItem = nil
+            prewarmingTrackID = nil
         } else {
             playerItem = makePlayerItem(for: track)
         }
@@ -1447,9 +1593,9 @@ public final class AudioPlayerService {
             #if os(iOS)
             player?.usesExternalPlaybackWhileExternalScreenIsActive = true
             #endif
-            if !isCrossfadeEnabled, let qPlayer = player as? AVQueuePlayer {
-                qPlayer.insert(playerItem, after: qPlayer.currentItem)
-                qPlayer.advanceToNextItem()
+            if let qPlayer = player as? AVQueuePlayer {
+                qPlayer.removeAllItems()
+                qPlayer.insert(playerItem, after: nil)
             } else {
                 player?.replaceCurrentItem(with: playerItem)
             }
@@ -1507,25 +1653,25 @@ public final class AudioPlayerService {
             }
         }
 
-        // Pre-warm next upcoming track in the queue for instantaneous zero-latency skipping
-        prewarmNextTrackIfNeeded()
-        
         AppLogger.audio.info("Now playing: \(track.title) by \(track.artist) (rate: \(currentSpeed)x, resumed at: \(resumePosition)s)")
     }
 
-    /// Selects the optimal audio time-pitch algorithm. Uncompressed PCM/WAV audio and standard 1.0x playback
-    /// use timeDomain to prevent silent stalls in AVFoundation, while non-PCM speeds use spectral.
-    public nonisolated static func determineTimePitchAlgorithm(for url: URL, speed: Double) -> AVAudioTimePitchAlgorithm {
-        let ext = url.pathExtension.lowercased()
-        let isPCM = ext == "wav" || ext == "wave" || ext == "aif" || ext == "aiff" || ext == "caf"
-        if isPCM || abs(speed - 1.0) < 0.001 {
-            return .timeDomain
+    /// Selects the audio time-pitch algorithm.
+    /// At 1.0x speed, returns nil for local items so AVFoundation passes audio through unchanged
+    /// (avoiding CoreMedia -17770 initialization errors on integer LPCM WAV/AIFF/CAF files).
+    /// At other speeds, returns .spectral for all formats.
+    public nonisolated static func determineTimePitchAlgorithm(for url: URL, speed: Double) -> AVAudioTimePitchAlgorithm? {
+        if abs(speed - 1.0) < 0.001 {
+            if url.isFileURL {
+                return nil
+            }
+            return nil
         } else {
             return .spectral
         }
     }
 
-    private func appropriateTimePitchAlgorithm(for url: URL) -> AVAudioTimePitchAlgorithm {
+    private func appropriateTimePitchAlgorithm(for url: URL) -> AVAudioTimePitchAlgorithm? {
         Self.determineTimePitchAlgorithm(for: url, speed: EqualizerManager.shared.playbackSpeed)
     }
     
@@ -1549,6 +1695,7 @@ public final class AudioPlayerService {
         let audioTracks = playerItem.tracks.compactMap { $0.assetTrack }.filter { $0.mediaType == .audio }
         guard !audioTracks.isEmpty else {
             // Tracks not ready yet; will be attached when item transitions to readyToPlay
+            AppLogger.audio.debug("Audio mix deferred: player item has 0 loaded audio tracks (total item tracks: \(playerItem.tracks.count)).")
             return
         }
 
@@ -1558,6 +1705,8 @@ public final class AudioPlayerService {
             if let tap = AudioDSPProcessor.shared.createAudioProcessingTap() {
                 params.audioTapProcessor = tap
                 inputParams.append(params)
+            } else {
+                AppLogger.audio.warning("AudioDSPProcessor failed to create MTAudioProcessingTap for audio track ID: \(track.trackID).")
             }
         }
 
@@ -1578,14 +1727,19 @@ public final class AudioPlayerService {
 
     // Pre-warms the next track in queue asynchronously so skipping to it is instantaneous
     private func prewarmNextTrackIfNeeded() {
+        guard let currentItem = player?.currentItem, currentItem.status == .readyToPlay else {
+            return
+        }
         guard let next = nextTrack else {
             prewarmedTrackID = nil
             prewarmedPlayerItem = nil
+            prewarmingTrackID = nil
             prewarmTask?.cancel()
             prewarmTask = nil
             return
         }
-        if prewarmedTrackID == next.id && prewarmedPlayerItem != nil {
+        // Guard so the same next track is prewarmed only once
+        if (prewarmedTrackID == next.id && prewarmedPlayerItem != nil) || (prewarmingTrackID == next.id && prewarmTask != nil) {
             return
         }
         // Never open, decode or prewarm cloud-only tracks that are not downloaded
@@ -1593,6 +1747,7 @@ public final class AudioPlayerService {
             return
         }
         
+        prewarmingTrackID = next.id
         prewarmTask?.cancel()
         prewarmTask = Task { [weak self] in
             guard let self = self else { return }
@@ -1613,9 +1768,13 @@ public final class AudioPlayerService {
                 }
             }
             
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled else {
+                self.prewarmingTrackID = nil
+                return
+            }
             self.prewarmedTrackID = next.id
             self.prewarmedPlayerItem = item
+            self.prewarmingTrackID = nil
         }
     }
 
@@ -1628,6 +1787,14 @@ public final class AudioPlayerService {
         if let failedObs = playerItemFailedObserver {
             NotificationCenter.default.removeObserver(failedObs)
             playerItemFailedObserver = nil
+        }
+        if let errLogObs = playerItemErrorLogObserver {
+            NotificationCenter.default.removeObserver(errLogObs)
+            playerItemErrorLogObserver = nil
+        }
+        if let accLogObs = playerItemAccessLogObserver {
+            NotificationCenter.default.removeObserver(accLogObs)
+            playerItemAccessLogObserver = nil
         }
         if let stalledObs = playerItemStalledObserver {
             NotificationCenter.default.removeObserver(stalledObs)
@@ -1654,6 +1821,7 @@ public final class AudioPlayerService {
     // Teardown all player and item observers (used on deinit or stopAndClear)
     private func teardownPlayerObservers() {
         teardownItemObservers()
+        cleanupWavDiagnostic()
         if let token = timeObserverToken {
             player?.removeTimeObserver(token)
             timeObserverToken = nil
@@ -1720,17 +1888,72 @@ public final class AudioPlayerService {
                     let speed = Float(EqualizerManager.shared.playbackSpeed)
                     self.player?.defaultRate = speed
                     self.player?.play()
-                    AppLogger.audio.info("AVPlayerItem ready to play: \(track.title) (duration: \(self.duration)s) at \(speed)x")
+
+                    let audioTracks = item.tracks.compactMap { $0.assetTrack }.filter { $0.mediaType == .audio }
+                    let formats = audioTracks.compactMap { $0.formatDescriptions.first }.map { String(describing: $0) }.joined(separator: ", ")
+                    let formatInfo = formats.isEmpty ? "Native" : formats
+                    AppLogger.audio.info("AVPlayerItem ready to play: \"\(track.title)\" (duration: \(String(format: "%.2f", self.duration))s, speed: \(speed)x, tracks: \(audioTracks.count), format: \(formatInfo))")
+                    self.prewarmNextTrackIfNeeded()
                 case .failed:
                     self.isTransitioningTrack = false
                     self.transitionTimeoutTask?.cancel()
-                    let itemErr = item.error?.localizedDescription ?? "None"
-                    let playerErr = self.player?.error?.localizedDescription ?? "None"
-                    let errorLogs = item.errorLog()?.events.compactMap { $0.errorComment }.joined(separator: "; ") ?? "None"
-                    AppLogger.audio.error("AVPlayerItem failed for \(track.title). Item Error: \(itemErr). Player Error: \(playerErr). ErrorLog: \(errorLogs)")
-                    self.playbackStatus = .stopped
+
+                    let itemErr = item.error as? NSError
+                    let itemErrDesc = itemErr?.localizedDescription ?? "None"
+                    let itemDomain = itemErr?.domain ?? "UnknownDomain"
+                    let itemCode = itemErr?.code ?? 0
+                    let underlyingErr = itemErr?.userInfo[NSUnderlyingErrorKey] as? NSError
+                    let underlyingDomain = underlyingErr?.domain ?? "None"
+                    let underlyingCode = underlyingErr.map { String($0.code) } ?? "None"
+                    let underlyingDesc = underlyingErr?.localizedDescription ?? "None"
+
+                    let playerErr = self.player?.error as? NSError
+                    let playerErrDesc = playerErr?.localizedDescription ?? "None"
+                    let playerDomain = playerErr?.domain ?? "UnknownDomain"
+                    let playerCode = playerErr?.code ?? 0
+
+                    let algo = item.audioTimePitchAlgorithm.rawValue
+                    let speed = EqualizerManager.shared.playbackSpeed
+
+                    let errorEvents = item.errorLog()?.events ?? []
+                    let errorLogDetails = errorEvents.map { evt in
+                        "[\(evt.errorDomain):\(evt.errorStatusCode) \"\(evt.errorComment ?? "NoComment")\" URI:\(evt.uri ?? "nil")]"
+                    }.joined(separator: "; ")
+                    let logStr = errorLogDetails.isEmpty ? "None" : errorLogDetails
+
+                    let isLocal = track.url.isFileURL
+                    let reachable = isLocal ? FileManager.default.fileExists(atPath: track.url.path) : true
+                    let ext = (track.fileInfo?.fileExtension ?? track.url.pathExtension).uppercased()
+
+                    let fullReport = "AVPlayerItem failed for \"\(track.title)\" [ID:\(track.id.uuidString)] [Type:.\(ext)] [Reachable:\(reachable)]. ItemError: \(itemDomain)(\(itemCode)) \"\(itemErrDesc)\". Underlying: \(underlyingDomain)(\(underlyingCode)) \"\(underlyingDesc)\". PlayerError: \(playerDomain)(\(playerCode)) \"\(playerErrDesc)\". Algorithm: \(algo). Speed: \(speed)x. CoreMedia ErrorLog: \(logStr)"
+                    AppLogger.audio.error(fullReport)
+                    self.lastPlaybackError = fullReport
+
+                    // WAV diagnostic test: verify if a completely plain AVPlayer can play the exact URL
+                    let failedExt = (track.fileInfo?.fileExtension ?? track.url.pathExtension).lowercased()
+                    if track.url.isFileURL && (failedExt == "wav" || failedExt == "wave") {
+                        let wavURL = (item.asset as? AVURLAsset)?.url ?? track.url
+                        self.runWavDiagnostic(for: wavURL)
+                    }
+
+                    // Show short UPPERCASE error, fire haptic, and skip to the next track. Never sit silently on PLAY.
+                    self.cloudPlaybackError = "CAN'T PLAY FILE"
+                    HapticFeedback.notificationError()
+                    Task { @MainActor [weak self] in
+                        try? await Task.sleep(nanoseconds: 3_000_000_000)
+                        if self?.cloudPlaybackError == "CAN'T PLAY FILE" {
+                            self?.cloudPlaybackError = nil
+                        }
+                    }
+
+                    if self.nextTrack != nil {
+                        AppLogger.audio.error("Skipping to next track after item failure on \"\(track.title)\".")
+                        self.performNext()
+                    } else {
+                        self.playbackStatus = .stopped
+                    }
                 case .unknown:
-                    break
+                    AppLogger.audio.debug("AVPlayerItem status in pending state: unknown for \"\(track.title)\"")
                 @unknown default:
                     break
                 }
@@ -1744,6 +1967,7 @@ public final class AudioPlayerService {
             queue: .main
         ) { [weak self] _ in
             Task { @MainActor [weak self] in
+                AppLogger.audio.info("AVPlayerItem reached end of track: \"\(track.title)\"")
                 self?.handleTrackEnded()
             }
         }
@@ -1755,14 +1979,35 @@ public final class AudioPlayerService {
             queue: .main
         ) { [weak self] notification in
             let error = notification.userInfo?[AVPlayerItemFailedToPlayToEndTimeErrorKey] as? Error
+            let nsErr = error as? NSError
             let errorDesc = error?.localizedDescription ?? "unknown error"
+            let domain = nsErr?.domain ?? "UnknownDomain"
+            let code = nsErr?.code ?? 0
+            let underlyingErr = nsErr?.userInfo[NSUnderlyingErrorKey] as? NSError
+            let underlyingDomain = underlyingErr?.domain ?? "None"
+            let underlyingCode = underlyingErr.map { String($0.code) } ?? "None"
+            let underlyingDesc = underlyingErr?.localizedDescription ?? "None"
+            let timeSec = CMTimeGetSeconds(playerItem.currentTime())
+            let timeStr = (!timeSec.isNaN && !timeSec.isInfinite) ? String(format: "%.2f", timeSec) : "unknown"
+
+            let algo = playerItem.audioTimePitchAlgorithm.rawValue
+            let speed = EqualizerManager.shared.playbackSpeed
+
+            let errorEvents = playerItem.errorLog()?.events ?? []
+            let errorLogDetails = errorEvents.map { evt in
+                "[\(evt.errorDomain):\(evt.errorStatusCode) \"\(evt.errorComment ?? "NoComment")\" URI:\(evt.uri ?? "nil")]"
+            }.joined(separator: "; ")
+            let logStr = errorLogDetails.isEmpty ? "None" : errorLogDetails
+
             Task { @MainActor [weak self] in
-                AppLogger.audio.warning("AVPlayerItem playback error: \(errorDesc)")
+                let failReport = "AVPlayerItem failed during active playback of \"\(track.title)\" at \(timeStr)s. Error: \(domain)(\(code)) \"\(errorDesc)\". Underlying: \(underlyingDomain)(\(underlyingCode)) \"\(underlyingDesc)\". Algorithm: \(algo). Speed: \(speed)x. CoreMedia ErrorLog: \(logStr)"
+                AppLogger.audio.warning(failReport)
                 guard let self = self else { return }
+                self.lastPlaybackError = failReport
 
                 // If playback failed while audio processing tap was attached, detach audioMix immediately
                 if playerItem.audioMix != nil {
-                    AppLogger.audio.warning("Output route rejected audio processing tap. Detaching audioMix and recovering playback immediately.")
+                    AppLogger.audio.warning("Output route rejected audio processing tap on \"\(track.title)\". Detaching audioMix and recovering playback immediately.")
                     playerItem.audioMix = nil
                     let speed = Float(EqualizerManager.shared.playbackSpeed)
                     self.player?.defaultRate = speed
@@ -1771,25 +2016,47 @@ public final class AudioPlayerService {
                 }
 
                 if self.duration > 0 && self.currentTime >= self.duration - 2.0 {
+                    AppLogger.audio.info("Playback error occurred at end of track boundary (\(timeStr)s / \(String(format: "%.2f", self.duration))s); handling as natural track end.")
                     self.handleTrackEnded()
-                } else if self.playbackStatus == .playing || self.playbackStatus == .buffering {
-                    if playerItem.isPlaybackLikelyToKeepUp {
-                        let speed = Float(EqualizerManager.shared.playbackSpeed)
-                        self.player?.defaultRate = speed
-                        self.player?.play()
-                    } else {
-                        self.playbackStatus = .buffering
-                    }
-                } else if !self.queue.isEmpty {
-                    AppLogger.audio.info("Advancing to next track after unrecoverable stall")
-                    self.next()
                 } else {
-                    self.playbackStatus = .stopped
+                    // Show short UPPERCASE error, fire haptic, and skip to the next track. Never sit silently on PLAY.
+                    self.cloudPlaybackError = "CAN'T PLAY FILE"
+                    HapticFeedback.notificationError()
+                    Task { @MainActor [weak self] in
+                        try? await Task.sleep(nanoseconds: 3_000_000_000)
+                        if self?.cloudPlaybackError == "CAN'T PLAY FILE" {
+                            self?.cloudPlaybackError = nil
+                        }
+                    }
+
+                    if self.nextTrack != nil {
+                        AppLogger.audio.error("Advancing to next track after playback failure on \"\(track.title)\": \(failReport)")
+                        self.performNext()
+                    } else {
+                        AppLogger.audio.error("Stopping playback due to unrecoverable error on \"\(track.title)\" with empty queue.")
+                        self.playbackStatus = .stopped
+                    }
                 }
             }
         }
 
-        // 4. Observe AVPlayerItem playback stalled for remote streams
+        // 4. Observe AVPlayerItem real-time error log entries (captures low-level network/TLS/codec stalls)
+        playerItemErrorLogObserver = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemNewErrorLogEntry,
+            object: playerItem,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self = self else { return }
+                if let event = playerItem.errorLog()?.events.last {
+                    let logMsg = "AVPlayerItem error log entry for \"\(track.title)\": Code \(event.errorStatusCode) [\(event.errorDomain)] \"\(event.errorComment ?? "NoComment")\" URI: \(event.uri ?? "nil") Server: \(event.serverAddress ?? "nil")"
+                    AppLogger.audio.warning(logMsg)
+                    self.lastPlaybackError = logMsg
+                }
+            }
+        }
+
+        // 5. Observe AVPlayerItem playback stalled for remote streams
         playerItemStalledObserver = NotificationCenter.default.addObserver(
             forName: .AVPlayerItemPlaybackStalled,
             object: playerItem,
@@ -1797,18 +2064,21 @@ public final class AudioPlayerService {
         ) { [weak self] _ in
             Task { @MainActor [weak self] in
                 guard let self = self else { return }
-                AppLogger.audio.info("AVPlayerItem playback stalled, waiting for buffer...")
+                let currentPos = CMTimeGetSeconds(playerItem.currentTime())
+                let posStr = (!currentPos.isNaN && !currentPos.isInfinite) ? String(format: "%.2f", currentPos) : "unknown"
+                AppLogger.audio.warning("AVPlayerItem playback stalled at \(posStr)s for \"\(track.title)\", awaiting network buffer...")
                 if self.playbackStatus == .playing {
                     self.playbackStatus = .buffering
                 }
             }
         }
 
-        // 5. Observe isPlaybackLikelyToKeepUp to resume from buffering
+        // 6. Observe isPlaybackLikelyToKeepUp to resume from buffering
         itemLikelyToKeepUpObserver = playerItem.observe(\.isPlaybackLikelyToKeepUp, options: [.new]) { [weak self] item, _ in
             Task { @MainActor [weak self] in
                 guard let self = self else { return }
                 if item.isPlaybackLikelyToKeepUp && self.playbackStatus == .buffering {
+                    AppLogger.audio.info("AVPlayerItem buffer refilled and likely to keep up; resuming \"\(track.title)\".")
                     self.playbackStatus = .playing
                     let speed = Float(EqualizerManager.shared.playbackSpeed)
                     self.player?.defaultRate = speed
@@ -1817,15 +2087,102 @@ public final class AudioPlayerService {
             }
         }
         
-        // 6. Observe isPlaybackBufferEmpty to detect network starvation
+        // 7. Observe isPlaybackBufferEmpty to detect network starvation
         itemBufferEmptyObserver = playerItem.observe(\.isPlaybackBufferEmpty, options: [.new]) { [weak self] item, _ in
             Task { @MainActor [weak self] in
                 guard let self = self else { return }
                 if item.isPlaybackBufferEmpty && self.playbackStatus == .playing {
-                    AppLogger.audio.info("AVPlayerItem buffer empty, entering buffering state")
+                    AppLogger.audio.warning("AVPlayerItem buffer empty for \"\(track.title)\", entering buffering state.")
                     self.playbackStatus = .buffering
                 }
             }
+        }
+    }
+
+    // MARK: - WAV Diagnostic Player
+    
+    private func cleanupWavDiagnostic() {
+        wavDiagnosticTimeoutTask?.cancel()
+        wavDiagnosticTimeoutTask = nil
+        wavDiagnosticObserver?.invalidate()
+        wavDiagnosticObserver = nil
+        wavDiagnosticPlayer?.pause()
+        wavDiagnosticPlayer = nil
+    }
+
+    private func runWavDiagnostic(for url: URL) {
+        cleanupWavDiagnostic()
+        return // TEMP: disabled so it doesn't open the same file at the same time as the real player
+
+        let fileName = url.lastPathComponent
+        let diagPlayer = AVPlayer(url: url)
+        diagPlayer.volume = 0.0
+        self.wavDiagnosticPlayer = diagPlayer
+
+        guard let diagItem = diagPlayer.currentItem else {
+            AppLogger.audio.error("WAV DIAGNOSTIC: plain AVPlayer FAILED to obtain currentItem for \(fileName)")
+            cleanupWavDiagnostic()
+            return
+        }
+
+        wavDiagnosticObserver = diagItem.observe(\.status, options: [.new, .initial]) { [weak self] observedItem, _ in
+            Task { @MainActor [weak self] in
+                guard let self = self, self.wavDiagnosticPlayer === diagPlayer else { return }
+
+                switch observedItem.status {
+                case .readyToPlay:
+                    AppLogger.audio.info("WAV DIAGNOSTIC: plain AVPlayer READY for \(fileName)")
+                    self.wavDiagnosticObserver?.invalidate()
+                    self.wavDiagnosticObserver = nil
+                    self.wavDiagnosticTimeoutTask?.cancel()
+                    self.wavDiagnosticTimeoutTask = Task { @MainActor [weak self] in
+                        try? await Task.sleep(nanoseconds: 1_000_000_000)
+                        guard let self = self, self.wavDiagnosticPlayer === diagPlayer else { return }
+                        let statusStr: String
+                        switch diagPlayer.timeControlStatus {
+                        case .paused: statusStr = "paused"
+                        case .waitingToPlayAtSpecifiedRate:
+                            let reason = diagPlayer.reasonForWaitingToPlay?.rawValue ?? "none"
+                            statusStr = "waitingToPlayAtSpecifiedRate (\(reason))"
+                        case .playing: statusStr = "playing"
+                        @unknown default: statusStr = "unknown"
+                        }
+                        AppLogger.audio.info("WAV DIAGNOSTIC: plain AVPlayer timeControlStatus for \(fileName): \(statusStr)")
+                        self.cleanupWavDiagnostic()
+                    }
+
+                case .failed:
+                    let diagItemErr = observedItem.error as? NSError
+                    let diagDomain = diagItemErr?.domain ?? "UnknownDomain"
+                    let diagCode = diagItemErr?.code ?? 0
+                    let diagUnderlyingErr = diagItemErr?.userInfo[NSUnderlyingErrorKey] as? NSError
+                    let diagUnderlyingDomain = diagUnderlyingErr?.domain ?? "None"
+                    let diagUnderlyingCode = diagUnderlyingErr.map { String($0.code) } ?? "None"
+                    let diagEvents = observedItem.errorLog()?.events ?? []
+                    let diagLogStr = diagEvents.map { evt in
+                        "[\(evt.errorDomain):\(evt.errorStatusCode) \"\(evt.errorComment ?? "NoComment")\"]"
+                    }.joined(separator: "; ")
+                    let eventsDesc = diagLogStr.isEmpty ? "None" : diagLogStr
+
+                    AppLogger.audio.error("WAV DIAGNOSTIC: plain AVPlayer FAILED for \(fileName) - domain: \(diagDomain), code: \(diagCode), underlyingDomain: \(diagUnderlyingDomain), underlyingCode: \(diagUnderlyingCode), errorLog: \(eventsDesc)")
+                    self.cleanupWavDiagnostic()
+
+                case .unknown:
+                    break
+
+                @unknown default:
+                    break
+                }
+            }
+        }
+
+        diagPlayer.play()
+
+        wavDiagnosticTimeoutTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 5_000_000_000)
+            guard let self = self, self.wavDiagnosticPlayer === diagPlayer else { return }
+            AppLogger.audio.warning("WAV DIAGNOSTIC: plain AVPlayer TIMEOUT for \(fileName)")
+            self.cleanupWavDiagnostic()
         }
     }
 
@@ -1862,8 +2219,7 @@ public final class AudioPlayerService {
                 if self.downloadNextSongOnWiFi,
                    let nextTarget = self.nextPlaybackTarget()?.track,
                    !nextTarget.canReadLocalBytes,
-                   nextTarget.metadataSource != .server,
-                   CloudDownloadCenter.shared.isWiFiConnected {
+                   nextTarget.metadataSource != .server {
                     Task {
                         _ = try? await CloudDownloadCenter.shared.ensureLocal(track: nextTarget)
                     }
@@ -2192,6 +2548,7 @@ public final class AudioPlayerService {
             playerItem = prewarmed
             prewarmedTrackID = nil
             prewarmedPlayerItem = nil
+            prewarmingTrackID = nil
         } else {
             playerItem = makePlayerItem(for: nextTrack)
         }
@@ -2291,7 +2648,6 @@ public final class AudioPlayerService {
             self.setupPlayerItemObservers(for: playerItem, track: nextTrack)
             self.setupPeriodicTimeObserver()
             self.setupPlayerObservers(for: incoming)
-            self.prewarmNextTrackIfNeeded()
         }
     }
     
@@ -2990,6 +3346,7 @@ public final class AudioPlayerService {
     public func playerDiagnostics() -> [String: String] {
         var dict: [String: String] = [:]
         dict["playbackStatus"] = "\(playbackStatus)"
+        dict["lastPlaybackError"] = lastPlaybackError ?? "None"
         dict["currentTime"] = String(format: "%.2f", currentTime)
         dict["duration"] = String(format: "%.2f", duration)
         dict["queueCount"] = "\(queue.count)"
@@ -3007,12 +3364,12 @@ public final class AudioPlayerService {
                 dict["player_reasonForWaitingToPlay"] = reason.rawValue
             }
             if let err = player.error {
-                dict["player_error"] = err.localizedDescription
+                dict["player_error"] = "\(err.localizedDescription) (Domain: \((err as NSError).domain), Code: \((err as NSError).code))"
             }
             if let item = player.currentItem {
                 dict["item_status"] = "\(item.status.rawValue)"
                 if let itemErr = item.error {
-                    dict["item_error"] = itemErr.localizedDescription
+                    dict["item_error"] = "\(itemErr.localizedDescription) (Domain: \((itemErr as NSError).domain), Code: \((itemErr as NSError).code))"
                 }
                 dict["item_playbackLikelyToKeepUp"] = "\(item.isPlaybackLikelyToKeepUp)"
                 dict["item_playbackBufferEmpty"] = "\(item.isPlaybackBufferEmpty)"
@@ -3024,6 +3381,9 @@ public final class AudioPlayerService {
                         dict["item_lastErrorCode"] = "\(evt.errorStatusCode)"
                         dict["item_lastErrorDomain"] = evt.errorDomain
                         dict["item_lastErrorComment"] = evt.errorComment ?? "None"
+                        if let uri = evt.uri {
+                            dict["item_lastErrorURI"] = uri
+                        }
                     }
                 }
             } else {

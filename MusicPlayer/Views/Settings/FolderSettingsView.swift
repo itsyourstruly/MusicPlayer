@@ -42,20 +42,21 @@ public struct FolderSettingsView: View {
                 Divider()
                     .overlay(appTheme.separatorColor.opacity(0.4))
 
-                // MARK: - 2. Find Track Tags Button
-                findTrackTagsButtonSection
-
-                // MARK: - 3. Disk Write Toggle
-                diskWriteToggleSection
+                // MARK: - 2. Find Track Tags Button (local sources only)
+                if !libraryStore.settings.linkedFolders.isEmpty {
+                    findTrackTagsButtonSection
+                }
 
                 // MARK: - 3B. Downloads Section
                 downloadsSection
 
-                Divider()
-                    .overlay(appTheme.separatorColor.opacity(0.4))
+                // MARK: - 5. Library Scan Method (local sources only)
+                if !libraryStore.settings.linkedFolders.isEmpty {
+                    Divider()
+                        .overlay(appTheme.separatorColor.opacity(0.4))
 
-                // MARK: - 5. Clean Library Scan Method Selector (METADATA vs FOLDER)
-                scanMethodSelectorSection
+                    scanMethodSelectorSection
+                }
 
                 Divider()
                     .overlay(appTheme.separatorColor.opacity(0.4))
@@ -68,7 +69,7 @@ public struct FolderSettingsView: View {
             .padding(.bottom, 60)
         }
         .background(appTheme.backgroundColor.ignoresSafeArea())
-        .navigationTitle("FOLDER SETTINGS")
+        .navigationTitle("SOURCES")
         .navigationBarTitleDisplayMode(.inline)
         .fileImporter(
             isPresented: $showingFolderPicker,
@@ -244,18 +245,16 @@ public struct FolderSettingsView: View {
 
                 Spacer()
 
-                Button {
-                    HapticFeedback.selectionChanged()
-                    rescanJellyfinServer(server)
-                } label: {
-                    Text("RESCAN")
-                        .font(.system(size: 13, weight: .bold, design: .monospaced))
-                        .foregroundStyle(libraryStore.settings.appTheme.accentColor)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-
                 Menu {
+                    Button {
+                        HapticFeedback.selectionChanged()
+                        rescanJellyfinServer(server)
+                    } label: {
+                        Text("RESCAN")
+                    }
+                    .disabled(libraryStore.isScanning)
+
+                    Divider()
                     Button(role: .destructive) {
                         serverToUnlink = server
                         showingUnlinkServerAlert = true
@@ -263,17 +262,20 @@ public struct FolderSettingsView: View {
                         Text("REMOVE SERVER")
                     }
                 } label: {
-                    Image(systemName: "gearshape.fill")
-                        .font(.system(size: 15))
-                        .foregroundStyle(appTheme.accentColor)
-                        .padding(.leading, 8)
+                    Image(systemName: "gear")
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(Color.white)
+                        .frame(width: 32, height: 32)
                         .contentShape(Rectangle())
                 }
             }
 
             let serverTrackCount = libraryStore.trackCount(for: server)
-            Text("USER: \(server.username.uppercased()) • \(serverTrackCount) TRACKS")
+            Text(libraryStore.isScanning && libraryStore.currentlyScanningFolderID == server.id
+                 ? scanProgressLine
+                 : "USER: \(server.username.uppercased()) • \(serverTrackCount) TRACKS")
                 .font(.system(size: 11, design: .monospaced))
+                .lineLimit(1)
                 .foregroundStyle(.secondary)
 
             if let error = libraryStore.jellyfinServerErrors[server.id] {
@@ -309,7 +311,6 @@ public struct FolderSettingsView: View {
 
     private func linkedFolderRow(folder: LinkedFolder) -> some View {
         let isThisScanning = libraryStore.currentlyScanningFolderID == folder.id
-        let isAnotherScanning = libraryStore.isScanning && !isThisScanning
 
         return VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .center) {
@@ -321,43 +322,16 @@ public struct FolderSettingsView: View {
 
                 Spacer()
 
-                Button {
-                    HapticFeedback.selectionChanged()
-                    Task {
-                        await libraryStore.rescanFolder(id: folder.id)
-                    }
-                } label: {
-                    HStack(spacing: 5) {
-                        if isThisScanning {
-                            ProgressView()
-                                .progressViewStyle(CircularProgressViewStyle(tint: libraryStore.settings.appTheme.accentColor))
-                                .scaleEffect(0.7)
-                                .frame(width: 12, height: 12)
-                            Text("SCANNING...")
-                        } else {
-                            Text("RESCAN")
-                        }
-                    }
-                    .font(.system(size: 13, weight: .bold, design: .monospaced))
-                    .foregroundStyle(
-                        isAnotherScanning
-                            ? libraryStore.settings.appTheme.accentColor.opacity(0.35)
-                            : libraryStore.settings.appTheme.accentColor
-                    )
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .disabled(libraryStore.isScanning)
-                .contextMenu {
-                    Button {
-                        activeDetail = SettingOptionCatalog.rescanFolder
-                    } label: {
-                        Text("OPTION INFO")
-                    }
-                }
-
                 // Gear Icon with clean context menu
                 Menu {
+                    Button {
+                        HapticFeedback.selectionChanged()
+                        Task { await libraryStore.rescanFolder(id: folder.id) }
+                    } label: {
+                        Text(isThisScanning ? "SCANNING..." : "RESCAN")
+                    }
+                    .disabled(libraryStore.isScanning)
+
                     Button(action: {
                         folderToChange = folder
                         showingFolderPicker = true
@@ -388,8 +362,11 @@ public struct FolderSettingsView: View {
             }
 
             // Plain text, slightly gray summary of tracks, albums, and artists
-            Text("\(libraryStore.trackCount(for: folder)) TRACKS, \(libraryStore.albumCount(for: folder)) ALBUMS, \(libraryStore.artistCount(for: folder)) ARTISTS")
+            Text(isThisScanning && libraryStore.isScanning
+                 ? scanProgressLine
+                 : "\(libraryStore.trackCount(for: folder)) TRACKS, \(libraryStore.albumCount(for: folder)) ALBUMS, \(libraryStore.artistCount(for: folder)) ARTISTS")
                 .font(.system(size: 11, design: .monospaced))
+                .lineLimit(1)
                 .foregroundStyle(.secondary)
         }
         .padding(.vertical, 4)
@@ -476,43 +453,6 @@ public struct FolderSettingsView: View {
             Text("DOWNLOADS & OFFLINE")
                 .font(.system(size: 11, weight: .bold, design: .monospaced))
                 .foregroundStyle(.secondary)
-
-            TypographicToggleRow(
-                title: "DOWNLOAD NEXT SONG ON WI-FI",
-                subtitle: "PRE-FETCHES UPCOMING QUEUE TRACKS SILENTLY WHEN CONNECTED TO WI-FI",
-                isOn: Binding(
-                    get: { libraryStore.settings.downloadNextSongOnWiFi },
-                    set: {
-                        libraryStore.settings.downloadNextSongOnWiFi = $0
-                        libraryStore.saveSettings()
-                    }
-                )
-            )
-
-            TypographicToggleRow(
-                title: "AUTO-DOWNLOAD ON PLAY",
-                subtitle: "AUTOMATICALLY SAVES PLAYED JELLYFIN TRACKS TO DEVICE STORAGE",
-                isOn: Binding(
-                    get: { libraryStore.settings.autoDownloadOnPlay },
-                    set: {
-                        libraryStore.settings.autoDownloadOnPlay = $0
-                        libraryStore.saveSettings()
-                    }
-                )
-            )
-
-            TypographicToggleRow(
-                title: "DOWNLOAD OVER CELLULAR",
-                subtitle: "ALLOW OFFLINE JELLYFIN DOWNLOADS WHEN NOT ON WI-FI",
-                isOn: Binding(
-                    get: { libraryStore.settings.downloadOnCellular },
-                    set: {
-                        libraryStore.settings.downloadOnCellular = $0
-                        libraryStore.saveSettings()
-                        JellyfinDownloadManager.shared.allowsCellularAccess = $0
-                    }
-                )
-            )
 
             // Storage summary row & clear button
             HStack {
@@ -642,10 +582,22 @@ public struct FolderSettingsView: View {
         }
     }
 
+    private var scanProgressLine: String {
+        let status = libraryStore.scanStatusText.uppercased()
+        return status.isEmpty ? "INDEXING..." : status
+    }
+
+    private var scanBelongsToListedRow: Bool {
+        guard let id = libraryStore.currentlyScanningFolderID else { return false }
+        return libraryStore.settings.jellyfinServers.contains { $0.id == id }
+            || libraryStore.settings.linkedFolders.contains { $0.id == id }
+    }
+
     // MARK: - Scanning Status Logs View
     @ViewBuilder
     private var scanningStatusLogsView: some View {
-        if libraryStore.isScanning {
+        // Only shown when the scan doesn't belong to a listed row (progress otherwise replaces that row's stats line)
+        if libraryStore.isScanning && !scanBelongsToListedRow {
             VStack(alignment: .leading, spacing: 4) {
                 Text(libraryStore.scanStatusText.uppercased())
                     .font(.system(size: 10, design: .monospaced))

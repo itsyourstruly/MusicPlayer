@@ -253,8 +253,8 @@ public struct AlbumDetailView: View {
                         } else {
                             let currentTrackID = playerService.currentTrack?.id
                             let isCurrentPlaying = playerService.playbackStatus.isPlaying
-                            let nextTrackID = playerService.nextTrack?.id
-                            let playNextSet = Set(playerService.playNextQueue.map { $0.id })
+                            let nextTrackID = playerService.queueBadges.nextTrackID
+                            let playNextSet = playerService.queueBadges.playNextTrackIDs
                             let isTapToPlayNext = libraryStore.settings.tapToPlayNext
 
                             LazyVStack(spacing: 4) {
@@ -308,8 +308,8 @@ public struct AlbumDetailView: View {
 
                             let currentTrackID = playerService.currentTrack?.id
                             let isCurrentPlaying = playerService.playbackStatus.isPlaying
-                            let nextTrackID = playerService.nextTrack?.id
-                            let playNextSet = Set(playerService.playNextQueue.map { $0.id })
+                            let nextTrackID = playerService.queueBadges.nextTrackID
+                            let playNextSet = playerService.queueBadges.playNextTrackIDs
                             let isTapToPlayNext = libraryStore.settings.tapToPlayNext
 
                             LazyVStack(spacing: 4) {
@@ -403,6 +403,7 @@ public struct AlbumDetailView: View {
                 initialOnlineMode: true
             )
         }
+        .enableInteractivePopGesture()
     }
 
 

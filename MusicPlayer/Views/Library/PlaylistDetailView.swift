@@ -367,12 +367,14 @@ public struct PlaylistDetailView: View {
                                 .transition(.opacity.combined(with: .move(edge: .top)))
                             }
 
-                            Text("TRACKLIST (\(displayedTracks.count))")
+                            let currentDisplayedTracks = displayedTracks
+
+                            Text("TRACKLIST (\(currentDisplayedTracks.count))")
                                 .font(.system(size: 12, weight: .bold, design: .monospaced))
                                 .foregroundStyle(.secondary)
                                 .padding(.horizontal, 2)
 
-                            if displayedTracks.isEmpty {
+                            if currentDisplayedTracks.isEmpty {
                                 EmptyStateView(
                                     title: searchQuery.isEmpty ? "PLAYLIST IS EMPTY" : "NO MATCHING TRACKS",
                                     message: searchQuery.isEmpty
@@ -383,13 +385,12 @@ public struct PlaylistDetailView: View {
                             } else {
                                 let currentTrackID = playerService.currentTrack?.id
                                 let isCurrentPlaying = playerService.playbackStatus.isPlaying
-                                let nextTrackID = playerService.nextTrack?.id
-                                let playNextSet = Set(playerService.playNextQueue.map { $0.id })
+                                let nextTrackID = playerService.queueBadges.nextTrackID
+                                let playNextSet = playerService.queueBadges.playNextTrackIDs
                                 let isTapToPlayNext = libraryStore.settings.tapToPlayNext
 
                                 LazyVStack(spacing: 4) {
-                                    ForEach(displayedTracks.indices, id: \.self) { index in
-                                        let track = displayedTracks[index]
+                                    ForEach(Array(currentDisplayedTracks.enumerated()), id: \.element.id) { index, track in
                                         playlistTrackRowView(
                                             track: track,
                                             index: index,
@@ -420,6 +421,7 @@ public struct PlaylistDetailView: View {
                 }
                 .dismissKeyboardOnDrag()
             }
+            .enableInteractivePopGesture()
             .background(libraryStore.settings.appTheme.backgroundColor.ignoresSafeArea())
             .navigationTitle(playlist.name)
             .navigationBarTitleDisplayMode(.inline)

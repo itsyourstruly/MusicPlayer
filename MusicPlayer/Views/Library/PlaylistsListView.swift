@@ -22,6 +22,14 @@ public struct PlaylistsListView: View {
     // Main view layout structure
     public var body: some View {
         VStack(spacing: 10) {
+            // Sort Selector Bar (NAME, MOST) with enlarged hit target and reverse blue toggle
+            SortSelectorBar(
+                options: PlaylistSortOption.allCases,
+                selectedOption: $libraryStore.playlistSortOption,
+                isReversed: $libraryStore.isPlaylistSortReversed,
+                labelForOption: { $0.label }
+            )
+
             // New Playlist Action Trigger Bar
             HStack {
                 Button(action: { showingCreateSheet = true }) {
@@ -36,29 +44,14 @@ public struct PlaylistsListView: View {
             }
             .padding(.horizontal, 16)
 
-            // Sort Selector Bar (NAME, MOST) with enlarged hit target and reverse blue toggle
-            SortSelectorBar(
-                options: PlaylistSortOption.allCases,
-                selectedOption: $libraryStore.playlistSortOption,
-                isReversed: $libraryStore.isPlaylistSortReversed,
-                labelForOption: { $0.label }
-            )
 
             if libraryStore.filteredPlaylists.isEmpty {
                 if !libraryStore.searchModel.isSearching {
                     if libraryStore.searchQuery.isEmpty {
-                        EmptyStateView(
-                            title: "EMPTY",
-                            message: "Create a playlist to organize your favorite music.",
-                            actionTitle: "NEW PLAYLIST",
-                            action: { showingCreateSheet = true }
-                        )
+                        EmptyStateView(title: "EMPTY", message: "")
                         .padding(.top, 32)
                     } else {
-                        EmptyStateView(
-                            title: "NO PLAYLISTS FOUND",
-                            message: "No playlists match '\(libraryStore.searchQuery)'."
-                        )
+                        EmptyStateView(title: "EMPTY", message: "")
                         .padding(.top, 32)
                     }
                 }

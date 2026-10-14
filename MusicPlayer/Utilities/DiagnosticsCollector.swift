@@ -188,6 +188,7 @@ public enum DiagnosticsCollector {
         var text = ""
         text += "Playback State: \(player.playbackStatus.label)\n"
         text += "Playback Position: \(String(format: "%.2f s / %.2f s", player.currentTime, player.duration))\n"
+        text += "Last Playback Error: \(player.lastPlaybackError ?? "None")\n"
         text += "Volume: \(String(format: "%.2f", player.volume)) (Muted: \(player.isMuted ? "YES" : "NO"))\n"
         text += "Active Route: \"\(player.currentAudioRouteName)\" (External: \(player.isExternalAudioRouteActive ? "YES" : "NO"))\n"
         text += "Queue Items: \(player.queue.count) (Active Index: \(player.currentIndex.map(String.init) ?? "nil"))\n"

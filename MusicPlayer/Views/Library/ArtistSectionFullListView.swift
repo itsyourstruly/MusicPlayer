@@ -140,6 +140,7 @@ public struct ArtistSectionFullListView: View {
             .padding(.bottom, 140) // Space for floating mini player
         }
         .dismissKeyboardOnDrag()
+        .enableInteractivePopGesture()
         .background(libraryStore.settings.appTheme.backgroundColor.ignoresSafeArea())
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.large)

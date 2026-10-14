@@ -37,22 +37,14 @@ public struct ArtistsListView: View {
             if artists.isEmpty {
                 let hasSources = !libraryStore.settings.linkedFolders.isEmpty || !libraryStore.settings.jellyfinServers.isEmpty
                 if (!libraryStore.isInitialLoading || !hasSources) && !libraryStore.searchModel.isSearching {
-                    EmptyStateView(
-                        title: "NO ARTISTS FOUND",
-                        message: libraryStore.searchQuery.isEmpty
-                            ? (!hasSources
-                                ? "Link a music directory or Jellyfin server in Settings."
-                                : "No artists found in library.")
-                            : "No artists match '\(libraryStore.searchQuery)'."
-                    )
+                    EmptyStateView(title: "EMPTY", message: "")
                     .padding(.top, 24)
                 }
             } else {
-                let visibleCount = min(artists.count, displayLimit)
+                let visibleArtists = Array(artists.prefix(displayLimit))
 
                 LazyVGrid(columns: columns, spacing: 10) {
-                    ForEach(0..<visibleCount, id: \.self) { index in
-                        let artist = artists[index]
+                    ForEach(Array(visibleArtists.enumerated()), id: \.element.id) { index, artist in
                         Button(action: {
                             selectedArtist = artist
                         }) {
@@ -87,7 +79,7 @@ public struct ArtistsListView: View {
                         }
                         .buttonStyle(.plain)
                         .onAppear {
-                            if index >= visibleCount - 20 && visibleCount < artists.count {
+                            if index >= visibleArtists.count - 20 && visibleArtists.count < artists.count {
                                 displayLimit = min(artists.count, displayLimit + 80)
                             }
                         }

@@ -149,7 +149,8 @@ public struct MacQueueInspectorView: View {
                 Spacer()
 
                 // Total queue duration
-                let totalQueueDuration = playerService.queue.reduce(0.0) { $0 + $1.duration }
+                let resolvedTracks = playerService.queue.compactMap { playerService.track(for: $0) }
+                let totalQueueDuration = resolvedTracks.reduce(0.0) { $0 + $1.duration }
                 Text("\(playerService.queue.count) • \(TimeFormatting.formatTime(totalQueueDuration))")
                     .font(.system(size: 8.5, design: .monospaced))
                     .foregroundStyle(.tertiary)
@@ -163,13 +164,15 @@ public struct MacQueueInspectorView: View {
                     .frame(maxWidth: .infinity, alignment: .center)
             } else {
                 LazyVStack(spacing: 2) {
-                    ForEach(Array(playerService.queue.enumerated()), id: \.element.id) { index, track in
-                        MacQueueRowView(
-                            index: index + 1,
-                            track: track,
-                            onPlay: { playerService.playTrackInQueue(at: index) },
-                            onRemove: { playerService.removeFromQueue(at: index) }
-                        )
+                    ForEach(Array(playerService.queue.enumerated()), id: \.element.id) { index, entry in
+                        if let track = playerService.track(for: entry) {
+                            MacQueueRowView(
+                                index: index + 1,
+                                track: track,
+                                onPlay: { playerService.playTrackInQueue(at: index) },
+                                onRemove: { playerService.removeQueueItem(at: index) }
+                            )
+                        }
                     }
                 }
             }

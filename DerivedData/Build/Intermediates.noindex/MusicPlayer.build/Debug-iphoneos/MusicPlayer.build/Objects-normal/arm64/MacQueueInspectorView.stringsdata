@@ -39,7 +39,7 @@
         "key": "Queue is empty",
         "location": {
           "startingColumn": 22,
-          "startingLine": 159
+          "startingLine": 160
         }
       },
       {
@@ -55,7 +55,7 @@
         "key": "%lld • %@",
         "location": {
           "startingColumn": 22,
-          "startingLine": 153
+          "startingLine": 154
         }
       },
       {
@@ -63,7 +63,7 @@
         "key": "%lld",
         "location": {
           "startingColumn": 18,
-          "startingLine": 199
+          "startingLine": 202
         }
       },
       {
@@ -71,7 +71,7 @@
         "key": "×",
         "location": {
           "startingColumn": 22,
-          "startingLine": 231
+          "startingLine": 234
         }
       },
       {
@@ -79,7 +79,7 @@
         "key": "PLAY NOW",
         "location": {
           "startingColumn": 20,
-          "startingLine": 256
+          "startingLine": 259
         }
       },
       {
@@ -87,7 +87,7 @@
         "key": "REMOVE FROM QUEUE",
         "location": {
           "startingColumn": 20,
-          "startingLine": 259
+          "startingLine": 262
         }
       },
       {
@@ -95,7 +95,7 @@
         "key": "REVEAL IN FINDER",
         "location": {
           "startingColumn": 20,
-          "startingLine": 263
+          "startingLine": 266
         }
       }
     ]

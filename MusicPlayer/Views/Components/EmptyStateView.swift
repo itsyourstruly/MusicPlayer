@@ -33,12 +33,14 @@ public struct EmptyStateView: View {
                 .textCase(.uppercase)
                 .foregroundStyle(Color.primary)
 
-            Text(message)
-                .font(.system(size: 14, weight: .regular))
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .lineSpacing(4)
-                .padding(.horizontal, 32)
+            if !message.isEmpty {
+                Text(message)
+                    .font(.system(size: 14, weight: .regular))
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .lineSpacing(4)
+                    .padding(.horizontal, 32)
+}
 
             if let actTitle = actionTitle, let act = action {
                 Button(action: act) {

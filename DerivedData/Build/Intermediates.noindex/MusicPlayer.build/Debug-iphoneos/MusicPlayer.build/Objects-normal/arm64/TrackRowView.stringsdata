@@ -31,7 +31,7 @@
         "key": "PLAY NOW",
         "location": {
           "startingColumn": 26,
-          "startingLine": 360
+          "startingLine": 376
         }
       },
       {
@@ -39,7 +39,7 @@
         "key": "PLAY NEXT",
         "location": {
           "startingColumn": 22,
-          "startingLine": 364
+          "startingLine": 380
         }
       },
       {
@@ -47,7 +47,7 @@
         "key": "QUEUE",
         "location": {
           "startingColumn": 22,
-          "startingLine": 367
+          "startingLine": 383
         }
       },
       {
@@ -55,7 +55,7 @@
         "key": "GO TO ARTIST",
         "location": {
           "startingColumn": 30,
-          "startingLine": 377
+          "startingLine": 393
         }
       },
       {
@@ -63,7 +63,7 @@
         "key": "GO TO ARTIST",
         "location": {
           "startingColumn": 30,
-          "startingLine": 389
+          "startingLine": 405
         }
       },
       {
@@ -71,7 +71,7 @@
         "key": "GO TO ALBUM",
         "location": {
           "startingColumn": 26,
-          "startingLine": 396
+          "startingLine": 412
         }
       },
       {
@@ -79,7 +79,7 @@
         "key": "ADD TO PLAYLIST",
         "location": {
           "startingColumn": 22,
-          "startingLine": 401
+          "startingLine": 417
         }
       },
       {
@@ -87,7 +87,7 @@
         "key": "REMOVE FROM PLAYLIST",
         "location": {
           "startingColumn": 26,
-          "startingLine": 406
+          "startingLine": 422
         }
       },
       {
@@ -95,7 +95,7 @@
         "key": "FILE INFO",
         "location": {
           "startingColumn": 22,
-          "startingLine": 411
+          "startingLine": 427
         }
       },
       {
@@ -103,7 +103,7 @@
         "key": "REMOVE DOWNLOAD",
         "location": {
           "startingColumn": 30,
-          "startingLine": 421
+          "startingLine": 437
         }
       },
       {
@@ -111,7 +111,7 @@
         "key": "REMOVE DOWNLOAD",
         "location": {
           "startingColumn": 30,
-          "startingLine": 430
+          "startingLine": 446
         }
       },
       {
@@ -119,7 +119,7 @@
         "key": "CANCEL DOWNLOAD",
         "location": {
           "startingColumn": 34,
-          "startingLine": 439
+          "startingLine": 455
         }
       },
       {
@@ -127,7 +127,7 @@
         "key": "DOWNLOAD TRACK",
         "location": {
           "startingColumn": 34,
-          "startingLine": 446
+          "startingLine": 462
         }
       },
       {
@@ -135,7 +135,7 @@
         "key": "HIDE TRACK",
         "location": {
           "startingColumn": 22,
-          "startingLine": 460
+          "startingLine": 476
         }
       },
       {
@@ -143,7 +143,7 @@
         "key": "NEXT",
         "location": {
           "startingColumn": 22,
-          "startingLine": 618
+          "startingLine": 634
         }
       },
       {
@@ -151,7 +151,7 @@
         "key": "PLAYING",
         "location": {
           "startingColumn": 34,
-          "startingLine": 606
+          "startingLine": 622
         }
       },
       {
@@ -159,7 +159,7 @@
         "key": "PAUSED",
         "location": {
           "startingColumn": 46,
-          "startingLine": 606
+          "startingLine": 622
         }
       }
     ]
