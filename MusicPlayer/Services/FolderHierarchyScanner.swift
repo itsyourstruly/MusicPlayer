@@ -221,14 +221,20 @@ public struct FolderHierarchyScanner: Sendable {
             modificationDate: modificationDate
         )
 
+        // Snapshot of the GENUINE embedded tags (not folder-derived values) so switching to METADATA
+        // mode can organize this track by its tags without a rescan.
+        func tagValue(_ value: String?) -> String? {
+            guard let v = value?.trimmingCharacters(in: .whitespacesAndNewlines), !v.isEmpty else { return nil }
+            return v
+        }
         let tagSnap = TagSnapshot(
-            title: finalTitle,
-            artist: finalArtist,
-            album: finalAlbum,
-            albumArtist: hierarchy.artist ?? binaryMeta?.albumArtist,
-            year: hierarchy.year ?? binaryMeta?.year,
-            trackNumber: finalTrackNumber,
-            discNumber: finalDiscNumber
+            title: tagValue(binaryMeta?.title) ?? filenameWithoutExt,
+            artist: tagValue(binaryMeta?.artist) ?? tagValue(avArtist) ?? "Unknown Artist",
+            album: tagValue(binaryMeta?.album) ?? "Unknown Album",
+            albumArtist: tagValue(binaryMeta?.albumArtist),
+            year: binaryMeta?.year,
+            trackNumber: binaryMeta?.trackNumber,
+            discNumber: binaryMeta?.discNumber
         )
 
         return Track(
@@ -249,7 +255,7 @@ public struct FolderHierarchyScanner: Sendable {
             fileInfo: audioFileInfo,
             lyrics: binaryMeta?.lyrics,
             relativePath: relativePath,
-            metadataSource: .folderStructure,
+            metadataSource: .embeddedTags,
             tagSnapshot: tagSnap
         )
     }

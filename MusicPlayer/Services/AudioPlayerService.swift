@@ -422,10 +422,6 @@ public final class AudioPlayerService {
     @ObservationIgnored private var appLifecycleObservers: [any NSObjectProtocol] = []
 #endif
 
-    // WAV Diagnostic state
-    @ObservationIgnored private var wavDiagnosticPlayer: AVPlayer?
-    @ObservationIgnored private var wavDiagnosticObserver: NSKeyValueObservation?
-    @ObservationIgnored private var wavDiagnosticTimeoutTask: Task<Void, Never>?
     
     // Initialize with configured properties
     public init() {
@@ -491,12 +487,6 @@ public final class AudioPlayerService {
         boundaryObserverTokens.removeAll()
         playerTimeControlObserver?.invalidate()
         playerTimeControlObserver = nil
-        wavDiagnosticTimeoutTask?.cancel()
-        wavDiagnosticTimeoutTask = nil
-        wavDiagnosticObserver?.invalidate()
-        wavDiagnosticObserver = nil
-        wavDiagnosticPlayer?.pause()
-        wavDiagnosticPlayer = nil
         player?.pause()
         player = nil
         if let intObs = audioInterruptionObserver {
@@ -1551,7 +1541,6 @@ public final class AudioPlayerService {
 
         // 2. Use pre-warmed item if available, otherwise instantiate with pristine audio algorithm
         let playerItem: AVPlayerItem
-        let isLocalPCM = ["wav", "wave", "aif", "aiff", "caf"].contains(track.url.pathExtension.lowercased())
         if prewarmedTrackID == track.id, let prewarmed = prewarmedPlayerItem {
             playerItem = prewarmed
             prewarmedTrackID = nil
@@ -1821,7 +1810,6 @@ public final class AudioPlayerService {
     // Teardown all player and item observers (used on deinit or stopAndClear)
     private func teardownPlayerObservers() {
         teardownItemObservers()
-        cleanupWavDiagnostic()
         if let token = timeObserverToken {
             player?.removeTimeObserver(token)
             timeObserverToken = nil
@@ -1928,13 +1916,6 @@ public final class AudioPlayerService {
                     let fullReport = "AVPlayerItem failed for \"\(track.title)\" [ID:\(track.id.uuidString)] [Type:.\(ext)] [Reachable:\(reachable)]. ItemError: \(itemDomain)(\(itemCode)) \"\(itemErrDesc)\". Underlying: \(underlyingDomain)(\(underlyingCode)) \"\(underlyingDesc)\". PlayerError: \(playerDomain)(\(playerCode)) \"\(playerErrDesc)\". Algorithm: \(algo). Speed: \(speed)x. CoreMedia ErrorLog: \(logStr)"
                     AppLogger.audio.error(fullReport)
                     self.lastPlaybackError = fullReport
-
-                    // WAV diagnostic test: verify if a completely plain AVPlayer can play the exact URL
-                    let failedExt = (track.fileInfo?.fileExtension ?? track.url.pathExtension).lowercased()
-                    if track.url.isFileURL && (failedExt == "wav" || failedExt == "wave") {
-                        let wavURL = (item.asset as? AVURLAsset)?.url ?? track.url
-                        self.runWavDiagnostic(for: wavURL)
-                    }
 
                     // Show short UPPERCASE error, fire haptic, and skip to the next track. Never sit silently on PLAY.
                     self.cloudPlaybackError = "CAN'T PLAY FILE"
@@ -2096,93 +2077,6 @@ public final class AudioPlayerService {
                     self.playbackStatus = .buffering
                 }
             }
-        }
-    }
-
-    // MARK: - WAV Diagnostic Player
-    
-    private func cleanupWavDiagnostic() {
-        wavDiagnosticTimeoutTask?.cancel()
-        wavDiagnosticTimeoutTask = nil
-        wavDiagnosticObserver?.invalidate()
-        wavDiagnosticObserver = nil
-        wavDiagnosticPlayer?.pause()
-        wavDiagnosticPlayer = nil
-    }
-
-    private func runWavDiagnostic(for url: URL) {
-        cleanupWavDiagnostic()
-        return // TEMP: disabled so it doesn't open the same file at the same time as the real player
-
-        let fileName = url.lastPathComponent
-        let diagPlayer = AVPlayer(url: url)
-        diagPlayer.volume = 0.0
-        self.wavDiagnosticPlayer = diagPlayer
-
-        guard let diagItem = diagPlayer.currentItem else {
-            AppLogger.audio.error("WAV DIAGNOSTIC: plain AVPlayer FAILED to obtain currentItem for \(fileName)")
-            cleanupWavDiagnostic()
-            return
-        }
-
-        wavDiagnosticObserver = diagItem.observe(\.status, options: [.new, .initial]) { [weak self] observedItem, _ in
-            Task { @MainActor [weak self] in
-                guard let self = self, self.wavDiagnosticPlayer === diagPlayer else { return }
-
-                switch observedItem.status {
-                case .readyToPlay:
-                    AppLogger.audio.info("WAV DIAGNOSTIC: plain AVPlayer READY for \(fileName)")
-                    self.wavDiagnosticObserver?.invalidate()
-                    self.wavDiagnosticObserver = nil
-                    self.wavDiagnosticTimeoutTask?.cancel()
-                    self.wavDiagnosticTimeoutTask = Task { @MainActor [weak self] in
-                        try? await Task.sleep(nanoseconds: 1_000_000_000)
-                        guard let self = self, self.wavDiagnosticPlayer === diagPlayer else { return }
-                        let statusStr: String
-                        switch diagPlayer.timeControlStatus {
-                        case .paused: statusStr = "paused"
-                        case .waitingToPlayAtSpecifiedRate:
-                            let reason = diagPlayer.reasonForWaitingToPlay?.rawValue ?? "none"
-                            statusStr = "waitingToPlayAtSpecifiedRate (\(reason))"
-                        case .playing: statusStr = "playing"
-                        @unknown default: statusStr = "unknown"
-                        }
-                        AppLogger.audio.info("WAV DIAGNOSTIC: plain AVPlayer timeControlStatus for \(fileName): \(statusStr)")
-                        self.cleanupWavDiagnostic()
-                    }
-
-                case .failed:
-                    let diagItemErr = observedItem.error as? NSError
-                    let diagDomain = diagItemErr?.domain ?? "UnknownDomain"
-                    let diagCode = diagItemErr?.code ?? 0
-                    let diagUnderlyingErr = diagItemErr?.userInfo[NSUnderlyingErrorKey] as? NSError
-                    let diagUnderlyingDomain = diagUnderlyingErr?.domain ?? "None"
-                    let diagUnderlyingCode = diagUnderlyingErr.map { String($0.code) } ?? "None"
-                    let diagEvents = observedItem.errorLog()?.events ?? []
-                    let diagLogStr = diagEvents.map { evt in
-                        "[\(evt.errorDomain):\(evt.errorStatusCode) \"\(evt.errorComment ?? "NoComment")\"]"
-                    }.joined(separator: "; ")
-                    let eventsDesc = diagLogStr.isEmpty ? "None" : diagLogStr
-
-                    AppLogger.audio.error("WAV DIAGNOSTIC: plain AVPlayer FAILED for \(fileName) - domain: \(diagDomain), code: \(diagCode), underlyingDomain: \(diagUnderlyingDomain), underlyingCode: \(diagUnderlyingCode), errorLog: \(eventsDesc)")
-                    self.cleanupWavDiagnostic()
-
-                case .unknown:
-                    break
-
-                @unknown default:
-                    break
-                }
-            }
-        }
-
-        diagPlayer.play()
-
-        wavDiagnosticTimeoutTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: 5_000_000_000)
-            guard let self = self, self.wavDiagnosticPlayer === diagPlayer else { return }
-            AppLogger.audio.warning("WAV DIAGNOSTIC: plain AVPlayer TIMEOUT for \(fileName)")
-            self.cleanupWavDiagnostic()
         }
     }
 

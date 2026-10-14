@@ -18,6 +18,7 @@ public struct FolderSettingsView: View {
     @State private var serverToUnlink: JellyfinServerLink? = nil
     @State private var showingUnlinkServerAlert: Bool = false
     @State private var showingTagFinderSheet: Bool = false
+    @State private var folderForPlaylistFinder: LinkedFolder? = nil
     @State private var showingClearMetadataAlert: Bool = false
     @State private var showingClearArtworkAlert: Bool = false
     @State private var showingClearDownloadsAlert: Bool = false
@@ -25,6 +26,11 @@ public struct FolderSettingsView: View {
     @State private var cloudWarningMessage: String = ""
     @State private var artworkCacheSizeBytes: Int64 = 0
     @State private var activeDetail: SettingOptionDetail? = nil
+    // Pending (unsaved) local organization selection; nil = use saved settings
+    @State private var pendingMethod: LibraryScanMethod? = nil
+    @State private var pendingLayout: FolderHierarchyLayout? = nil
+    @State private var isSavingOrganization: Bool = false
+    @State private var storageTarget: StorageClearTarget = .metadata
 
     public init(libraryStore: LibraryStore) {
         self.libraryStore = libraryStore
@@ -46,9 +52,6 @@ public struct FolderSettingsView: View {
                 if !libraryStore.settings.linkedFolders.isEmpty {
                     findTrackTagsButtonSection
                 }
-
-                // MARK: - 3B. Downloads Section
-                downloadsSection
 
                 // MARK: - 5. Library Scan Method (local sources only)
                 if !libraryStore.settings.linkedFolders.isEmpty {
@@ -184,6 +187,12 @@ public struct FolderSettingsView: View {
         }
         .sheet(item: $activeDetail) { detail in
             SettingOptionDetailSheet(detail: detail)
+                .environment(\.appTheme, libraryStore.settings.appTheme)
+        }
+        .sheet(item: $folderForPlaylistFinder) { folder in
+            FolderPlaylistFinderSheet(libraryStore: libraryStore, folder: folder)
+                .tint(appTheme.accentColor)
+                .environment(\.appTheme, appTheme)
         }
         .task {
             if artworkCacheSizeBytes == 0 {
@@ -237,7 +246,7 @@ public struct FolderSettingsView: View {
     private func jellyfinServerRow(server: JellyfinServerLink) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .center) {
-                Text("JELLYFIN: \(server.serverName.uppercased())")
+                Text("JELLYFIN - \(server.username.uppercased())")
                     .font(.system(size: 14, weight: .bold, design: .monospaced))
                     .foregroundStyle(Color.white)
                     .lineLimit(1)
@@ -273,7 +282,7 @@ public struct FolderSettingsView: View {
             let serverTrackCount = libraryStore.trackCount(for: server)
             Text(libraryStore.isScanning && libraryStore.currentlyScanningFolderID == server.id
                  ? scanProgressLine
-                 : "USER: \(server.username.uppercased()) • \(serverTrackCount) TRACKS")
+                 : "\(serverTrackCount) TRACKS, \(libraryStore.albumCount(for: server)) ALBUMS, \(libraryStore.artistCount(for: server)) ARTISTS")
                 .font(.system(size: 11, design: .monospaced))
                 .lineLimit(1)
                 .foregroundStyle(.secondary)
@@ -314,7 +323,7 @@ public struct FolderSettingsView: View {
 
         return VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .center) {
-                Text("LINKED TO \(folder.name.uppercased())")
+                Text(folder.name.uppercased())
                     .font(.system(size: 14, weight: .bold, design: .monospaced))
                     .foregroundStyle(Color.white)
                     .lineLimit(1)
@@ -331,6 +340,13 @@ public struct FolderSettingsView: View {
                         Text(isThisScanning ? "SCANNING..." : "RESCAN")
                     }
                     .disabled(libraryStore.isScanning)
+
+                    Button {
+                        HapticFeedback.selectionChanged()
+                        folderForPlaylistFinder = folder
+                    } label: {
+                        Text("FIND PLAYLIST")
+                    }
 
                     Button(action: {
                         folderToChange = folder
@@ -447,103 +463,103 @@ public struct FolderSettingsView: View {
         )
     }
 
-    // MARK: - 3B. Downloads Section
-    private var downloadsSection: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("DOWNLOADS & OFFLINE")
+    // MARK: - 5. Library Organization Option Box (METADATA / FOLDER + folder layouts), local folders only
+    private var effectiveMethod: LibraryScanMethod { pendingMethod ?? libraryStore.settings.libraryScanMethod }
+    private var effectiveLayout: FolderHierarchyLayout { pendingLayout ?? libraryStore.settings.folderHierarchyLayout }
+    private var hasPendingOrganizationChange: Bool {
+        let saved = libraryStore.settings
+        if effectiveMethod != saved.libraryScanMethod { return true }
+        // Layout only matters (and only shows) in FOLDER mode
+        return effectiveMethod == .folderHierarchy && effectiveLayout != saved.folderHierarchyLayout
+    }
+
+    private var scanMethodSelectorSection: some View {
+        let isFolder = effectiveMethod == .folderHierarchy
+
+        return VStack(alignment: .leading, spacing: 12) {
+            Text("LOCAL FOLDER ORGANIZATION")
                 .font(.system(size: 11, weight: .bold, design: .monospaced))
                 .foregroundStyle(.secondary)
-
-            // Storage summary row & clear button
-            HStack {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("JELLYFIN OFFLINE STORAGE")
-                        .font(.system(size: 12, weight: .bold, design: .monospaced))
-                        .foregroundStyle(Color.primary)
-
-                    Text("\(JellyfinDownloadManager.shared.downloadRecords.count) TRACKS • \(JellyfinDownloadManager.shared.formattedTotalSize.uppercased())")
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundStyle(.secondary)
+                .onLongPressGesture(minimumDuration: 0.45) {
+                    HapticFeedback.notificationSuccess()
+                    activeDetail = SettingOptionCatalog.localOrganizationSection
                 }
 
-                Spacer()
-
-                if !JellyfinDownloadManager.shared.downloadRecords.isEmpty {
-                    Button(role: .destructive) {
-                        HapticFeedback.notificationWarning()
-                        showingClearDownloadsAlert = true
+            HStack(alignment: .firstTextBaseline) {
+            Menu {
+                    Button {
+                        HapticFeedback.selectionChanged()
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            pendingMethod = .id3Tags
+                        }
                     } label: {
-                        Text("CLEAR ALL")
-                            .font(.system(size: 11, weight: .bold, design: .monospaced))
-                            .foregroundStyle(Color.red)
+                        if !isFolder { Label("METADATA", systemImage: "checkmark") } else { Text("METADATA") }
+                    }
+
+                    Menu {
+                        ForEach(FolderHierarchyLayout.allCases) { layout in
+                            Button {
+                                HapticFeedback.selectionChanged()
+                                withAnimation(.easeInOut(duration: 0.2)) {
+                                    pendingLayout = layout
+                                    pendingMethod = .folderHierarchy
+                                }
+                            } label: {
+                                if isFolder && effectiveLayout == layout {
+                                    Label(layout.displayName, systemImage: "checkmark")
+                                } else {
+                                    Text(layout.displayName)
+                                }
+                            }
+                        }
+                    } label: {
+                        if isFolder { Label("FOLDER", systemImage: "checkmark") } else { Text("FOLDER") }
+                    }
+                } label: {
+                    Text(isFolder ? "FOLDER" : "METADATA")
+                        .font(.system(size: 13, weight: .bold, design: .monospaced))
+                        .foregroundStyle(Color.white)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
+                }
+                .disabled(isSavingOrganization)
+
+                if hasPendingOrganizationChange || isSavingOrganization {
+                    Button {
+                        saveOrganization()
+                    } label: {
+                        Text(isSavingOrganization ? "SAVING..." : "SAVE")
+                            .font(.system(size: 13, weight: .bold, design: .monospaced))
+                            .foregroundStyle(appTheme.accentColor)
                     }
                     .buttonStyle(.plain)
+                    .disabled(isSavingOrganization)
+                    .transition(.opacity)
                 }
             }
-            .padding(.top, 4)
+        }
+        .animation(.easeInOut(duration: 0.2), value: hasPendingOrganizationChange || isSavingOrganization)
+    }
+
+    private func saveOrganization() {
+        guard !isSavingOrganization else { return }
+        let method = effectiveMethod
+        let layout = effectiveLayout
+        isSavingOrganization = true
+        Task { @MainActor in
+            await libraryStore.applyLocalOrganization(method: method, layout: layout)
+            HapticFeedback.notificationSuccess()
+            withAnimation(.easeInOut(duration: 0.2)) {
+                pendingMethod = nil
+                pendingLayout = nil
+                isSavingOrganization = false
+            }
         }
     }
 
-    // MARK: - 5. Clean Library Scan Method Selector (METADATA vs FOLDER)
-    private var scanMethodSelectorSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("LIBRARY SCAN METHOD")
-                .font(.system(size: 11, weight: .bold, design: .monospaced))
-                .foregroundStyle(.secondary)
-
-            // Clean 2-Button Toggle (METADATA or FOLDER)
-            HStack(spacing: 10) {
-                // METADATA Button
-                Button(action: {
-                    HapticFeedback.selectionChanged()
-                    withAnimation(.easeInOut(duration: 0.15)) {
-                        libraryStore.setLibraryOrganization(.id3Tags)
-                    }
-                }) {
-                    Text("METADATA")
-                        .font(.system(size: 13, weight: .bold, design: .monospaced))
-                        .foregroundStyle(libraryStore.settings.libraryScanMethod == .id3Tags ? Color.black : Color.primary)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 12)
-                        .background(
-                            libraryStore.settings.libraryScanMethod == .id3Tags
-                                ? Color.white
-                                : appTheme.secondaryBackgroundColor
-                        )
-                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                }
-                .buttonStyle(.plain)
-
-                // FOLDER Button
-                Button(action: {
-                    HapticFeedback.selectionChanged()
-                    withAnimation(.easeInOut(duration: 0.15)) {
-                        libraryStore.setLibraryOrganization(.folderHierarchy)
-                    }
-                }) {
-                    Text("FOLDER")
-                        .font(.system(size: 13, weight: .bold, design: .monospaced))
-                        .foregroundStyle(libraryStore.settings.libraryScanMethod == .folderHierarchy ? Color.black : Color.primary)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 12)
-                        .background(
-                            libraryStore.settings.libraryScanMethod == .folderHierarchy
-                                ? Color.white
-                                : appTheme.secondaryBackgroundColor
-                        )
-                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                }
-                .buttonStyle(.plain)
-            }
-
-            // Description text displayed directly below the active selection
-            Text(libraryStore.settings.libraryScanMethod.descriptionText)
-                .font(.system(size: 12))
-                .foregroundStyle(.secondary)
-                .lineSpacing(3)
-                .padding(.top, 2)
-                .padding(.horizontal, 2)
-        }
+    private var optionDivider: some View {
+        Divider()
+            .overlay(appTheme.separatorColor.opacity(0.4))
     }
 
     private func handleJellyfinConnected(_ serverLink: JellyfinServerLink) {
@@ -616,48 +632,82 @@ public struct FolderSettingsView: View {
     }
 
     // MARK: - 6. Cache Management (CLEAR METADATA CACHE & CLEAR ARTWORK CACHE)
+    private enum StorageClearTarget: String, CaseIterable, Identifiable {
+        case metadata = "LOCAL TRACKS METADATA CACHE"
+        case artwork = "ARTWORK CACHE"
+        case jellyfinOffline = "JELLYFIN OFFLINE STORAGE"
+        var id: String { rawValue }
+    }
+
+    private var storageTargetDetail: String {
+        switch storageTarget {
+        case .metadata:
+            return "\(libraryStore.downloadedMetadataCache.totalRecordsCount) RECORDS"
+        case .artwork:
+            return ByteFormatting.formatFileSize(bytes: artworkCacheSizeBytes).uppercased()
+        case .jellyfinOffline:
+            return "\(JellyfinDownloadManager.shared.downloadRecords.count) TRACKS • \(JellyfinDownloadManager.shared.formattedTotalSize.uppercased())"
+        }
+    }
+
     private var cacheManagementSection: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("CACHE MANAGEMENT")
+            Text("APP STORAGE MANAGEMENT")
                 .font(.system(size: 11, weight: .bold, design: .monospaced))
                 .foregroundStyle(.secondary)
-
-            // Clear Metadata Cache
-            HStack {
-                Button(action: {
+                .onLongPressGesture(minimumDuration: 0.45) {
                     HapticFeedback.notificationSuccess()
-                    showingClearMetadataAlert = true
-                }) {
-                    Text("CLEAR METADATA CACHE")
-                        .font(.system(size: 13.5, weight: .bold, design: .monospaced))
-                        .foregroundStyle(Color.red)
+                    activeDetail = SettingOptionCatalog.storageManagementSection
                 }
-                .buttonStyle(.plain)
 
-                Spacer()
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text("CLEAR")
+                    .font(.system(size: 13, weight: .bold, design: .monospaced))
+                    .foregroundStyle(Color.white)
 
-                Text("\(libraryStore.downloadedMetadataCache.totalRecordsCount) REC")
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundStyle(.secondary)
+                Menu {
+                    ForEach(StorageClearTarget.allCases) { target in
+                        Button {
+                            HapticFeedback.selectionChanged()
+                            storageTarget = target
+                        } label: {
+                            if storageTarget == target {
+                                Label(target.rawValue, systemImage: "checkmark")
+                            } else {
+                                Text(target.rawValue)
+                            }
+                        }
+                    }
+                } label: {
+                    Text(storageTarget.rawValue)
+                        .font(.system(size: 13, weight: .bold, design: .monospaced))
+                        .foregroundStyle(Color.white)
+                        .multilineTextAlignment(.leading)
+                }
+
+                Spacer(minLength: 0)
             }
 
-            // Clear Artwork Cache
-            HStack {
-                Button(action: {
-                    HapticFeedback.notificationSuccess()
-                    showingClearArtworkAlert = true
-                }) {
-                    Text("CLEAR ARTWORK CACHE")
-                        .font(.system(size: 13.5, weight: .bold, design: .monospaced))
-                        .foregroundStyle(Color.red)
-                }
-                .buttonStyle(.plain)
+            HStack(alignment: .firstTextBaseline) {
+                Text(storageTargetDetail)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(.secondary)
 
                 Spacer()
 
-                Text(ByteFormatting.formatFileSize(bytes: artworkCacheSizeBytes).uppercased())
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundStyle(.secondary)
+                Button(role: .destructive) {
+                    HapticFeedback.notificationWarning()
+                    switch storageTarget {
+                    case .metadata: showingClearMetadataAlert = true
+                    case .artwork: showingClearArtworkAlert = true
+                    case .jellyfinOffline: showingClearDownloadsAlert = true
+                    }
+                } label: {
+                    Text("CLEAR")
+                        .font(.system(size: 13, weight: .bold, design: .monospaced))
+                        .foregroundStyle(Color.red)
+                }
+                .buttonStyle(.plain)
             }
         }
         .padding(.vertical, 4)

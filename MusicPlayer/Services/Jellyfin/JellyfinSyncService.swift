@@ -120,6 +120,59 @@ private struct JellyfinIdItem: Codable, Sendable {
     }
 }
 
+private struct JellyfinPathItemsResponse: Codable, Sendable {
+    let items: [JellyfinPathItem]?
+    let totalRecordCount: Int?
+    enum CodingKeys: String, CodingKey {
+        case items = "Items"
+        case totalRecordCount = "TotalRecordCount"
+    }
+}
+
+private struct JellyfinPathItem: Codable, Sendable {
+    let id: String
+    let path: String?
+    enum CodingKeys: String, CodingKey {
+        case id = "Id"
+        case path = "Path"
+    }
+}
+
+// MARK: - Jellyfin Library Roots
+
+/// Persisted server-side music library root paths per Jellyfin server link, used to turn absolute
+/// server paths (e.g. /media/music/Artist/Album/01 Track.flac) into library-relative folder paths.
+nonisolated public enum JellyfinLibraryRoots {
+    private static func key(_ linkID: UUID) -> String { "jellyfin_library_roots_v1_\(linkID.uuidString)" }
+
+    public static func roots(for linkID: UUID) -> [String] {
+        UserDefaults.standard.stringArray(forKey: key(linkID)) ?? []
+    }
+
+    public static func setRoots(_ roots: [String], for linkID: UUID) {
+        UserDefaults.standard.set(roots, forKey: key(linkID))
+    }
+
+    /// Case-preserving library-relative path (NFC, forward slashes, no leading slash), or nil if the
+    /// path is not under any known root.
+    public static func relativePath(for rawPath: String, roots: [String]) -> String? {
+        let path = rawPath.replacingOccurrences(of: "\\", with: "/").precomposedStringWithCanonicalMapping
+        var bestRoot: String? = nil
+        for root in roots {
+            let r = root.replacingOccurrences(of: "\\", with: "/").precomposedStringWithCanonicalMapping
+            guard !r.isEmpty, path.hasPrefix(r) else { continue }
+            let rest = path.dropFirst(r.count)
+            guard r.hasSuffix("/") || rest.hasPrefix("/") else { continue }
+            if bestRoot == nil || r.count > bestRoot!.count { bestRoot = r }
+        }
+        guard let root = bestRoot else { return nil }
+        var rel = String(path.dropFirst(root.count))
+        while rel.contains("//") { rel = rel.replacingOccurrences(of: "//", with: "/") }
+        while rel.hasPrefix("/") { rel.removeFirst() }
+        return rel.isEmpty ? nil : rel
+    }
+}
+
 // MARK: - JellyfinSyncService
 
 public final class JellyfinSyncService: Sendable {
@@ -199,6 +252,7 @@ public final class JellyfinSyncService: Sendable {
 
                 let changedPaths = changedItemsMap.values.compactMap { $0.path }
                 let commonPrefix = findCommonPathPrefix(paths: changedPaths)
+                let libraryRoots = JellyfinLibraryRoots.roots(for: link.id)
 
                 var upserted: [Track] = []
                 for item in changedItemsMap.values {
@@ -207,6 +261,7 @@ public final class JellyfinSyncService: Sendable {
                         link: link,
                         token: token,
                         commonPrefix: commonPrefix,
+                        libraryRoots: libraryRoots,
                         existingTracksByID: survivingTracksMap
                     ) {
                         upserted.append(track)
@@ -230,6 +285,126 @@ public final class JellyfinSyncService: Sendable {
         let newIDs = Set(fullTracks.map(\.id))
         let removedIDs = Set(existingTracks.map(\.id).filter { !newIDs.contains($0) })
         return (upserted: fullTracks, removedIDs: removedIDs)
+    }
+
+    /// Lightweight one-time backfill: fetches ONLY Id+Path for every audio item (1000/page, 4 concurrent),
+    /// determines each music library's root (common folder of its tracks), persists the roots, and
+    /// returns case-preserving library-relative paths keyed by Jellyfin item ID. No images/metadata.
+    nonisolated public func fetchRelativeItemPaths(
+        for link: JellyfinServerLink,
+        token: String
+    ) async throws -> [String: String] {
+        let parentIDs = await fetchMusicParentIDs(link: link, token: token)
+        let parentIDsToQuery: [String?] = parentIDs.isEmpty ? [nil] : parentIDs.map { Optional($0) }
+
+        var rawPathsByID: [String: String] = [:]
+        var roots: [String] = []
+        for parentID in parentIDsToQuery {
+            let items = try await fetchPathItems(link: link, token: token, parentID: parentID)
+            var libraryPaths: [String] = []
+            libraryPaths.reserveCapacity(items.count)
+            for item in items {
+                guard let path = item.path, !path.isEmpty else { continue }
+                rawPathsByID[item.id] = path
+                libraryPaths.append(path)
+            }
+            let root = findCommonPathPrefix(paths: libraryPaths)
+            if !root.isEmpty { roots.append(root) }
+        }
+
+        guard !roots.isEmpty else { return [:] }
+        JellyfinLibraryRoots.setRoots(roots, for: link.id)
+
+        var result: [String: String] = [:]
+        result.reserveCapacity(rawPathsByID.count)
+        for (id, raw) in rawPathsByID {
+            if let rel = JellyfinLibraryRoots.relativePath(for: raw, roots: roots) {
+                result[id] = rel
+            }
+        }
+        return result
+    }
+
+    nonisolated private func fetchPathItems(
+        link: JellyfinServerLink,
+        token: String,
+        parentID: String?
+    ) async throws -> [JellyfinPathItem] {
+        let pageLimit = 1000
+        let first = try await fetchPathPage(link: link, token: token, parentID: parentID, startIndex: 0, limit: pageLimit, includeTotal: true)
+        var items = first.items ?? []
+        let total = first.totalRecordCount ?? items.count
+        guard total > pageLimit else { return items }
+
+        var indices = Array(stride(from: pageLimit, to: total, by: pageLimit)).makeIterator()
+        try await withThrowingTaskGroup(of: [JellyfinPathItem].self) { group in
+            for _ in 0..<4 {
+                if let start = indices.next() {
+                    group.addTask {
+                        try await self.fetchPathPage(link: link, token: token, parentID: parentID, startIndex: start, limit: pageLimit, includeTotal: false).items ?? []
+                    }
+                }
+            }
+            while let page = try await group.next() {
+                items.append(contentsOf: page)
+                if let start = indices.next() {
+                    group.addTask {
+                        try await self.fetchPathPage(link: link, token: token, parentID: parentID, startIndex: start, limit: pageLimit, includeTotal: false).items ?? []
+                    }
+                }
+            }
+        }
+        return items
+    }
+
+    nonisolated private func fetchPathPage(
+        link: JellyfinServerLink,
+        token: String,
+        parentID: String?,
+        startIndex: Int,
+        limit: Int,
+        includeTotal: Bool
+    ) async throws -> JellyfinPathItemsResponse {
+        let endpoint = link.serverURL.appendingPathComponent("Users/\(link.userId)/Items")
+        var components = URLComponents(url: endpoint, resolvingAgainstBaseURL: false)
+        var queryItems = [
+            URLQueryItem(name: "IncludeItemTypes", value: "Audio"),
+            URLQueryItem(name: "Recursive", value: "true"),
+            URLQueryItem(name: "SortBy", value: "SortName,Id"),
+            URLQueryItem(name: "EnableUserData", value: "false"),
+            URLQueryItem(name: "EnableImages", value: "false"),
+            URLQueryItem(name: "Fields", value: "Path"),
+            URLQueryItem(name: "Limit", value: String(limit)),
+            URLQueryItem(name: "StartIndex", value: String(startIndex)),
+            URLQueryItem(name: "EnableTotalRecordCount", value: includeTotal ? "true" : "false")
+        ]
+        if let parentID = parentID, !parentID.isEmpty {
+            queryItems.append(URLQueryItem(name: "ParentId", value: parentID))
+        }
+        components?.queryItems = queryItems
+        guard let url = components?.url else { throw JellyfinClientError.invalidURL }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.setValue(JellyfinClient.shared.authHeader(token: token), forHTTPHeaderField: "Authorization")
+        request.timeoutInterval = 45
+
+        var lastError: Error?
+        for attempt in 0..<2 {
+            do {
+                let (data, response) = try await session.data(for: request)
+                guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+                    let code = (response as? HTTPURLResponse)?.statusCode ?? -1
+                    throw JellyfinClient.mapHTTPStatusError(code)
+                }
+                return try JSONDecoder().decode(JellyfinPathItemsResponse.self, from: data)
+            } catch {
+                lastError = error
+                if attempt == 0 { try? await Task.sleep(nanoseconds: 1_000_000_000) }
+            }
+        }
+        if let err = lastError { throw JellyfinClient.mapNetworkError(err) }
+        throw JellyfinClientError.networkError("SERVER DIDN'T RESPOND")
     }
 
     /// Fetches all audio items from the server for the specified server link, returning mapped Tracks.
@@ -383,6 +558,7 @@ public final class JellyfinSyncService: Sendable {
 
         let changedPaths = changedItemsMap.values.compactMap { $0.path }
         let commonPrefix = findCommonPathPrefix(paths: changedPaths)
+        let libraryRoots = JellyfinLibraryRoots.roots(for: link.id)
 
         for item in changedItemsMap.values {
             if let track = mapItemToTrack(
@@ -390,6 +566,7 @@ public final class JellyfinSyncService: Sendable {
                 link: link,
                 token: token,
                 commonPrefix: commonPrefix,
+                libraryRoots: libraryRoots,
                 existingTracksByID: survivingTracksMap
             ) {
                 survivingTracksMap[track.id] = track
@@ -411,6 +588,7 @@ public final class JellyfinSyncService: Sendable {
         progressHandler: ((Int, Int) -> Void)?
     ) async throws -> [Track] {
         var allItemsMap: [String: JellyfinAudioItem] = [:]
+        var libraryRoots: [String] = []
         for parentID in parentIDs {
             let items = try await fetchAudioItems(
                 link: link,
@@ -422,6 +600,12 @@ public final class JellyfinSyncService: Sendable {
             for item in items {
                 allItemsMap[item.id] = item
             }
+            // Library root = common folder of every track in this music library
+            let root = findCommonPathPrefix(paths: items.compactMap { $0.path })
+            if !root.isEmpty { libraryRoots.append(root) }
+        }
+        if !libraryRoots.isEmpty {
+            JellyfinLibraryRoots.setRoots(libraryRoots, for: link.id)
         }
 
         let rawPaths = allItemsMap.values.compactMap { $0.path }
@@ -436,6 +620,7 @@ public final class JellyfinSyncService: Sendable {
                 link: link,
                 token: token,
                 commonPrefix: commonPrefix,
+                libraryRoots: libraryRoots,
                 existingTracksByID: existingTracksByID
             ) {
                 resultTracks.append(track)
@@ -669,6 +854,7 @@ public final class JellyfinSyncService: Sendable {
         link: JellyfinServerLink,
         token: String,
         commonPrefix: String,
+        libraryRoots: [String] = [],
         existingTracksByID: [UUID: Track]
     ) -> Track? {
         JellyfinSessionCache.shared.register(serverLink: link, token: token)
@@ -737,7 +923,10 @@ public final class JellyfinSyncService: Sendable {
 
         var relativePath: String?
         if let rawPath = item.path, !rawPath.isEmpty {
-            if !commonPrefix.isEmpty && rawPath.hasPrefix(commonPrefix) {
+            if let rel = JellyfinLibraryRoots.relativePath(for: rawPath, roots: libraryRoots) {
+                // Case-preserving library-relative path (drives folder organization)
+                relativePath = rel
+            } else if !commonPrefix.isEmpty && rawPath.hasPrefix(commonPrefix) {
                 var stripped = String(rawPath.dropFirst(commonPrefix.count))
                 while stripped.hasPrefix("/") {
                     stripped.removeFirst()

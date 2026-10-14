@@ -40,12 +40,12 @@ public struct ParsedPathMetadata: Sendable, Equatable {
 
 /// Pure filesystem path metadata parser for cloud and folder-based music libraries.
 /// Zero file I/O operations.
-public enum FolderPathMetadataParser: Sendable {
+nonisolated public enum FolderPathMetadataParser: Sendable {
 
     // MARK: - Precompiled Regular Expressions
 
     private static let discFolderRegex: NSRegularExpression = {
-        try! NSRegularExpression(pattern: #"^(?:cd|disc|disk)\s*(\d+)(?:\s*[-–—:]\s*.*)?$"#, options: [.caseInsensitive])
+        try! NSRegularExpression(pattern: #"^(?:cd|disc|disk)[\s._-]*(\d+)(?:\s*of\s*\d+)?(?:\s*[-–—:]\s*.*)?$"#, options: [.caseInsensitive])
     }()
 
     private static let qualityTagRegex: NSRegularExpression = {
@@ -86,7 +86,15 @@ public enum FolderPathMetadataParser: Sendable {
 
     // MARK: - Main Parser Method
 
-    public static func parse(relativePath: String) -> ParsedPathMetadata {
+    /// Parses a path relative to the linked folder root.
+    /// - Parameters:
+    ///   - layout: How folder levels map to artist/album. Defaults to `.auto`.
+    ///   - rootFolderName: Linked source folder name, used as the album for files directly in the root.
+    public static func parse(
+        relativePath: String,
+        layout: FolderHierarchyLayout = .auto,
+        rootFolderName: String? = nil
+    ) -> ParsedPathMetadata {
         let normalized = relativePath.precomposedStringWithCanonicalMapping
         var parts = normalized.components(separatedBy: "/").filter { !$0.isEmpty }
 
@@ -110,45 +118,80 @@ public enum FolderPathMetadataParser: Sendable {
         }
 
         var discNumber: Int? = nil
-        // Check if last folder is a disc folder
-        if let lastFolder = parts.last {
+        // Strip trailing disc folders ("CD1", "Disc 2", "Disc 1 of 2"); they belong to the album
+        while parts.count > 1, let lastFolder = parts.last {
             let trimmedLast = lastFolder.trimmingCharacters(in: .whitespacesAndNewlines)
             let range = NSRange(location: 0, length: trimmedLast.utf16.count)
-            if let match = discFolderRegex.firstMatch(in: trimmedLast, options: [], range: range) {
-                if let discRange = Range(match.range(at: 1), in: trimmedLast), let d = Int(trimmedLast[discRange]) {
-                    discNumber = d
-                    parts.removeLast()
-                }
+            guard let match = discFolderRegex.firstMatch(in: trimmedLast, options: [], range: range) else { break }
+            if discNumber == nil, let discRange = Range(match.range(at: 1), in: trimmedLast), let d = Int(trimmedLast[discRange]) {
+                discNumber = d
             }
+            parts.removeLast()
         }
 
+        /// Splits an "Artist - Album" folder name. A leading 4-digit year ("1999 - Album") is not an artist.
+        func splitArtistAlbum(_ name: String) -> (artist: String, album: String)? {
+            guard name.contains(" - ") else { return nil }
+            let split = name.components(separatedBy: " - ")
+            let first = split[0].trimmingCharacters(in: .whitespacesAndNewlines)
+            let rest = split.dropFirst().joined(separator: " - ").trimmingCharacters(in: .whitespacesAndNewlines)
+            if first.isEmpty || rest.isEmpty { return nil }
+            if first.count == 4, Int(first) != nil { return nil }
+            return (first, rest)
+        }
+
+        // Album directory key (layout-independent so album identity is stable across layouts)
+        let albumDirectory: String
+        if parts.isEmpty {
+            albumDirectory = "Unknown Artist/Unknown Album"
+        } else if parts.count == 1 {
+            let single = parts[0].trimmingCharacters(in: .whitespacesAndNewlines)
+            if let pair = splitArtistAlbum(single) {
+                albumDirectory = "\(pair.artist)/\(pair.album)"
+            } else {
+                albumDirectory = "\(single)/\(single)"
+            }
+        } else {
+            let a = parts[parts.count - 2].trimmingCharacters(in: .whitespacesAndNewlines)
+            let b = parts[parts.count - 1].trimmingCharacters(in: .whitespacesAndNewlines)
+            albumDirectory = "\(a)/\(b)"
+        }
+
+        // Empty rawArtist means "Unknown Artist" (and no album artist)
         var rawArtist: String = ""
         var rawAlbum: String = ""
 
         if parts.isEmpty {
-            rawArtist = "Unknown Artist"
-            rawAlbum = "Unknown Album"
-        } else if parts.count == 1 {
-            let single = parts[0].trimmingCharacters(in: .whitespacesAndNewlines)
-            if single.contains(" - ") {
-                let split = single.components(separatedBy: " - ")
-                rawArtist = split[0].trimmingCharacters(in: .whitespacesAndNewlines)
-                rawAlbum = split.dropFirst().joined(separator: " - ").trimmingCharacters(in: .whitespacesAndNewlines)
-            } else {
-                rawArtist = single
-                rawAlbum = single
+            // Files directly in the linked root
+            let rootName = rootFolderName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            rawAlbum = rootName.isEmpty ? "Unknown Album" : rootName
+        } else {
+            let useArtistAlbum: Bool
+            switch layout {
+            case .auto: useArtistAlbum = parts.count >= 2
+            case .artistAlbumTrack: useArtistAlbum = true
+            case .albumTrack: useArtistAlbum = false
             }
-        } else {
-            rawAlbum = parts.removeLast().trimmingCharacters(in: .whitespacesAndNewlines)
-            rawArtist = parts.removeLast().trimmingCharacters(in: .whitespacesAndNewlines)
-        }
 
-        // Album directory key (artist and album folders joined, disc folders excluded)
-        let albumDirectory: String
-        if !rawArtist.isEmpty && !rawAlbum.isEmpty {
-            albumDirectory = "\(rawArtist)/\(rawAlbum)"
-        } else {
-            albumDirectory = rawAlbum.isEmpty ? rawArtist : rawAlbum
+            let albumFolder = parts[parts.count - 1].trimmingCharacters(in: .whitespacesAndNewlines)
+            if useArtistAlbum && parts.count >= 2 {
+                rawAlbum = albumFolder
+                rawArtist = parts[parts.count - 2].trimmingCharacters(in: .whitespacesAndNewlines)
+            } else if useArtistAlbum {
+                // ARTIST/ALBUM/TRACK with a single level: folder is both artist and album
+                if let pair = splitArtistAlbum(albumFolder) {
+                    rawArtist = pair.artist
+                    rawAlbum = pair.album
+                } else {
+                    rawArtist = albumFolder
+                    rawAlbum = albumFolder
+                }
+            } else if let pair = splitArtistAlbum(albumFolder) {
+                rawArtist = pair.artist
+                rawAlbum = pair.album
+            } else {
+                rawAlbum = albumFolder
+            }
         }
 
         // Album cleanup
@@ -196,7 +239,7 @@ public enum FolderPathMetadataParser: Sendable {
 
         // Remove redundant "Artist - " prefix on album
         let redundantPrefix = "\(rawArtist) - "
-        if cleanAlbum.hasPrefix(redundantPrefix) {
+        if !rawArtist.isEmpty && cleanAlbum.hasPrefix(redundantPrefix) {
             cleanAlbum = String(cleanAlbum.dropFirst(redundantPrefix.count)).trimmingCharacters(in: .whitespacesAndNewlines)
         }
 
@@ -266,7 +309,7 @@ public enum FolderPathMetadataParser: Sendable {
             if isCompilation {
                 finalTrackArtist = firstPart
                 finalTitle = rest
-            } else if firstPart.caseInsensitiveCompare(rawArtist) == .orderedSame {
+            } else if !rawArtist.isEmpty && firstPart.caseInsensitiveCompare(rawArtist) == .orderedSame {
                 finalTitle = rest
             } else if trackNumber != nil && split.count >= 3 {
                 finalTrackArtist = firstPart

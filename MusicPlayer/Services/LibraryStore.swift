@@ -1423,6 +1423,13 @@ public final class LibraryStore {
 
     /// Syncs tracks from a Jellyfin server, updating scan progress and surfacing any errors.
     public func syncJellyfinServer(_ serverLink: JellyfinServerLink) async {
+        // Ignore a duplicate request for a server that is already syncing (e.g. double tap).
+        if isScanning && currentlyScanningFolderID == serverLink.id { return }
+        // Wait for any other scan/sync to finish so their shared scan state (and defers) can't interleave.
+        while isScanning {
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            if Task.isCancelled { return }
+        }
         self.isScanning = true
         self.currentlyScanningFolderID = serverLink.id
         self.scanProgress = 0.0
@@ -1468,6 +1475,8 @@ public final class LibraryStore {
         }
 
         do {
+            await backfillJellyfinPathsIfNeeded(serverLink, token: token)
+
             let existingServerTracks = self.tracks.filter { $0.folderID == serverLink.id }
             let lastSync = self.jellyfinLastSyncDates[serverLink.id]
 
@@ -1516,8 +1525,15 @@ public final class LibraryStore {
                 return
             }
 
+            // Jellyfin tracks are always folder-organized (+ active-mode manual overrides)
+            let organizeMode = self.settings.libraryScanMethod
+            let organizeOverrides = self.organizationModesContainer.state(for: organizeMode).overrides
+            let organizedUpserted = await Task.detached(priority: .userInitiated) {
+                LibraryOrganizer.organizeBatch(tracks: filteredUpserted, mode: organizeMode, overrides: organizeOverrides)
+            }.value
+
             let newState = await LibraryRepository.shared.applyChangeSet(
-                upserted: filteredUpserted,
+                upserted: organizedUpserted,
                 removedIDs: removedIDs,
                 settings: self.settings,
                 verifiedGoodDiffs: self.verifiedGoodDiffs,
@@ -1549,6 +1565,64 @@ public final class LibraryStore {
             let errorMsg = mappedErr.localizedDescription.uppercased()
             self.jellyfinServerErrors[serverLink.id] = errorMsg
             AppLogger.library.error("Jellyfin sync failed: \(errorMsg)")
+        }
+    }
+
+    /// One-time (per server) backfill of case-preserving, library-relative Jellyfin paths so existing
+    /// tracks can be folder-organized without a full re-sync. Fetches only Id+Path; on failure it
+    /// simply retries on the next sync.
+    private func backfillJellyfinPathsIfNeeded(_ serverLink: JellyfinServerLink, token: String) async {
+        let flagKey = "jellyfin_path_backfill_v1_\(serverLink.id.uuidString)"
+        guard !UserDefaults.standard.bool(forKey: flagKey) else { return }
+
+        let serverID = serverLink.id
+        guard self.tracks.contains(where: { $0.folderID == serverID }) else {
+            // Nothing stored yet: the regular full sync stores correct paths and roots.
+            UserDefaults.standard.set(true, forKey: flagKey)
+            return
+        }
+
+        self.scanStatusText = "SYNCING JELLYFIN (\(serverLink.serverName.uppercased())): READING FOLDERS..."
+        do {
+            let pathsByItemID = try await JellyfinSyncService.shared.fetchRelativeItemPaths(for: serverLink, token: token)
+            let snapshot = self.tracks
+            let mode = self.settings.libraryScanMethod
+            let overrides = self.organizationModesContainer.state(for: mode).overrides
+
+            let updated: [Track] = await Task.detached(priority: .userInitiated) {
+                var result: [Track] = []
+                for track in snapshot where track.folderID == serverID {
+                    guard let itemID = track.jellyfinItemId, let rel = pathsByItemID[itemID] else { continue }
+                    let withPath = track.withIdentity(id: track.id, relativePath: rel)
+                    result.append(LibraryOrganizer.organize(track: withPath, mode: mode, override: overrides[track.id]))
+                }
+                return result
+            }.value
+
+            if !updated.isEmpty {
+                let newState = await LibraryRepository.shared.applyChangeSet(
+                    upserted: updated,
+                    removedIDs: [],
+                    settings: self.settings,
+                    verifiedGoodDiffs: self.verifiedGoodDiffs,
+                    downloadedMetadataCache: self.downloadedMetadataCache
+                )
+                self.applyLoadedLibraryState(newState)
+                saveLibrary()
+
+                let serverTracks = self.tracks.filter { $0.folderID == serverID }
+                let serverBinURL = self.jellyfinServerCacheURL(for: serverID)
+                let serverJSONURL = self.jellyfinServerJSONURL(for: serverID)
+                Task.detached(priority: .utility) {
+                    Self.saveFast(serverTracks, to: serverBinURL, jsonURL: serverJSONURL)
+                }
+            }
+            if !pathsByItemID.isEmpty {
+                UserDefaults.standard.set(true, forKey: flagKey)
+            }
+            AppLogger.library.info("Jellyfin path backfill: \(updated.count) tracks updated for \(serverLink.serverName)")
+        } catch {
+            AppLogger.library.warning("Jellyfin path backfill failed (will retry next sync): \(error.localizedDescription)")
         }
     }
 
@@ -1686,7 +1760,7 @@ public final class LibraryStore {
 
         _ = await progressTask.result
         let tScanDone = Date()
-        AppLogger.library.info("SCAN TIMING: file scan finished, \(scannedTracks.count) tracks")
+        AppLogger.library.debug("SCAN TIMING: file scan finished, \(scannedTracks.count) tracks")
 
         var filteredTracks = scannedTracks
             .filter { !removedPaths.contains($0.url.standardizedFileURL.path) }
@@ -1738,7 +1812,10 @@ public final class LibraryStore {
                         fileInfo: filteredTracks[i].fileInfo,
                         lyrics: filteredTracks[i].lyrics,
                         isAlternate: filteredTracks[i].isAlternate,
-                        folderID: folderID
+                        folderID: folderID,
+                        relativePath: filteredTracks[i].relativePath,
+                        metadataSource: filteredTracks[i].metadataSource,
+                        tagSnapshot: filteredTracks[i].tagSnapshot
                     )
                 } else if filteredTracks[i].artworkKey == nil, let artKey = record.cachedArtworkKey {
                     filteredTracks[i] = filteredTracks[i].withArtworkKey(artKey)
@@ -1746,7 +1823,24 @@ public final class LibraryStore {
             }
         }
 
-        AppLogger.library.info("SCAN TIMING: metadata reattach \(String(format: "%.2f", Date().timeIntervalSince(tScanDone)))s")
+        AppLogger.library.debug("SCAN TIMING: metadata reattach \(String(format: "%.2f", Date().timeIntervalSince(tScanDone)))s")
+
+        // FOLDER mode: artist/album/title come only from the path, using the same organizer as mode switching.
+        if scanMethod == .folderHierarchy {
+            let toOrganize = filteredTracks
+            let folderOverrides = self.organizationModesContainer.state(for: .folderHierarchy).overrides
+            let layout = self.settings.folderHierarchyLayout
+            let rootNames: [UUID: String] = [folderID: folderName]
+            filteredTracks = await Task.detached(priority: .userInitiated) {
+                LibraryOrganizer.organizeBatch(
+                    tracks: toOrganize,
+                    mode: .folderHierarchy,
+                    overrides: folderOverrides,
+                    layout: layout,
+                    rootFolderNames: rootNames
+                )
+            }.value
+        }
         let existingFolderIDs = Set(folderTracks.map(\.id))
         let scannedIDs = Set(filteredTracks.map(\.id))
         let removedFolderIDs = existingFolderIDs.subtracting(scannedIDs)
@@ -1769,10 +1863,10 @@ public final class LibraryStore {
             downloadedMetadataCache: metadataCache
         )
 
-        AppLogger.library.info("SCAN TIMING: library rebuild \(String(format: "%.2f", Date().timeIntervalSince(tRebuild)))s")
+        AppLogger.library.debug("SCAN TIMING: library rebuild \(String(format: "%.2f", Date().timeIntervalSince(tRebuild)))s")
         let tApply = Date()
         self.applyLoadedLibraryState(newState)
-        AppLogger.library.info("SCAN TIMING: apply to UI \(String(format: "%.2f", Date().timeIntervalSince(tApply)))s")
+        AppLogger.library.debug("SCAN TIMING: apply to UI \(String(format: "%.2f", Date().timeIntervalSince(tApply)))s")
         let statsTracks = self.tracks
         let statsFolders = self.settings.linkedFolders
         let statsServers = self.settings.jellyfinServers
@@ -1783,7 +1877,7 @@ public final class LibraryStore {
         // Cache baseline metadata for newly indexed tracks non-blockingly
         let tCache = Date()
         self.cacheScannedTracks(filteredTracks)
-        AppLogger.library.info("SCAN TIMING: metadata cache \(String(format: "%.2f", Date().timeIntervalSince(tCache)))s, total after scan \(String(format: "%.2f", Date().timeIntervalSince(tScanDone)))s")
+        AppLogger.library.debug("SCAN TIMING: metadata cache \(String(format: "%.2f", Date().timeIntervalSince(tCache)))s, total after scan \(String(format: "%.2f", Date().timeIntervalSince(tScanDone)))s")
 
         self.settings.lastScanDate = Date()
         self.settings.totalScannedFiles = self.tracks.count
@@ -1937,8 +2031,9 @@ public final class LibraryStore {
         UserDefaults.standard.set(playlistID.uuidString, forKey: "last_added_playlist_id_v1")
         // Unique identifier for updated track i ds
         var updatedTrackIDs = playlists[index].trackIDs
+        var seenTrackIDs = Set(updatedTrackIDs)
         for track in newTracks {
-            if !updatedTrackIDs.contains(track.id) {
+            if seenTrackIDs.insert(track.id).inserted {
                 updatedTrackIDs.append(track.id)
             }
         }
@@ -2184,7 +2279,11 @@ public final class LibraryStore {
         var standaloneSingleTracks: [Track] = []
 
         for track in tracks {
-            if scanMethod == .folderHierarchy, let relPath = track.relativePath {
+            // Jellyfin is always folder-grouped (when a genuine server path exists); local only in FOLDER mode
+            let folderGroupingPath: String? = track.isJellyfinItem
+                ? LibraryOrganizer.jellyfinFolderPath(for: track)
+                : (scanMethod == .folderHierarchy ? track.relativePath : nil)
+            if let relPath = folderGroupingPath {
                 let parsed = FolderPathMetadataParser.parse(relativePath: relPath)
                 let folderKey = (track.folderID?.uuidString ?? "") + "_" + parsed.albumDirectory
                 let item = TrackClusterItem(
@@ -2271,7 +2370,7 @@ public final class LibraryStore {
             rawAlbumClusters.append(contentsOf: subClusters.map { $0.map { $0.track } })
         }
 
-        AppLogger.library.info("REBUILD TIMING: album clustering \(String(format: "%.2f", Date().timeIntervalSince(tBuild)))s")
+        AppLogger.library.debug("REBUILD TIMING: album clustering \(String(format: "%.2f", Date().timeIntervalSince(tBuild)))s")
         var newAlbums: [Album] = []
         newAlbums.reserveCapacity(rawAlbumClusters.count + standaloneSingleTracks.count)
 
@@ -2284,6 +2383,15 @@ public final class LibraryStore {
                 tracks: [singleTrack]
             )
             newAlbums.append(album)
+        }
+
+        // Jellyfin AlbumIds shared by more than one cluster (e.g. tag-merged folders) get a folder suffix
+        // so album IDs stay unique; single-cluster AlbumIds keep their stable "jf_album_<id>" key.
+        var jellyfinAlbumIDClusterCounts: [String: Int] = [:]
+        for cluster in rawAlbumClusters {
+            if let f = cluster.first, f.isJellyfinItem, let aid = f.jellyfinAlbumId, !aid.isEmpty {
+                jellyfinAlbumIDClusterCounts[aid, default: 0] += 1
+            }
         }
 
         for groupTracks in rawAlbumClusters {
@@ -2384,6 +2492,11 @@ public final class LibraryStore {
             let groupKey: String? = {
                 if first.isJellyfinItem || first.metadataSource == .server {
                     if let albumId = first.jellyfinAlbumId, !albumId.isEmpty {
+                        if (jellyfinAlbumIDClusterCounts[albumId] ?? 0) > 1 {
+                            let folderPart = LibraryOrganizer.jellyfinFolderPath(for: first)
+                                .map { FolderPathMetadataParser.parse(relativePath: $0).albumDirectory } ?? first.id.uuidString
+                            return "jf_album_\(albumId)_\(folderPart)"
+                        }
                         return "jf_album_\(albumId)"
                     }
                     if let itemId = first.jellyfinItemId, !itemId.isEmpty {
@@ -2461,7 +2574,7 @@ public final class LibraryStore {
             $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending
         }
 
-        AppLogger.library.info("REBUILD TIMING: albums built \(String(format: "%.2f", Date().timeIntervalSince(tBuild)))s")
+        AppLogger.library.debug("REBUILD TIMING: albums built \(String(format: "%.2f", Date().timeIntervalSince(tBuild)))s")
         // 2. High-Speed Inverted Index for Track -> Albums
         var trackIDToAlbumsMap: [UUID: [Album]] = [:]
         trackIDToAlbumsMap.reserveCapacity(workingTracks.count)
@@ -2545,7 +2658,7 @@ public final class LibraryStore {
             }
         }
 
-        AppLogger.library.info("REBUILD TIMING: artist grouping \(String(format: "%.2f", Date().timeIntervalSince(tBuild)))s")
+        AppLogger.library.debug("REBUILD TIMING: artist grouping \(String(format: "%.2f", Date().timeIntervalSince(tBuild)))s")
         // 4. Instantaneous Artist Synthesis using Inverted Track-to-Album Map
         var newArtists: [Artist] = []
         newArtists.reserveCapacity(artistTracksMap.count)
@@ -2610,7 +2723,7 @@ public final class LibraryStore {
             }
         }
 
-        AppLogger.library.info("REBUILD TIMING: total \(String(format: "%.2f", Date().timeIntervalSince(tBuild)))s")
+        AppLogger.library.debug("REBUILD TIMING: total \(String(format: "%.2f", Date().timeIntervalSince(tBuild)))s")
         return AlbumsAndArtistsResult(
             tracks: workingTracks,
             albums: sortedAlbums,
@@ -2621,6 +2734,8 @@ public final class LibraryStore {
 
     @ObservationIgnored private var rebuildTask: Task<Void, Never>? = nil
     @ObservationIgnored private var pendingRebuild: Bool = false
+    @ObservationIgnored private var reorganizeGeneration: Int = 0
+    @ObservationIgnored private var pendingRepositoryPatchIDs = Set<UUID>()
 
     /// Rebuilds albums, artists, and indexes off-main-actor in Task.detached with back-to-back coalescing.
     public func rebuildAlbumsAndArtists() {
@@ -2630,25 +2745,39 @@ public final class LibraryStore {
         }
 
         let tracksToBuild = self.tracks
-        let joinedArtists = self.settings.joinedArtists
-        let manualCollaborativeAlbumIDs = self.settings.manualCollaborativeAlbumIDs
-        let originalAlbumArtistsByTrackID = self.settings.originalAlbumArtistsByTrackID
         let verifiedGoodDiffs = self.verifiedGoodDiffs
         let downloadedMetadataCache = self.downloadedMetadataCache
-        let scanMethod = self.settings.libraryScanMethod
+        let settingsSnapshot = self.settings
+        let persist = !self.isInitialLoading
 
         rebuildTask = Task { @MainActor [weak self] in
-            let res = await Task.detached(priority: .userInitiated) {
-                Self.buildAlbumsAndArtists(
-                    tracks: tracksToBuild,
-                    joinedArtists: joinedArtists,
-                    manualCollaborativeAlbumIDs: manualCollaborativeAlbumIDs,
-                    originalAlbumArtistsByTrackID: originalAlbumArtistsByTrackID,
+            // Rebuild through the repository (persisted source of truth, off the main actor) so in-memory
+            // edits/removals survive relaunch and later change sets.
+            // (While the initial load is still running the store may hold only a preview subset, so
+            // never replace the repository's tracks then; build locally as before.)
+            let res: (tracks: [Track], albums: [Album], artists: [Artist], lookup: [String: Artist])
+            if persist {
+                let state = await LibraryRepository.shared.replaceAllTracks(
+                    tracksToBuild,
+                    settings: settingsSnapshot,
                     verifiedGoodDiffs: verifiedGoodDiffs,
-                    downloadedMetadataCache: downloadedMetadataCache,
-                    scanMethod: scanMethod
+                    downloadedMetadataCache: downloadedMetadataCache
                 )
-            }.value
+                res = (state.tracks, state.albums, state.artists, state.artistLookupIndex)
+            } else {
+                let built = await Task.detached(priority: .userInitiated) {
+                    Self.buildAlbumsAndArtists(
+                        tracks: tracksToBuild,
+                        joinedArtists: settingsSnapshot.joinedArtists,
+                        manualCollaborativeAlbumIDs: settingsSnapshot.manualCollaborativeAlbumIDs,
+                        originalAlbumArtistsByTrackID: settingsSnapshot.originalAlbumArtistsByTrackID,
+                        verifiedGoodDiffs: verifiedGoodDiffs,
+                        downloadedMetadataCache: downloadedMetadataCache,
+                        scanMethod: settingsSnapshot.libraryScanMethod
+                    )
+                }.value
+                res = (built.tracks, built.albums, built.artists, built.artistLookupIndex)
+            }
 
             guard let self else { return }
             self.rebuildTask = nil
@@ -2656,10 +2785,11 @@ public final class LibraryStore {
             self.tracks = res.tracks
             self.albums = res.albums
             self.artists = res.artists
-            self.artistLookupIndex = res.artistLookupIndex
+            self.artistLookupIndex = res.lookup
             self.rebuildAlbumLookups()
             self.invalidateSortedCaches()
             self.enqueueSearchDelta(albums: res.albums, artists: res.artists)
+            if persist { self.saveLibrary() }
 
             if self.pendingRebuild {
                 self.pendingRebuild = false
@@ -2673,8 +2803,9 @@ public final class LibraryStore {
         guard let idx = self.tracks.firstIndex(where: { $0.id == updatedTrack.id }) else { return }
         let oldTrack = self.tracks[idx]
 
-        // 1. Update tracks array
+        // 1. Update tracks array (+ O(1) lookup)
         self.tracks[idx] = updatedTrack
+        self.tracksByID[updatedTrack.id] = updatedTrack
 
         // 2. Patch albums in place
         for aIdx in 0..<self.albums.count {
@@ -2742,6 +2873,36 @@ public final class LibraryStore {
 
         if searchableMetadataChanged {
             enqueueSearchDelta(updatedTracks: [updatedTrack])
+        }
+
+        // 5. Persist the patch through the repository (coalesced; no regrouping)
+        schedulePatchPersistence(for: updatedTrack.id)
+    }
+
+    /// Coalesces in-place track patches into one repository update so they survive relaunch/rescans.
+    private func schedulePatchPersistence(for trackID: UUID) {
+        let shouldSchedule = pendingRepositoryPatchIDs.isEmpty
+        pendingRepositoryPatchIDs.insert(trackID)
+        guard shouldSchedule else { return }
+
+        Task { @MainActor [weak self] in
+            await Task.yield()
+            guard let self else { return }
+            guard !self.isInitialLoading else {
+                self.pendingRepositoryPatchIDs.removeAll()
+                return
+            }
+            let ids = self.pendingRepositoryPatchIDs
+            self.pendingRepositoryPatchIDs.removeAll()
+            let updated = ids.compactMap { self.tracksByID[$0] }
+            guard !updated.isEmpty else { return }
+            await LibraryRepository.shared.upsertTracksPreservingStructure(
+                updated,
+                albums: self.albums,
+                artists: self.artists,
+                lookup: self.artistLookupIndex
+            )
+            self.saveLibrary()
         }
     }
 
@@ -5784,9 +5945,11 @@ public final class LibraryStore {
         UserDefaults.standard.set(self.settings.isArtworkRounded, forKey: "isArtworkRounded")
         let currentSettings = self.settings
         let url = self.settingsFileURL
+        // Generation-ordered write so a slower earlier save can never overwrite a newer one.
+        let gen = bumpGeneration(for: url)
         Task.detached(priority: .utility) {
             if let data = try? JSONEncoder().encode(currentSettings) {
-                try? data.write(to: url, options: .atomic)
+                await PersistenceWriter.shared.write(data: data, to: url, generation: gen)
             }
         }
     }
@@ -6014,37 +6177,104 @@ public final class LibraryStore {
 
     /// Switches library organization mode (METADATA vs FOLDER) without disk rescan.
     public func setLibraryOrganization(_ method: LibraryScanMethod) {
-        guard settings.libraryScanMethod != method else { return }
+        Task { await applyLocalOrganization(method: method, layout: settings.folderHierarchyLayout) }
+    }
 
-        // 1. Snapshot current mode state
-        let currentMode = settings.libraryScanMethod
-        var currentModeState = organizationModesContainer.state(for: currentMode)
-        currentModeState.pinnedItemIDs = self.pinnedItemIDs
-        currentModeState.recentAlbumIDs = self.recentAlbumIDs
-        organizationModesContainer.update(state: currentModeState, for: currentMode)
+    /// Changes the FOLDER-mode hierarchy layout (no disk rescan).
+    public func setFolderHierarchyLayout(_ layout: FolderHierarchyLayout) {
+        Task { await applyLocalOrganization(method: settings.libraryScanMethod, layout: layout) }
+    }
 
-        // 2. Switch setting
+    /// Applies a local organization mode + folder layout together in ONE incremental reorganize pass.
+    public func applyLocalOrganization(method: LibraryScanMethod, layout: FolderHierarchyLayout) async {
+        let methodChanged = settings.libraryScanMethod != method
+        let layoutChanged = settings.folderHierarchyLayout != layout
+        guard methodChanged || layoutChanged else { return }
+
+        if methodChanged {
+            // Snapshot current mode state (pins/recents) and restore the target mode's
+            let currentMode = settings.libraryScanMethod
+            var currentModeState = organizationModesContainer.state(for: currentMode)
+            currentModeState.pinnedItemIDs = self.pinnedItemIDs
+            currentModeState.recentAlbumIDs = self.recentAlbumIDs
+            organizationModesContainer.update(state: currentModeState, for: currentMode)
+
+            let targetState = organizationModesContainer.state(for: method)
+            self.pinnedItemIDs = targetState.pinnedItemIDs
+            self.pinnedAlbumIDs = Set(targetState.pinnedItemIDs.filter { $0.type == PinnedItemType.album }.map { $0.targetID })
+            self.recentAlbumIDs = targetState.recentAlbumIDs
+        }
+
         settings.libraryScanMethod = method
+        settings.folderHierarchyLayout = layout
         saveSettings()
 
-        // 3. Restore target mode state
-        let targetState = organizationModesContainer.state(for: method)
-        self.pinnedItemIDs = targetState.pinnedItemIDs
-        self.pinnedAlbumIDs = Set(targetState.pinnedItemIDs.filter { $0.type == PinnedItemType.album }.map { $0.targetID })
-        self.recentAlbumIDs = targetState.recentAlbumIDs
+        if methodChanged {
+            saveOrganizationModes()
+            savePins()
+            saveRecentAlbums()
+        }
 
-        // 4. In-memory re-organization of tracks without rescanning disk
-        let mode: LibraryScanMethod = method
-        self.tracks = LibraryOrganizer.organizeBatch(tracks: self.tracks, mode: mode, overrides: targetState.overrides)
+        // Layout only matters in FOLDER mode; album clustering itself depends on the mode.
+        guard methodChanged || method == .folderHierarchy else { return }
+        await reorganizeLocalTracks(forceRebuild: methodChanged)
+    }
 
-        // 5. Rebuild albums and artists
-        rebuildAlbumsAndArtists()
+    /// Incrementally re-organizes LOCAL (non-Jellyfin) tracks off the main actor. Only tracks whose
+    /// organized fields actually change are sent through the repository change set (persisted);
+    /// albums/artists rebuild once. Skips everything when nothing changed (unless `forceRebuild`,
+    /// needed when the mode changed because album clustering depends on it). Stale passes are dropped.
+    private func reorganizeLocalTracks(forceRebuild: Bool) async {
+        reorganizeGeneration &+= 1
+        let generation = reorganizeGeneration
+        let mode = settings.libraryScanMethod
+        let layout = settings.folderHierarchyLayout
+        let overrides = organizationModesContainer.state(for: mode).overrides
+        let rootNames = Dictionary(settings.linkedFolders.map { ($0.id, $0.name) }, uniquingKeysWith: { first, _ in first })
+        let snapshot = self.tracks
 
-        // 6. Persist mode state and collections
-        saveOrganizationModes()
+        let changed: [Track] = await Task.detached(priority: .userInitiated) {
+            var result: [Track] = []
+            for track in snapshot where !track.isJellyfinItem {
+                let rootName = track.folderID.flatMap { rootNames[$0] }
+                let organized = LibraryOrganizer.organize(
+                    track: track,
+                    mode: mode,
+                    override: overrides[track.id],
+                    layout: layout,
+                    rootFolderName: rootName
+                )
+                if organized.title != track.title
+                    || organized.artist != track.artist
+                    || organized.album != track.album
+                    || organized.albumArtist != track.albumArtist
+                    || organized.year != track.year
+                    || organized.trackNumber != track.trackNumber
+                    || organized.discNumber != track.discNumber {
+                    result.append(organized)
+                }
+            }
+            return result
+        }.value
+
+        guard reorganizeGeneration == generation else { return }
+        guard !changed.isEmpty || forceRebuild else {
+            AppLogger.library.info("Reorganize: no local track changes; skipped rebuild.")
+            return
+        }
+
+        // Repository is the persisted source of truth; it rebuilds albums/artists off the main actor.
+        let newState = await LibraryRepository.shared.applyChangeSet(
+            upserted: changed,
+            removedIDs: [],
+            settings: self.settings,
+            verifiedGoodDiffs: self.verifiedGoodDiffs,
+            downloadedMetadataCache: self.downloadedMetadataCache
+        )
+        guard reorganizeGeneration == generation else { return }
+        applyLoadedLibraryState(newState)
         saveLibrary()
-        savePins()
-        saveRecentAlbums()
+        AppLogger.library.info("Reorganize: \(changed.count) local tracks changed.")
     }
 
     /// Persists multi-mode organization state asynchronously

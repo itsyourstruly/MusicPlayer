@@ -217,6 +217,28 @@ public enum LibraryScanMethod: String, CaseIterable, Identifiable, Codable, Send
     public static var folder: LibraryScanMethod { .folderHierarchy }
 }
 
+// MARK: - FolderHierarchyLayout
+
+/// How FOLDER mode interprets a local source's folder nesting (relative to the linked root).
+public enum FolderHierarchyLayout: String, CaseIterable, Identifiable, Codable, Sendable {
+    /// Decides per path: 2+ folder levels => ARTIST/ALBUM, 1 level => ALBUM (with "Artist - Album" split).
+    case auto = "AUTO"
+    /// Artist folder > Album folder > tracks.
+    case artistAlbumTrack = "ARTIST_ALBUM_TRACK"
+    /// Album folder > tracks (artist only from an "Artist - Album" folder name).
+    case albumTrack = "ALBUM_TRACK"
+
+    public var id: String { rawValue }
+
+    public var displayName: String {
+        switch self {
+        case .auto: return "AUTO"
+        case .artistAlbumTrack: return "ARTIST/ALBUM/TRACK"
+        case .albumTrack: return "ALBUM/TRACK"
+        }
+    }
+}
+
 // MARK: - LinkedFolder
 
 /// Represents an external music directory linked by the user.
@@ -254,6 +276,8 @@ public struct AppSettings: Codable, Sendable {
     public var defaultLibraryCategory: LibraryCategory
     public var playerBackgroundStyle: PlayerBackgroundStyle
     public var libraryScanMethod: LibraryScanMethod
+    /// Folder nesting layout used by FOLDER mode for local sources.
+    public var folderHierarchyLayout: FolderHierarchyLayout
     public var autoPlayNext: Bool
     public var rememberPlaybackPosition: Bool
     // Minimum track length (in minutes) required to save and remember playback position
@@ -319,6 +343,7 @@ public struct AppSettings: Codable, Sendable {
         defaultLibraryCategory: LibraryCategory = .artists,
         playerBackgroundStyle: PlayerBackgroundStyle = .albumColor,
         libraryScanMethod: LibraryScanMethod = .id3Tags,
+        folderHierarchyLayout: FolderHierarchyLayout = .auto,
         autoPlayNext: Bool = true,
         rememberPlaybackPosition: Bool = true,
         rememberPlaybackPositionMinMinutes: Double = 10.0,
@@ -356,6 +381,7 @@ public struct AppSettings: Codable, Sendable {
         self.defaultLibraryCategory = defaultLibraryCategory
         self.playerBackgroundStyle = playerBackgroundStyle
         self.libraryScanMethod = libraryScanMethod
+        self.folderHierarchyLayout = folderHierarchyLayout
         self.autoPlayNext = autoPlayNext
         self.rememberPlaybackPosition = rememberPlaybackPosition
         self.rememberPlaybackPositionMinMinutes = rememberPlaybackPositionMinMinutes
@@ -402,6 +428,8 @@ public struct AppSettings: Codable, Sendable {
         case playerBackgroundStyle
         // Library scan method option
         case libraryScanMethod
+        // Folder hierarchy layout option (FOLDER mode)
+        case folderHierarchyLayout
         // Auto play next option
         case autoPlayNext
         // Remember playback position option
@@ -465,9 +493,9 @@ public struct AppSettings: Codable, Sendable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
 
         // Prefer the current `appTheme` key; fall back to the old `accentTheme` string and remap renamed cases.
-        if let theme = try container.decodeIfPresent(AppTheme.self, forKey: .appTheme) {
+        if let theme = (try? container.decodeIfPresent(AppTheme.self, forKey: .appTheme)) {
             self.appTheme = theme
-        } else if let oldAccent = try container.decodeIfPresent(String.self, forKey: .accentTheme) {
+        } else if let oldAccent = (try? container.decodeIfPresent(String.self, forKey: .accentTheme)) {
             switch oldAccent.lowercased() {
             case "slate": self.appTheme = .gray
             case "cobalt": self.appTheme = .blue
@@ -480,20 +508,21 @@ public struct AppSettings: Codable, Sendable {
         }
 
         // All other settings use safe decodeIfPresent with sensible defaults so missing keys don't throw.
-        self.defaultLibraryCategory = try container.decodeIfPresent(LibraryCategory.self, forKey: .defaultLibraryCategory) ?? .artists
-        self.playerBackgroundStyle = try container.decodeIfPresent(PlayerBackgroundStyle.self, forKey: .playerBackgroundStyle) ?? .albumColor
-        self.libraryScanMethod = try container.decodeIfPresent(LibraryScanMethod.self, forKey: .libraryScanMethod) ?? .id3Tags
+        self.defaultLibraryCategory = (try? container.decodeIfPresent(LibraryCategory.self, forKey: .defaultLibraryCategory)) ?? .artists
+        self.playerBackgroundStyle = (try? container.decodeIfPresent(PlayerBackgroundStyle.self, forKey: .playerBackgroundStyle)) ?? .albumColor
+        self.libraryScanMethod = (try? container.decodeIfPresent(LibraryScanMethod.self, forKey: .libraryScanMethod)) ?? .id3Tags
+        self.folderHierarchyLayout = (try? container.decodeIfPresent(FolderHierarchyLayout.self, forKey: .folderHierarchyLayout)) ?? .auto
         self.autoPlayNext = true
-        self.rememberPlaybackPosition = try container.decodeIfPresent(Bool.self, forKey: .rememberPlaybackPosition) ?? true
-        self.rememberPlaybackPositionMinMinutes = try container.decodeIfPresent(Double.self, forKey: .rememberPlaybackPositionMinMinutes) ?? 10.0
-        self.showAudioSpecsInPlayer = try container.decodeIfPresent(Bool.self, forKey: .showAudioSpecsInPlayer) ?? true
-        self.useProgressBar = try container.decodeIfPresent(Bool.self, forKey: .useProgressBar) ?? false
-        self.isCrossfadeEnabled = try container.decodeIfPresent(Bool.self, forKey: .isCrossfadeEnabled) ?? false
-        self.crossfadeDuration = try container.decodeIfPresent(Double.self, forKey: .crossfadeDuration) ?? 4.0
-        self.lastScanDate = try container.decodeIfPresent(Date.self, forKey: .lastScanDate)
+        self.rememberPlaybackPosition = (try? container.decodeIfPresent(Bool.self, forKey: .rememberPlaybackPosition)) ?? true
+        self.rememberPlaybackPositionMinMinutes = (try? container.decodeIfPresent(Double.self, forKey: .rememberPlaybackPositionMinMinutes)) ?? 10.0
+        self.showAudioSpecsInPlayer = (try? container.decodeIfPresent(Bool.self, forKey: .showAudioSpecsInPlayer)) ?? true
+        self.useProgressBar = (try? container.decodeIfPresent(Bool.self, forKey: .useProgressBar)) ?? false
+        self.isCrossfadeEnabled = (try? container.decodeIfPresent(Bool.self, forKey: .isCrossfadeEnabled)) ?? false
+        self.crossfadeDuration = (try? container.decodeIfPresent(Double.self, forKey: .crossfadeDuration)) ?? 4.0
+        self.lastScanDate = (try? container.decodeIfPresent(Date.self, forKey: .lastScanDate))
 
-        var decodedFolders = try container.decodeIfPresent([LinkedFolder].self, forKey: .linkedFolders) ?? []
-        let legacyFolderName = try container.decodeIfPresent(String.self, forKey: .linkedFolderName)
+        var decodedFolders = (try? container.decodeIfPresent([LinkedFolder].self, forKey: .linkedFolders)) ?? []
+        let legacyFolderName = (try? container.decodeIfPresent(String.self, forKey: .linkedFolderName))
         if decodedFolders.isEmpty, let legacy = legacyFolderName, !legacy.isEmpty {
             let legacyBookmark = UserDefaults.standard.data(forKey: "linkedMusicDirectoryBookmark")
             decodedFolders = [
@@ -508,28 +537,28 @@ public struct AppSettings: Codable, Sendable {
         self.linkedFolders = decodedFolders
         self.linkedFolderName = decodedFolders.first?.name ?? legacyFolderName
 
-        self.totalScannedFiles = try container.decodeIfPresent(Int.self, forKey: .totalScannedFiles) ?? 0
-        self.autoHideDuplicates = try container.decodeIfPresent(Bool.self, forKey: .autoHideDuplicates) ?? true
-        self.autoEnrichMissingArtwork = try container.decodeIfPresent(Bool.self, forKey: .autoEnrichMissingArtwork) ?? true
-        self.writeMetadataToAudioFiles = try container.decodeIfPresent(Bool.self, forKey: .writeMetadataToAudioFiles) ?? false
-        self.playTrackInCurrentQueue = try container.decodeIfPresent(Bool.self, forKey: .playTrackInCurrentQueue) ?? false
-        self.tapToPlayNext = try container.decodeIfPresent(Bool.self, forKey: .tapToPlayNext) ?? false
-        self.customShuffleTarget = try container.decodeIfPresent(ShuffleTarget.self, forKey: .customShuffleTarget) ?? .all
-        self.joinedArtists = try container.decodeIfPresent([String].self, forKey: .joinedArtists) ?? []
-        self.smoothSkippingEnabled = try container.decodeIfPresent(Bool.self, forKey: .smoothSkippingEnabled) ?? false
-        self.isLyricsViewPreferred = try container.decodeIfPresent(Bool.self, forKey: .isLyricsViewPreferred) ?? false
-        self.removedTrackPaths = try container.decodeIfPresent(Set<String>.self, forKey: .removedTrackPaths) ?? []
-        self.isHapticsEnabled = try container.decodeIfPresent(Bool.self, forKey: .isHapticsEnabled) ?? false
-        self.manualCollaborativeAlbumIDs = try container.decodeIfPresent(Set<String>.self, forKey: .manualCollaborativeAlbumIDs) ?? []
-        self.originalAlbumArtistsByTrackID = try container.decodeIfPresent([String: String].self, forKey: .originalAlbumArtistsByTrackID) ?? [:]
-        self.disabledFolderIDs = try container.decodeIfPresent(Set<UUID>.self, forKey: .disabledFolderIDs) ?? []
-        self.isArtworkRounded = try container.decodeIfPresent(Bool.self, forKey: .isArtworkRounded) ?? true
-        self.trackIDSchemeVersion = try container.decodeIfPresent(Int.self, forKey: .trackIDSchemeVersion) ?? 1
-        self.jellyfinServers = try container.decodeIfPresent([JellyfinServerLink].self, forKey: .jellyfinServers) ?? []
-        self.downloadNextSongOnWiFi = try container.decodeIfPresent(Bool.self, forKey: .downloadNextSongOnWiFi) ?? true
-        self.autoDownloadOnPlay = try container.decodeIfPresent(Bool.self, forKey: .autoDownloadOnPlay) ?? false
-        self.downloadOnCellular = try container.decodeIfPresent(Bool.self, forKey: .downloadOnCellular) ?? true
-        self.removedJellyfinItemIDs = try container.decodeIfPresent(Set<String>.self, forKey: .removedJellyfinItemIDs) ?? []
+        self.totalScannedFiles = (try? container.decodeIfPresent(Int.self, forKey: .totalScannedFiles)) ?? 0
+        self.autoHideDuplicates = (try? container.decodeIfPresent(Bool.self, forKey: .autoHideDuplicates)) ?? true
+        self.autoEnrichMissingArtwork = (try? container.decodeIfPresent(Bool.self, forKey: .autoEnrichMissingArtwork)) ?? true
+        self.writeMetadataToAudioFiles = (try? container.decodeIfPresent(Bool.self, forKey: .writeMetadataToAudioFiles)) ?? false
+        self.playTrackInCurrentQueue = (try? container.decodeIfPresent(Bool.self, forKey: .playTrackInCurrentQueue)) ?? false
+        self.tapToPlayNext = (try? container.decodeIfPresent(Bool.self, forKey: .tapToPlayNext)) ?? false
+        self.customShuffleTarget = (try? container.decodeIfPresent(ShuffleTarget.self, forKey: .customShuffleTarget)) ?? .all
+        self.joinedArtists = (try? container.decodeIfPresent([String].self, forKey: .joinedArtists)) ?? []
+        self.smoothSkippingEnabled = (try? container.decodeIfPresent(Bool.self, forKey: .smoothSkippingEnabled)) ?? false
+        self.isLyricsViewPreferred = (try? container.decodeIfPresent(Bool.self, forKey: .isLyricsViewPreferred)) ?? false
+        self.removedTrackPaths = (try? container.decodeIfPresent(Set<String>.self, forKey: .removedTrackPaths)) ?? []
+        self.isHapticsEnabled = (try? container.decodeIfPresent(Bool.self, forKey: .isHapticsEnabled)) ?? false
+        self.manualCollaborativeAlbumIDs = (try? container.decodeIfPresent(Set<String>.self, forKey: .manualCollaborativeAlbumIDs)) ?? []
+        self.originalAlbumArtistsByTrackID = (try? container.decodeIfPresent([String: String].self, forKey: .originalAlbumArtistsByTrackID)) ?? [:]
+        self.disabledFolderIDs = (try? container.decodeIfPresent(Set<UUID>.self, forKey: .disabledFolderIDs)) ?? []
+        self.isArtworkRounded = (try? container.decodeIfPresent(Bool.self, forKey: .isArtworkRounded)) ?? true
+        self.trackIDSchemeVersion = (try? container.decodeIfPresent(Int.self, forKey: .trackIDSchemeVersion)) ?? 1
+        self.jellyfinServers = (try? container.decodeIfPresent([JellyfinServerLink].self, forKey: .jellyfinServers)) ?? []
+        self.downloadNextSongOnWiFi = (try? container.decodeIfPresent(Bool.self, forKey: .downloadNextSongOnWiFi)) ?? true
+        self.autoDownloadOnPlay = (try? container.decodeIfPresent(Bool.self, forKey: .autoDownloadOnPlay)) ?? false
+        self.downloadOnCellular = (try? container.decodeIfPresent(Bool.self, forKey: .downloadOnCellular)) ?? true
+        self.removedJellyfinItemIDs = (try? container.decodeIfPresent(Set<String>.self, forKey: .removedJellyfinItemIDs)) ?? []
     }
 
     // Encode
@@ -540,6 +569,7 @@ public struct AppSettings: Codable, Sendable {
         try container.encode(defaultLibraryCategory, forKey: .defaultLibraryCategory)
         try container.encode(playerBackgroundStyle, forKey: .playerBackgroundStyle)
         try container.encode(libraryScanMethod, forKey: .libraryScanMethod)
+        try container.encode(folderHierarchyLayout, forKey: .folderHierarchyLayout)
         try container.encode(autoPlayNext, forKey: .autoPlayNext)
         try container.encode(rememberPlaybackPosition, forKey: .rememberPlaybackPosition)
         try container.encode(rememberPlaybackPositionMinMinutes, forKey: .rememberPlaybackPositionMinMinutes)

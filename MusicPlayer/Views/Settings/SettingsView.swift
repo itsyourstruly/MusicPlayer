@@ -21,6 +21,38 @@ public struct SettingOptionDetail: Identifiable, Sendable {
 
 /// Catalog of concise explanations for every setting option across the app.
 public enum SettingOptionCatalog {
+    // MARK: - Section Info (Appearance)
+    public static let themeSection = SettingOptionDetail(
+        id: "themeSection",
+        title: "THEME",
+        description: "Sets the global theme for the app. This changes the background color, and accents."
+    )
+
+    public static let defaultLibraryPageSection = SettingOptionDetail(
+        id: "defaultLibraryPageSection",
+        title: "DEFAULT LIBRARY PAGE",
+        description: "Set the default tab for the Library page. While on a different library tab, tapping the Library page goes back to the Default tab. While on the default tab, tapping the Library page again focuses the search bar."
+    )
+
+    public static let fullscreenPlayerSection = SettingOptionDetail(
+        id: "fullscreenPlayerSection",
+        title: "FULLSCREEN PLAYER",
+        description: "Sets the background theme of the Fullscreen Player. Solid matches your theme."
+    )
+
+    // MARK: - Section Info (Sources)
+    public static let localOrganizationSection = SettingOptionDetail(
+        id: "localOrganizationSection",
+        title: "LOCAL FOLDER ORGANIZATION",
+        description: "This option only affects sources that are available locally on the device and will not affect Jellyfin. Metadata ignores folder heirarchy, instead it scans individual tracks and builds a library based on the metadata available on each track including its Album, and Artist. Folder will use your existing folder heirarchy, whether you store your library by Artist/Album/Track or another method. Option must be saved to apply."
+    )
+
+    public static let storageManagementSection = SettingOptionDetail(
+        id: "storageManagementSection",
+        title: "APP STORAGE MANAGEMENT",
+        description: "Select a Target, check how much its storing, and choose to clear it. "
+    )
+
     public static let folderSettings = SettingOptionDetail(
         id: "folderSettings",
         title: "FOLDER SETTINGS & ORGANIZATION",
@@ -102,7 +134,7 @@ public enum SettingOptionCatalog {
     public static let findTrackTags = SettingOptionDetail(
         id: "findTrackTags",
         title: "FIND TRACK TAGS",
-        description: "Opens a sheet which lets you perform an in-depth metadata scan on all the tracks in your library, it will take a while depending on library size."
+        description: "Lets you perform an in-depth metadata scan on all the local tracks in your library, comparing across Apple Music, Deezer, and MusicBrainz. Each found track will be listed, along with its online counterpart, giving you the option to overwrite or add tags such as: Release Year, Artist, Album, Track Number, and Artwork. This will take a while depending on library size."
     )
 
     public static let scanDuplicates = SettingOptionDetail(
@@ -180,13 +212,13 @@ public enum SettingOptionCatalog {
     public static let useProgressBar = SettingOptionDetail(
         id: "useProgressBar",
         title: "USE PROGRESS BAR",
-        description: "Replaces the circular scrubber with a continuous progress bar in the fullscreen player."
+        description: "Replaces the waveform scrubber with a classic progress bar."
     )
 
     public static let roundedArtwork = SettingOptionDetail(
         id: "roundedArtwork",
         title: "ROUNDED ARTWORK",
-        description: "Toggles rounded corners on album artwork in the player. When disabled, artwork is displayed as a sharp square."
+        description: "Toggles rounded corners on album artwork across the app."
     )
 
     public static let smoothSkipping = SettingOptionDetail(
@@ -206,6 +238,7 @@ public enum SettingOptionCatalog {
 public struct SettingOptionDetailSheet: View {
     public let detail: SettingOptionDetail
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.appTheme) private var appTheme
 
     public init(detail: SettingOptionDetail) {
         self.detail = detail
@@ -229,7 +262,8 @@ public struct SettingOptionDetailSheet: View {
         .padding(.top, 28)
         .padding(.bottom, 20)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.appBackground.ignoresSafeArea())
+        .background(appTheme.backgroundColor.ignoresSafeArea())
+        .presentationBackground(appTheme.backgroundColor)
         .presentationDetents([.height(200), .medium])
         .presentationDragIndicator(.visible)
     }
@@ -271,11 +305,13 @@ public struct SettingsView: View {
             .navigationBarTitleDisplayMode(.inline)
             .sheet(item: $activeDetail) { detail in
                 SettingOptionDetailSheet(detail: detail)
+                    .environment(\.appTheme, libraryStore.settings.appTheme)
             }
             .sheet(isPresented: $showingLogsSheet) {
                 SessionLogsSheetView()
                     .tint(libraryStore.settings.appTheme.accentColor)
                     .environment(\.appTheme, libraryStore.settings.appTheme)
+                    .presentationBackground(libraryStore.settings.appTheme.backgroundColor)
             }
         }
     }

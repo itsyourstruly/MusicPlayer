@@ -457,6 +457,46 @@ public actor LibraryRepository {
         )
     }
 
+    /// Replaces the full track set with the store's current tracks and rebuilds albums/artists.
+    /// Persisted path for store-side mutations (edits, removals) that need regrouping.
+    public func replaceAllTracks(
+        _ tracks: [Track],
+        settings: AppSettings,
+        verifiedGoodDiffs: [MetadataDiff] = [],
+        downloadedMetadataCache: PersistentDownloadedMetadataCache = PersistentDownloadedMetadataCache()
+    ) -> LibraryState {
+        let res = LibraryStore.buildAlbumsAndArtists(
+            tracks: tracks,
+            joinedArtists: settings.joinedArtists,
+            manualCollaborativeAlbumIDs: settings.manualCollaborativeAlbumIDs,
+            originalAlbumArtistsByTrackID: settings.originalAlbumArtistsByTrackID,
+            verifiedGoodDiffs: verifiedGoodDiffs,
+            downloadedMetadataCache: downloadedMetadataCache,
+            scanMethod: settings.libraryScanMethod
+        )
+        return updateFullState(
+            tracks: res.tracks,
+            albums: res.albums,
+            artists: res.artists,
+            lookup: res.artistLookupIndex
+        )
+    }
+
+    /// Persists in-place track patches (no regrouping) together with the store's already-patched
+    /// albums/artists. Unknown track IDs are ignored.
+    public func upsertTracksPreservingStructure(
+        _ updated: [Track],
+        albums: [Album],
+        artists: [Artist],
+        lookup: [String: Artist]
+    ) {
+        var map = tracksMap
+        for track in updated where map[track.id] != nil {
+            map[track.id] = track
+        }
+        _ = updateFullState(tracks: Array(map.values), albums: albums, artists: artists, lookup: lookup)
+    }
+
     /// Full rebuild (e.g. settings hash mismatch recovery).
     public func rebuildAll(
         settings: AppSettings,

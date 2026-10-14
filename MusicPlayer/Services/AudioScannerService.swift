@@ -290,7 +290,8 @@ public struct AudioScannerService: Sendable {
                     scannedTracks.append(cached)
                     continue
                 }
-            } else if let cached = cachedTrack {
+            } else if let cached = cachedTrack, !(cached.metadataSource == .folderStructure && cached.tagSnapshot != nil) {
+                // (Legacy folder-scanned tracks stored folder values as their tag snapshot; re-parse them once.)
                 let cachedSize = cached.fileInfo?.fileSizeBytes ?? 0
                 let currentSize = fileStat.size
 

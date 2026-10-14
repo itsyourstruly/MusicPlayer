@@ -88,7 +88,7 @@ public struct SessionLogsSheetView: View {
 
                 // Main Log Console Content
                 ZStack {
-                    Color.appBackground
+                    appTheme.backgroundColor
                         .ignoresSafeArea()
 
                     if selectedCategory == "DIAGNOSTICS" {
@@ -105,7 +105,7 @@ public struct SessionLogsSheetView: View {
                             Spacer()
                             Text("COPIED TO CLIPBOARD")
                                 .font(.system(size: 11, weight: .heavy, design: .monospaced))
-                                .foregroundStyle(Color.appBackground)
+                                .foregroundStyle(appTheme.backgroundColor)
                                 .padding(.horizontal, 14)
                                 .padding(.vertical, 8)
                                 .background(Color.primary)
@@ -120,6 +120,8 @@ public struct SessionLogsSheetView: View {
                 // Bottom Action Deck (Pure prominent text in ALL CAPS with no background)
                 bottomActionDeck
             }
+            .background(appTheme.backgroundColor.ignoresSafeArea())
+            .toolbarBackground(appTheme.backgroundColor, for: .navigationBar)
             .navigationTitle("SESSION LOGS")
             .navigationBarTitleDisplayMode(.inline)
             .searchable(text: $searchText, prompt: "Search logs (message, subsystem, level)...")
@@ -173,7 +175,7 @@ public struct SessionLogsSheetView: View {
             .padding(.horizontal, 14)
         }
         .frame(height: 38)
-        .background(Color.appBackground)
+        .background(appTheme.backgroundColor)
         .overlay(
             Divider().overlay(Color.appSeparator.opacity(0.18)),
             alignment: .bottom
@@ -361,7 +363,7 @@ public struct SessionLogsSheetView: View {
                 .buttonStyle(.plain)
             }
             .padding(.horizontal, 24)
-            .background(Color.appBackground)
+            .background(appTheme.backgroundColor)
         }
     }
 

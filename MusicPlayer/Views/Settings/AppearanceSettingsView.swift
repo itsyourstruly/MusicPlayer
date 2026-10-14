@@ -39,6 +39,7 @@ public struct AppearanceSettingsView: View {
         .navigationBarTitleDisplayMode(.inline)
         .sheet(item: $activeDetail) { detail in
             SettingOptionDetailSheet(detail: detail)
+                .environment(\.appTheme, libraryStore.settings.appTheme)
         }
     }
 
@@ -48,6 +49,10 @@ public struct AppearanceSettingsView: View {
             Text("THEME")
                 .font(.system(size: 11, weight: .bold, design: .monospaced))
                 .foregroundStyle(.secondary)
+                .onLongPressGesture(minimumDuration: 0.45) {
+                    HapticFeedback.notificationSuccess()
+                    activeDetail = SettingOptionCatalog.themeSection
+                }
 
             VStack(alignment: .leading, spacing: 16) {
                 ForEach(AppTheme.allCases) { theme in
@@ -65,7 +70,7 @@ public struct AppearanceSettingsView: View {
                         LongPressGesture(minimumDuration: 0.45)
                             .onEnded { _ in
                                 HapticFeedback.notificationSuccess()
-                                activeDetail = SettingOptionCatalog.appearance
+                                activeDetail = SettingOptionCatalog.themeSection
                             }
                             .exclusively(before: TapGesture().onEnded {
                                 HapticFeedback.selectionChanged()
@@ -84,6 +89,10 @@ public struct AppearanceSettingsView: View {
             Text("DEFAULT LIBRARY PAGE")
                 .font(.system(size: 11, weight: .bold, design: .monospaced))
                 .foregroundStyle(.secondary)
+                .onLongPressGesture(minimumDuration: 0.45) {
+                    HapticFeedback.notificationSuccess()
+                    activeDetail = SettingOptionCatalog.defaultLibraryPageSection
+                }
 
             VStack(alignment: .leading, spacing: 16) {
                 ForEach(LibraryCategory.allCases) { category in
@@ -101,7 +110,7 @@ public struct AppearanceSettingsView: View {
                         LongPressGesture(minimumDuration: 0.45)
                             .onEnded { _ in
                                 HapticFeedback.notificationSuccess()
-                                activeDetail = SettingOptionCatalog.appearance
+                                activeDetail = SettingOptionCatalog.defaultLibraryPageSection
                             }
                             .exclusively(before: TapGesture().onEnded {
                                 HapticFeedback.selectionChanged()
@@ -120,11 +129,19 @@ public struct AppearanceSettingsView: View {
             Text("FULLSCREEN PLAYER")
                 .font(.system(size: 11, weight: .bold, design: .monospaced))
                 .foregroundStyle(.secondary)
+                .onLongPressGesture(minimumDuration: 0.45) {
+                    HapticFeedback.notificationSuccess()
+                    activeDetail = SettingOptionCatalog.fullscreenPlayerSection
+                }
 
             VStack(alignment: .leading, spacing: 12) {
                 Text("BACKGROUND")
                     .font(.system(size: 11, weight: .bold, design: .monospaced))
                     .foregroundStyle(.secondary)
+                    .onLongPressGesture(minimumDuration: 0.45) {
+                        HapticFeedback.notificationSuccess()
+                        activeDetail = SettingOptionCatalog.fullscreenPlayerSection
+                    }
 
                 VStack(alignment: .leading, spacing: 16) {
                     ForEach(PlayerBackgroundStyle.allCases) { style in
@@ -142,7 +159,7 @@ public struct AppearanceSettingsView: View {
                             LongPressGesture(minimumDuration: 0.45)
                                 .onEnded { _ in
                                     HapticFeedback.notificationSuccess()
-                                    activeDetail = SettingOptionCatalog.appearance
+                                    activeDetail = SettingOptionCatalog.fullscreenPlayerSection
                                 }
                                 .exclusively(before: TapGesture().onEnded {
                                     HapticFeedback.selectionChanged()

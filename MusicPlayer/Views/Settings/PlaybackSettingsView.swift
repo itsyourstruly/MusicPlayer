@@ -51,6 +51,7 @@ public struct PlaybackSettingsView: View {
         }
         .sheet(item: $activeDetail) { detail in
             SettingOptionDetailSheet(detail: detail)
+                .environment(\.appTheme, libraryStore.settings.appTheme)
         }
     }
 
