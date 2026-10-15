@@ -902,7 +902,12 @@ public final class JellyfinSyncService: Sendable {
         var fileInfo: AudioFileInfo? = nil
         let mediaSource = item.mediaSources?.first
         let audioStream = mediaSource?.mediaStreams?.first(where: { $0.type?.lowercased() == "audio" }) ?? mediaSource?.mediaStreams?.first
-        let ext = item.container ?? mediaSource?.container ?? "mp3"
+        // Jellyfin reports demuxer lists as containers (e.g. "mov,mp4,m4a,3gp,3g2,mj2"); prefer the real file extension.
+        let pathExt = (item.path.map { ($0 as NSString).pathExtension } ?? "").lowercased()
+        let rawContainer = (item.container ?? mediaSource?.container ?? "").lowercased()
+        let ext: String = !pathExt.isEmpty
+            ? pathExt
+            : (rawContainer.split(separator: ",").first.map(String.init) ?? "mp3")
         let sRate = Double(audioStream?.sampleRate ?? 44100)
         let chCount = audioStream?.channels ?? 2
         let bRate = Double(audioStream?.bitRate ?? mediaSource?.bitRate ?? 0)

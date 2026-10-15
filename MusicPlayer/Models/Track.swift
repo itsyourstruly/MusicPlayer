@@ -389,7 +389,10 @@ nonisolated public struct Track: Identifiable, Codable, Sendable, Hashable {
     public var technicalSummary: String {
         if let info = fileInfo {
             // Fmt
-            let fmt = info.fileExtension.uppercased()
+            // Older Jellyfin entries stored demuxer lists like "MOV,MP4,M4A,..." as the extension; fall back to the codec.
+            let fmt = info.fileExtension.contains(",")
+                ? (info.formatDescription.contains(",") ? (info.fileExtension.split(separator: ",").first.map(String.init) ?? "") : info.formatDescription).uppercased()
+                : info.fileExtension.uppercased()
             if info.bitRate > 0 {
                 // Kbps
                 let kbps = Int(info.bitRate / 1000.0)
