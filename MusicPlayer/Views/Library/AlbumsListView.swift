@@ -33,7 +33,7 @@ public struct AlbumsListView: View {
             )
 
             if albums.isEmpty {
-                let hasSources = !libraryStore.settings.linkedFolders.isEmpty || !libraryStore.settings.jellyfinServers.isEmpty
+                let hasSources = !libraryStore.settings.linkedFolders.isEmpty || !libraryStore.settings.serverSources.isEmpty
                 if (!libraryStore.isInitialLoading || !hasSources) && !libraryStore.searchModel.isSearching {
                     EmptyStateView(title: "EMPTY", message: "")
                 }

@@ -483,6 +483,38 @@ public final class LibraryStore {
         self.tracksByID = tByID
     }
 
+    /// Reconciles recent albums (LATEST PLAYS) and pinned items against active `albumsByID` and `playlists`.
+    public func reconcileRecentAndPinnedItems() {
+        // 1. Reconcile recent albums (LATEST PLAYS)
+        let freshRecents = self.recentAlbumIDs.compactMap { self.albumsByID[$0] }
+        self.recentAlbumsCache = freshRecents
+        self.recentAlbumIDs = freshRecents.map(\.id)
+        saveRecentAlbums()
+
+        // 2. Reconcile pinned items
+        var resolvedPins: [PinnedItem] = []
+        var resolvedIDs: [PinnedItemIdentifier] = []
+        for identifier in self.pinnedItemIDs {
+            switch identifier.type {
+            case .playlist:
+                if let plID = UUID(uuidString: identifier.targetID),
+                   let pl = self.playlists.first(where: { $0.id == plID }) {
+                    resolvedPins.append(.playlist(pl))
+                    resolvedIDs.append(identifier)
+                }
+            case .album:
+                if let al = self.albumsByID[identifier.targetID] {
+                    resolvedPins.append(.album(al))
+                    resolvedIDs.append(identifier)
+                }
+            }
+        }
+        self.pinnedItemsCache = resolvedPins
+        self.pinnedItemIDs = resolvedIDs
+        self.pinnedAlbumIDs = Set(resolvedIDs.filter { $0.type == .album }.map { $0.targetID })
+        savePins()
+    }
+
     /// Atomically applies an immutable LibraryState emitted by LibraryRepository on MainActor.
     public func applyLoadedLibraryState(_ state: LibraryState) {
         self.tracks = state.tracks
@@ -506,33 +538,7 @@ public final class LibraryStore {
         self.invalidateSortedCaches()
         self.isInitialLoading = false
 
-        if !self.recentAlbumIDs.isEmpty {
-            let freshRecents = self.recentAlbumIDs.compactMap { self.albumsByID[$0] }
-            if !freshRecents.isEmpty {
-                self.recentAlbumsCache = freshRecents
-                self.saveRecentAlbums()
-            }
-        }
-        if !self.pinnedItemIDs.isEmpty {
-            var resolvedPins: [PinnedItem] = []
-            for identifier in self.pinnedItemIDs {
-                switch identifier.type {
-                case .playlist:
-                    if let plID = UUID(uuidString: identifier.targetID),
-                       let pl = self.playlists.first(where: { $0.id == plID }) {
-                        resolvedPins.append(.playlist(pl))
-                    }
-                case .album:
-                    if let al = self.albumsByID[identifier.targetID] {
-                        resolvedPins.append(.album(al))
-                    }
-                }
-            }
-            if !resolvedPins.isEmpty {
-                self.pinnedItemsCache = resolvedPins
-                self.savePins()
-            }
-        }
+        self.reconcileRecentAndPinnedItems()
 
         let searchCtx = SearchContext(
             tracksByID: state.tracksByID,
@@ -634,18 +640,18 @@ public final class LibraryStore {
 
         // Offload security-scoped bookmark resolution and server pre-warming to background task so main thread/init is zero latency
         let folders = self.settings.linkedFolders
-        let jellyfinServers = self.settings.jellyfinServers
+        let serverSources = self.settings.serverSources
         Task.detached(priority: .userInitiated) {
             _ = SecurityScopedBookmark.shared.resolveAndAccessBookmark()
             SecurityScopedBookmark.shared.resolveAndAccessAllBookmarks(folders: folders)
-            for server in jellyfinServers {
-                _ = JellyfinKeychain.getToken(forServerId: server.serverId, userId: server.userId)
+            for server in serverSources {
+                _ = ServerCredentialStore.token(for: server)
             }
         }
 
         // Wire remote artwork loader for Jellyfin images
         ArtworkCacheService.remoteArtworkLoader = { key, fullResolution in
-            await JellyfinArtworkRegistry.shared.fetchArtworkData(for: key, fullResolution: fullResolution)
+            await ServerArtworkRegistry.shared.fetchArtworkData(for: key, fullResolution: fullResolution)
         }
 
         NotificationCenter.default.addObserver(forName: .hideTrackRequested, object: nil, queue: .main) { [weak self] note in
@@ -1057,7 +1063,7 @@ public final class LibraryStore {
         if let folderID = track.folderID, let match = settings.linkedFolders.first(where: { $0.id == folderID }) {
             return match
         }
-        if settings.linkedFolders.count == 1 && settings.jellyfinServers.isEmpty {
+        if settings.linkedFolders.count == 1 && settings.serverSources.isEmpty {
             return settings.linkedFolders.first
         }
         let trackCanonical = track.url.resolvingSymlinksInPath().standardizedFileURL.path
@@ -1125,7 +1131,7 @@ public final class LibraryStore {
 
     /// Track count for an individual linked folder (O(1) indexed).
     public func trackCount(for folder: LinkedFolder) -> Int {
-        if settings.linkedFolders.count <= 1 && settings.jellyfinServers.isEmpty {
+        if settings.linkedFolders.count <= 1 && settings.serverSources.isEmpty {
             return tracks.count
         }
         if let stats = cachedFolderStats[folder.id] {
@@ -1140,7 +1146,7 @@ public final class LibraryStore {
 
     /// Album count for an individual linked folder (O(1) indexed).
     public func albumCount(for folder: LinkedFolder) -> Int {
-        if settings.linkedFolders.count <= 1 && settings.jellyfinServers.isEmpty {
+        if settings.linkedFolders.count <= 1 && settings.serverSources.isEmpty {
             return albums.count
         }
         if let stats = cachedFolderStats[folder.id] {
@@ -1155,7 +1161,7 @@ public final class LibraryStore {
 
     /// Artist count for an individual linked folder (O(1) indexed).
     public func artistCount(for folder: LinkedFolder) -> Int {
-        if settings.linkedFolders.count <= 1 && settings.jellyfinServers.isEmpty {
+        if settings.linkedFolders.count <= 1 && settings.serverSources.isEmpty {
             return artists.count
         }
         if let stats = cachedFolderStats[folder.id] {
@@ -1169,7 +1175,7 @@ public final class LibraryStore {
     }
 
     /// Track count for a Jellyfin server (O(1) indexed).
-    public func trackCount(for server: JellyfinServerLink) -> Int {
+    public func trackCount(for server: ServerSourceLink) -> Int {
         if let stats = cachedFolderStats[server.id] {
             return stats.trackCount
         }
@@ -1181,7 +1187,7 @@ public final class LibraryStore {
     }
 
     /// Album count for a Jellyfin server (O(1) indexed).
-    public func albumCount(for server: JellyfinServerLink) -> Int {
+    public func albumCount(for server: ServerSourceLink) -> Int {
         if let stats = cachedFolderStats[server.id] {
             return stats.albumCount
         }
@@ -1193,7 +1199,7 @@ public final class LibraryStore {
     }
 
     /// Artist count for a Jellyfin server (O(1) indexed).
-    public func artistCount(for server: JellyfinServerLink) -> Int {
+    public func artistCount(for server: ServerSourceLink) -> Int {
         if let stats = cachedFolderStats[server.id] {
             return stats.artistCount
         }
@@ -1208,13 +1214,13 @@ public final class LibraryStore {
     nonisolated public static func computeFolderStats(
         tracks: [Track],
         linkedFolders: [LinkedFolder],
-        jellyfinServers: [JellyfinServerLink] = []
+        serverSources: [ServerSourceLink] = []
     ) -> [UUID: FolderStats] {
         var statsMap: [UUID: (tracks: Int, albums: Set<String>, artists: Set<String>)] = [:]
         for folder in linkedFolders {
             statsMap[folder.id] = (0, Set<String>(), Set<String>())
         }
-        for server in jellyfinServers {
+        for server in serverSources {
             statsMap[server.id] = (0, Set<String>(), Set<String>())
         }
 
@@ -1223,7 +1229,7 @@ public final class LibraryStore {
             return (folder.id, URL(fileURLWithPath: p).standardizedFileURL.path)
         }
 
-        let singleFolderID = (linkedFolders.count == 1 && jellyfinServers.isEmpty) ? linkedFolders.first?.id : nil
+        let singleFolderID = (linkedFolders.count == 1 && serverSources.isEmpty) ? linkedFolders.first?.id : nil
 
         for track in tracks {
             let matchedFolderID: UUID?
@@ -1258,7 +1264,7 @@ public final class LibraryStore {
         let stats = Self.computeFolderStats(
             tracks: self.tracks,
             linkedFolders: self.settings.linkedFolders,
-            jellyfinServers: self.settings.jellyfinServers
+            serverSources: self.settings.serverSources
         )
         self.cachedFolderStats = stats
         let url = self.folderStatsFileURL
@@ -1328,17 +1334,171 @@ public final class LibraryStore {
         await rescanSingleFolder(folder: settings.linkedFolders[index], url: newURL)
     }
 
+    /// Purges tracks and all associated references across player queue, recent albums (LATEST PLAYS),
+    /// pinned items, playlists, search history, duplicates, enrichment, play counts, and persistence.
+    public func purgeTracksAndAssociatedState(removedTrackIDs: Set<UUID>) {
+        guard !removedTrackIDs.isEmpty else {
+            self.cachedFolderStats = Self.computeFolderStats(
+                tracks: self.tracks,
+                linkedFolders: self.settings.linkedFolders,
+                serverSources: self.settings.serverSources
+            )
+            rebuildAlbumsAndArtists()
+            return
+        }
+
+        // 1. AudioPlayerService: prune playing track and queue
+        AudioPlayerService.shared?.pruneTracks(withIDs: removedTrackIDs)
+
+        // 2. Core tracks removal
+        self.tracks.removeAll { removedTrackIDs.contains($0.id) }
+        for id in removedTrackIDs {
+            self.tracksByID.removeValue(forKey: id)
+        }
+        self.settings.totalScannedFiles = self.tracks.count
+
+        // 3. Playlists: prune removed tracks
+        var playlistsChanged = false
+        for i in 0..<self.playlists.count {
+            let originalCount = self.playlists[i].trackIDs.count
+            self.playlists[i].trackIDs.removeAll { removedTrackIDs.contains($0) }
+            if self.playlists[i].trackIDs.count != originalCount {
+                self.playlists[i].dateModified = Date()
+                playlistsChanged = true
+            }
+        }
+        if playlistsChanged {
+            savePlaylists()
+        }
+
+        // 4. Recent search played tracks
+        self.recentSearchPlayedTrackIDs.removeAll { removedTrackIDs.contains($0) }
+
+        // 5. Play counts, playback positions, and overrides
+        for id in removedTrackIDs {
+            self.playCounts.removeValue(forKey: id)
+            self.playbackPositions.removeValue(forKey: id)
+            self.settings.originalAlbumArtistsByTrackID.removeValue(forKey: id.uuidString)
+        }
+
+        // 6. Enrichment and duplicates
+        self.enrichmentDiffs.removeAll { removedTrackIDs.contains($0.localTrack.id) }
+        self.verifiedGoodDiffs.removeAll { removedTrackIDs.contains($0.localTrack.id) }
+        self.unmatchedTrackIDs.subtract(removedTrackIDs)
+
+        var survivingGroups: [DuplicateGroup] = []
+        for group in self.duplicateGroups {
+            let survivingCandidates = group.candidates.filter { !removedTrackIDs.contains($0.track.id) }
+            if survivingCandidates.count >= 2 {
+                let primaryID = survivingCandidates.contains(where: { $0.track.id == group.selectedPrimaryTrackID })
+                    ? group.selectedPrimaryTrackID
+                    : survivingCandidates.first!.track.id
+                survivingGroups.append(DuplicateGroup(
+                    id: group.id,
+                    normalizedTitle: group.normalizedTitle,
+                    normalizedArtist: group.normalizedArtist,
+                    candidates: survivingCandidates,
+                    selectedPrimaryTrackID: primaryID
+                ))
+            }
+        }
+        self.duplicateGroups = survivingGroups
+        saveDuplicates()
+
+        // 7. Immediate pruning of recentAlbumsCache and recentAlbumIDs (LATEST PLAYS)
+        var updatedRecentAlbums: [Album] = []
+        for album in self.recentAlbumsCache {
+            let survivingAlbumTracks = album.tracks.filter { !removedTrackIDs.contains($0.id) }
+            if !survivingAlbumTracks.isEmpty {
+                let updatedAlbum = Album(
+                    title: album.title,
+                    artist: album.artist,
+                    year: album.year,
+                    genre: album.genre,
+                    artworkKey: album.artworkKey,
+                    tracks: survivingAlbumTracks,
+                    groupKey: album.groupKey
+                )
+                updatedRecentAlbums.append(updatedAlbum)
+            }
+        }
+        self.recentAlbumsCache = updatedRecentAlbums
+        let survivingRecentIDs = Set(updatedRecentAlbums.map(\.id))
+        self.recentAlbumIDs = self.recentAlbumIDs.filter { survivingRecentIDs.contains($0) }
+        saveRecentAlbums()
+
+        // 8. Immediate pruning of pinnedItemsCache and pinnedItemIDs
+        var updatedPinnedCache: [PinnedItem] = []
+        var updatedPinnedIDs: [PinnedItemIdentifier] = []
+        for item in self.pinnedItemsCache {
+            switch item {
+            case .album(let album):
+                let survivingAlbumTracks = album.tracks.filter { !removedTrackIDs.contains($0.id) }
+                if !survivingAlbumTracks.isEmpty {
+                    let updatedAlbum = Album(
+                        title: album.title,
+                        artist: album.artist,
+                        year: album.year,
+                        genre: album.genre,
+                        artworkKey: album.artworkKey,
+                        tracks: survivingAlbumTracks,
+                        groupKey: album.groupKey
+                    )
+                    updatedPinnedCache.append(.album(updatedAlbum))
+                    updatedPinnedIDs.append(PinnedItemIdentifier(type: .album, targetID: album.id))
+                }
+            case .playlist(let playlist):
+                if let freshPl = self.playlists.first(where: { $0.id == playlist.id }) {
+                    updatedPinnedCache.append(.playlist(freshPl))
+                    updatedPinnedIDs.append(PinnedItemIdentifier(type: .playlist, targetID: playlist.id.uuidString))
+                }
+            }
+        }
+        self.pinnedItemsCache = updatedPinnedCache
+        self.pinnedItemIDs = updatedPinnedIDs
+        self.pinnedAlbumIDs = Set(updatedPinnedIDs.filter { $0.type == .album }.map { $0.targetID })
+        savePins()
+
+        // 9. Recompute cached folder stats
+        self.cachedFolderStats = Self.computeFolderStats(
+            tracks: self.tracks,
+            linkedFolders: self.settings.linkedFolders,
+            serverSources: self.settings.serverSources
+        )
+
+        // 10. Rebuild albums & artists
+        rebuildAlbumsAndArtists()
+    }
+
     /// Unlinks a specific folder by its UUID, removing its tracks while preserving cache and other folders.
     public func unlinkFolder(id: UUID) {
+        let folderToRemove = settings.linkedFolders.first(where: { $0.id == id })
+        let folderURL = folderToRemove?.path.map { URL(fileURLWithPath: $0) } ?? SecurityScopedBookmark.shared.url(for: id)
+        let folderCanonical = folderURL?.resolvingSymlinksInPath().standardizedFileURL.path
+        let folderPath = folderToRemove?.path
+
+        let sourceTracks = self.tracks.filter { track in
+            if track.folderID == id { return true }
+            guard !track.isJellyfinItem && track.metadataSource != .server else { return false }
+            if let folderCanonical {
+                let trackCanonical = track.url.resolvingSymlinksInPath().standardizedFileURL.path
+                if trackCanonical.hasPrefix(folderCanonical) { return true }
+            }
+            if let folderPath {
+                if track.url.path.hasPrefix(folderPath) { return true }
+            }
+            if self.folder(for: track)?.id == id { return true }
+            return false
+        }
+        let removedIDs = Set(sourceTracks.map(\.id))
+
         SecurityScopedBookmark.shared.stopAccessing(folderID: id)
         settings.linkedFolders.removeAll { $0.id == id }
+        settings.disabledFolderIDs.remove(id)
         settings.linkedFolderName = settings.linkedFolders.first?.name
 
-        // Remove tracks belonging to this folder
-        self.tracks.removeAll { $0.folderID == id || (!($0.isJellyfinItem || $0.metadataSource == .server) && self.folder(for: $0)?.id == id) }
-        rebuildAlbumsAndArtists()
+        purgeTracksAndAssociatedState(removedTrackIDs: removedIDs)
 
-        self.settings.totalScannedFiles = self.tracks.count
         if settings.linkedFolders.isEmpty {
             self.settings.lastScanDate = nil
             self.duplicateGroups = []
@@ -1351,7 +1511,7 @@ public final class LibraryStore {
         Task {
             await self.recalculateDuplicates()
         }
-        AppLogger.library.info("Unlinked folder [\(id)] successfully.")
+        AppLogger.library.info("Unlinked folder [\(id)] successfully. Purged \(removedIDs.count) tracks.")
     }
 
     /// Replaces or adds tracks from a Jellyfin server sync.
@@ -1376,6 +1536,20 @@ public final class LibraryStore {
         let newIDs = Set(filteredServerTracks.map(\.id))
         let deletedIDs = existingIDs.subtracting(newIDs)
 
+        if !deletedIDs.isEmpty {
+            AudioPlayerService.shared?.pruneTracks(withIDs: deletedIDs)
+            var plChanged = false
+            for i in 0..<self.playlists.count {
+                let countBefore = self.playlists[i].trackIDs.count
+                self.playlists[i].trackIDs.removeAll { deletedIDs.contains($0) }
+                if self.playlists[i].trackIDs.count != countBefore {
+                    self.playlists[i].dateModified = Date()
+                    plChanged = true
+                }
+            }
+            if plChanged { savePlaylists() }
+        }
+
         let newState = await LibraryRepository.shared.applyChangeSet(
             upserted: filteredServerTracks,
             removedIDs: deletedIDs,
@@ -1388,7 +1562,7 @@ public final class LibraryStore {
         self.cachedFolderStats = Self.computeFolderStats(
             tracks: self.tracks,
             linkedFolders: self.settings.linkedFolders,
-            jellyfinServers: self.settings.jellyfinServers
+            serverSources: self.settings.serverSources
         )
         self.settings.totalScannedFiles = self.tracks.count
 
@@ -1398,31 +1572,90 @@ public final class LibraryStore {
         Task.detached(priority: .utility) {
             Self.saveFast(filteredServerTracks, to: serverBinURL, jsonURL: serverJSONURL)
         }
-        JellyfinArtworkRegistry.shared.populateFromTracks(self.tracks, servers: self.settings.jellyfinServers)
+        ServerArtworkRegistry.shared.populateFromTracks(self.tracks, servers: self.settings.serverSources)
 
         buildSearchIndex(immediate: false)
     }
 
-    /// Removes all tracks for a linked Jellyfin server and updates settings and storage.
-    public func removeJellyfinServer(id: UUID) {
-        settings.jellyfinServers.removeAll { $0.id == id }
+    /// Removes a linked server source and only its data: tracks, downloads, artwork, transcode cache, credentials.
+    public func removeServerSource(id: UUID) {
+        let link = settings.serverSources.first { $0.id == id }
+        let sourceTracks = self.tracks.filter { $0.folderID == id }
+        let removedIDs = Set(sourceTracks.map(\.id))
+
+        Task { await ServerSyncCoordinator.shared.cancel(sourceID: id) }
+        Task { await ServerTranscodeCache.shared.removeAll(for: id) }
+        for track in sourceTracks { JellyfinDownloadManager.shared.deleteDownload(trackId: track.id) }
+        ServerArtworkRegistry.shared.removeAll(for: id)
+        if let link, link.kind != .jellyfin {
+            // Subsonic/Plex artwork keys embed the source ID, so they are never shared with another source.
+            let keys = Set(sourceTracks.compactMap(\.artworkKey))
+            Task { for key in keys { await ArtworkCacheService.shared.removeArtwork(key: key) } }
+        }
+        settings.serverSources.removeAll { $0.id == id }
         jellyfinServerErrors.removeValue(forKey: id)
         jellyfinLastSyncDates.removeValue(forKey: id)
         saveJellyfinLastSyncDates()
         saveSettings()
-        self.tracks.removeAll { $0.folderID == id }
-        rebuildAlbumsAndArtists()
+
+        purgeTracksAndAssociatedState(removedTrackIDs: removedIDs)
         saveLibrary()
+
         let sBinURL = self.jellyfinServerCacheURL(for: id)
         let sJSONURL = self.jellyfinServerJSONURL(for: id)
         Task.detached(priority: .utility) {
             try? FileManager.default.removeItem(at: sBinURL)
             try? FileManager.default.removeItem(at: sJSONURL)
         }
+        if let link {
+            Task {
+                // Sign out first (it may need the token), then drop the credentials.
+                await ServerProviderRegistry.provider(for: link)?.signOut()
+                _ = ServerCredentialStore.deleteCredentials(for: link)
+                ServerSessionCache.shared.removeSession(for: id)
+            }
+        }
+    }
+
+    /// Foreground deletion-sweep cadence for sources without a change feed (Subsonic, Plex):
+    /// sync when the last sync is older than 6 h (providers also force a full sweep every 24 h).
+    public func syncStaleServers() async {
+        for server in settings.serverSources where server.kind != .jellyfin {
+            let last = jellyfinLastSyncDates[server.id] ?? .distantPast
+            if Date().timeIntervalSince(last) > 6 * 3600 {
+                await syncServer(server)
+            }
+        }
+    }
+
+    /// Follows tracks whose server ID changed (rematched by path/metadata) in playlists and play counts.
+    private func applyTrackRemaps(_ remaps: [UUID: UUID]) {
+        guard !remaps.isEmpty else { return }
+        var playlistsChanged = false
+        for i in playlists.indices where playlists[i].trackIDs.contains(where: { remaps[$0] != nil }) {
+            playlists[i].trackIDs = playlists[i].trackIDs.map { remaps[$0] ?? $0 }
+            playlistsChanged = true
+        }
+        if playlistsChanged { savePlaylists() }
+        var countsChanged = false
+        for (old, new) in remaps {
+            if let count = playCounts.removeValue(forKey: old) {
+                playCounts[new, default: 0] += count
+                countsChanged = true
+            }
+        }
+        if countsChanged { savePlayCounts() }
     }
 
     /// Syncs tracks from a Jellyfin server, updating scan progress and surfacing any errors.
-    public func syncJellyfinServer(_ serverLink: JellyfinServerLink) async {
+    /// `force` (manual rescan) makes Subsonic/Plex run a full enumeration + deletion sweep.
+    public func syncServer(_ serverLink: ServerSourceLink, force: Bool = false) async {
+        await ServerSyncCoordinator.shared.sync(sourceID: serverLink.id) { [weak self] in
+            await self?.performServerSync(serverLink, force: force)
+        }
+    }
+
+    private func performServerSync(_ serverLink: ServerSourceLink, force: Bool) async {
         // Ignore a duplicate request for a server that is already syncing (e.g. double tap).
         if isScanning && currentlyScanningFolderID == serverLink.id { return }
         // Wait for any other scan/sync to finish so their shared scan state (and defers) can't interleave.
@@ -1433,7 +1666,7 @@ public final class LibraryStore {
         self.isScanning = true
         self.currentlyScanningFolderID = serverLink.id
         self.scanProgress = 0.0
-        self.scanStatusText = "SYNCING JELLYFIN (\(serverLink.serverName.uppercased()))..."
+        self.scanStatusText = "SYNCING \(serverLink.displayLabel) (\(serverLink.serverName.uppercased()))..."
 
         #if os(macOS)
         let activity = ProcessInfo.processInfo.beginActivity(
@@ -1467,18 +1700,24 @@ public final class LibraryStore {
             self.scanStatusText = ""
         }
 
-        guard let token = JellyfinKeychain.getToken(forServerId: serverLink.serverId, userId: serverLink.userId) else {
+        guard let provider = ServerProviderRegistry.provider(for: serverLink) else {
+            self.jellyfinServerErrors[serverLink.id] = "\(serverLink.kind.displayLabel) SERVERS ARE NOT SUPPORTED YET"
+            return
+        }
+        guard ServerCredentialStore.credentials(for: serverLink) != nil else {
             let errorMsg = "TOKEN MISSING: PLEASE SIGN IN AGAIN"
             self.jellyfinServerErrors[serverLink.id] = errorMsg
-            AppLogger.library.error("Jellyfin sync failed: token missing for server \(serverLink.serverName)")
+            AppLogger.library.error("Server sync failed: token missing for server \(serverLink.serverName)")
             return
         }
 
         do {
-            await backfillJellyfinPathsIfNeeded(serverLink, token: token)
+            try await provider.prepareSession()
+            await backfillServerPathsIfNeeded(serverLink, provider: provider)
 
             let existingServerTracks = self.tracks.filter { $0.folderID == serverLink.id }
-            let lastSync = self.jellyfinLastSyncDates[serverLink.id]
+            // Jellyfin keeps its incremental feed on manual rescans; enumeration-based providers sweep fully.
+            let lastSync = (force && serverLink.kind != .jellyfin) ? nil : self.jellyfinLastSyncDates[serverLink.id]
 
             let (progressStream, progressContinuation) = AsyncStream.makeStream(of: (current: Int, total: Int, text: String).self)
             let progressTask = Task { @MainActor in
@@ -1491,20 +1730,20 @@ public final class LibraryStore {
             }
 
             let syncStartTime = Date()
-            let (upserted, removedIDs) = try await JellyfinSyncService.shared.fetchAudioTrackChanges(
-                for: serverLink,
-                token: token,
+            let changes = try await provider.fetchTrackChanges(
                 existingTracks: existingServerTracks,
                 lastSyncDate: lastSync,
                 statusHandler: { status in
-                    progressContinuation.yield((current: 0, total: 0, text: "SYNCING JELLYFIN (\(serverLink.serverName.uppercased())): \(status)"))
+                    progressContinuation.yield((current: 0, total: 0, text: "SYNCING \(serverLink.displayLabel) (\(serverLink.serverName.uppercased())): \(status)"))
                 },
                 progressHandler: { current, total in
-                    progressContinuation.yield((current: current, total: total, text: "SYNCING JELLYFIN (\(serverLink.serverName.uppercased())): \(current)/\(total)"))
+                    progressContinuation.yield((current: current, total: total, text: "SYNCING \(serverLink.displayLabel) (\(serverLink.serverName.uppercased())): \(current)/\(total)"))
                 }
             )
             progressContinuation.finish()
             _ = await progressTask.result
+            let upserted = changes.upserted
+            let removedIDs = changes.removedIDs
 
             self.jellyfinServerErrors.removeValue(forKey: serverLink.id)
             self.jellyfinLastSyncDates[serverLink.id] = syncStartTime
@@ -1532,20 +1771,33 @@ public final class LibraryStore {
                 LibraryOrganizer.organizeBatch(tracks: filteredUpserted, mode: organizeMode, overrides: organizeOverrides)
             }.value
 
+            var seenSyncIDs = Set<UUID>()
+            var seenSyncPaths = Set<String>()
+            var dedupedUpserted: [Track] = []
+            dedupedUpserted.reserveCapacity(organizedUpserted.count)
+            for track in organizedUpserted {
+                guard seenSyncIDs.insert(track.id).inserted else { continue }
+                if let rel = track.relativePath?.lowercased(), !rel.isEmpty {
+                    guard seenSyncPaths.insert(rel).inserted else { continue }
+                }
+                dedupedUpserted.append(track)
+            }
+
             let newState = await LibraryRepository.shared.applyChangeSet(
-                upserted: organizedUpserted,
+                upserted: dedupedUpserted,
                 removedIDs: removedIDs,
                 settings: self.settings,
                 verifiedGoodDiffs: self.verifiedGoodDiffs,
                 downloadedMetadataCache: self.downloadedMetadataCache
             )
             self.applyLoadedLibraryState(newState)
+            self.applyTrackRemaps(changes.remappedIDs)
             let allTracks = self.tracks
             let statsFolders = self.settings.linkedFolders
-            let statsServers = self.settings.jellyfinServers
+            let statsServers = self.settings.serverSources
             let serverID = serverLink.id
             let (stats, currentServerTracks) = await Task.detached(priority: .userInitiated) {
-                (LibraryStore.computeFolderStats(tracks: allTracks, linkedFolders: statsFolders, jellyfinServers: statsServers),
+                (LibraryStore.computeFolderStats(tracks: allTracks, linkedFolders: statsFolders, serverSources: statsServers),
                  allTracks.filter { $0.folderID == serverID })
             }.value
             self.cachedFolderStats = stats
@@ -1557,7 +1809,7 @@ public final class LibraryStore {
             Task.detached(priority: .utility) {
                 Self.saveFast(currentServerTracks, to: serverBinURL, jsonURL: serverJSONURL)
             }
-            JellyfinArtworkRegistry.shared.populateFromTracks(self.tracks, servers: self.settings.jellyfinServers)
+            ServerArtworkRegistry.shared.populateFromTracks(self.tracks, servers: self.settings.serverSources)
             buildSearchIndex(immediate: false)
             AppLogger.library.info("Jellyfin sync succeeded: \(upserted.count) upserted, \(removedIDs.count) removed for \(serverLink.serverName)")
         } catch {
@@ -1571,7 +1823,7 @@ public final class LibraryStore {
     /// One-time (per server) backfill of case-preserving, library-relative Jellyfin paths so existing
     /// tracks can be folder-organized without a full re-sync. Fetches only Id+Path; on failure it
     /// simply retries on the next sync.
-    private func backfillJellyfinPathsIfNeeded(_ serverLink: JellyfinServerLink, token: String) async {
+    private func backfillServerPathsIfNeeded(_ serverLink: ServerSourceLink, provider: any MediaServerProvider) async {
         let flagKey = "jellyfin_path_backfill_v1_\(serverLink.id.uuidString)"
         guard !UserDefaults.standard.bool(forKey: flagKey) else { return }
 
@@ -1582,9 +1834,9 @@ public final class LibraryStore {
             return
         }
 
-        self.scanStatusText = "SYNCING JELLYFIN (\(serverLink.serverName.uppercased())): READING FOLDERS..."
+        self.scanStatusText = "SYNCING \(serverLink.displayLabel) (\(serverLink.serverName.uppercased())): READING FOLDERS..."
         do {
-            let pathsByItemID = try await JellyfinSyncService.shared.fetchRelativeItemPaths(for: serverLink, token: token)
+            let pathsByItemID = try await provider.fetchRelativePaths()
             let snapshot = self.tracks
             let mode = self.settings.libraryScanMethod
             let overrides = self.organizationModesContainer.state(for: mode).overrides
@@ -1639,30 +1891,27 @@ public final class LibraryStore {
             AppLogger.library.warning("No active security-scoped directory available to rescan.")
         }
 
-        for server in settings.jellyfinServers {
-            await syncJellyfinServer(server)
+        for server in settings.serverSources {
+            await syncServer(server, force: true)
         }
     }
 
     /// Unlinks all music folders and clears scanned library data.
     /// Preserves downloaded metadata cache and artwork cache so re-linking immediately restores all metadata.
     public func unlinkDirectory() {
+        let localTracks = self.tracks.filter { !$0.isJellyfinItem && $0.metadataSource != .server }
+        let removedIDs = Set(localTracks.map(\.id))
+
         SecurityScopedBookmark.shared.clearSavedBookmark()
         for f in settings.linkedFolders {
             SecurityScopedBookmark.shared.stopAccessing(folderID: f.id)
         }
         settings.linkedFolders = []
+        settings.disabledFolderIDs = []
         settings.linkedFolderName = nil
         settings.lastScanDate = nil
-        settings.totalScannedFiles = 0
-        self.tracks = []
-        self.tracksByID = [:]
-        self.albums = []
-        self.albumsByID = [:]
-        self.albumsByNormalizedKey = [:]
-        self.artists = []
-        self.artistLookupIndex = [:]
-        self.duplicateGroups = []
+
+        purgeTracksAndAssociatedState(removedTrackIDs: removedIDs)
         saveSettings()
         saveLibrary()
         saveDuplicates()
@@ -1720,7 +1969,7 @@ public final class LibraryStore {
         let goodDiffs = self.verifiedGoodDiffs
         let currentTracks = self.tracks
         let currentLinkedFolders = self.settings.linkedFolders
-        let currentJellyfinServers = self.settings.jellyfinServers
+        let currentJellyfinServers = self.settings.serverSources
 
         let folderCanonical = url.standardizedFileURL.path
         let folderPathCanonical = (folderPath.map { URL(fileURLWithPath: $0).standardizedFileURL.path }) ?? folderCanonical
@@ -1869,9 +2118,9 @@ public final class LibraryStore {
         AppLogger.library.debug("SCAN TIMING: apply to UI \(String(format: "%.2f", Date().timeIntervalSince(tApply)))s")
         let statsTracks = self.tracks
         let statsFolders = self.settings.linkedFolders
-        let statsServers = self.settings.jellyfinServers
+        let statsServers = self.settings.serverSources
         self.cachedFolderStats = await Task.detached(priority: .userInitiated) {
-            LibraryStore.computeFolderStats(tracks: statsTracks, linkedFolders: statsFolders, jellyfinServers: statsServers)
+            LibraryStore.computeFolderStats(tracks: statsTracks, linkedFolders: statsFolders, serverSources: statsServers)
         }.value
 
         // Cache baseline metadata for newly indexed tracks non-blockingly
@@ -2787,6 +3036,7 @@ public final class LibraryStore {
             self.artists = res.artists
             self.artistLookupIndex = res.lookup
             self.rebuildAlbumLookups()
+            self.reconcileRecentAndPinnedItems()
             self.invalidateSortedCaches()
             self.enqueueSearchDelta(albums: res.albums, artists: res.artists)
             if persist { self.saveLibrary() }
@@ -3324,9 +3574,12 @@ public final class LibraryStore {
 
     /// Permanently deletes a track from the remote Jellyfin server, removes local downloads, and purges it from the library.
     public func deleteJellyfinTrack(_ track: Track) async throws {
-        if let server = settings.jellyfinServers.first(where: { $0.id == track.folderID }) ?? settings.jellyfinServers.first,
+        if let server = settings.serverSources.first(where: { $0.id == track.folderID }) ?? settings.serverSources.first,
            let itemId = track.jellyfinItemId ?? JellyfinPlaybackReporter.extractItemId(from: track) {
-            try await JellyfinClient.shared.deleteItem(itemId: itemId, serverLink: server)
+            // Only Jellyfin exposes item deletion; other servers just hide the item from this library.
+            if server.kind == .jellyfin {
+                try await JellyfinClient.shared.deleteItem(itemId: itemId, serverLink: server)
+            }
             self.settings.removedJellyfinItemIDs.insert(itemId)
         }
         JellyfinDownloadManager.shared.deleteDownload(trackId: track.id)
@@ -5527,6 +5780,106 @@ public final class LibraryStore {
         AppLogger.storage.info("Manually cleared artwork cache.")
     }
 
+    /// Completely resets the entire app library: stops playback, unlinks all local folders and servers,
+    /// clears all tracks, albums, artists, playlists, pins, play counts, playback positions, search history,
+    /// duplicates, enrichment caches, downloads, artwork cache, server credentials, and deletes all persisted files.
+    public func clearEverything() {
+        // 1. Stop playback and clear audio queue
+        AudioPlayerService.shared?.stopAndClear()
+
+        // 2. Disconnect and sign out of all server sources
+        let serversToDrop = self.settings.serverSources
+        for server in serversToDrop {
+            Task { await ServerSyncCoordinator.shared.cancel(sourceID: server.id) }
+            Task { await ServerTranscodeCache.shared.removeAll(for: server.id) }
+            Task {
+                await ServerProviderRegistry.provider(for: server)?.signOut()
+                _ = ServerCredentialStore.deleteCredentials(for: server)
+                ServerSessionCache.shared.removeSession(for: server.id)
+            }
+        }
+        ServerArtworkRegistry.shared.removeAll()
+
+        // 3. Stop accessing and clear local folder security bookmarks
+        SecurityScopedBookmark.shared.clearSavedBookmark()
+        for f in self.settings.linkedFolders {
+            SecurityScopedBookmark.shared.stopAccessing(folderID: f.id)
+        }
+
+        // 4. Delete downloads and artwork cache
+        JellyfinDownloadManager.shared.deleteAllDownloads()
+        Task.detached(priority: .utility) {
+            await ArtworkCacheService.shared.clearCache()
+        }
+
+        // 5. Reset all in-memory store state
+        self.tracks = []
+        self.tracksByID = [:]
+        self.albums = []
+        self.albumsByID = [:]
+        self.artists = []
+        self.artistLookupIndex = [:]
+        self.playlists = []
+        self.pinnedItemsCache = []
+        self.pinnedItemIDs = []
+        self.pinnedAlbumIDs = []
+        self.recentAlbumIDs = []
+        self.recentAlbumsCache = []
+        self.recentSearchPlayedTrackIDs = []
+        self.playCounts = [:]
+        self.playbackPositions = [:]
+        self.duplicateGroups = []
+        self.enrichmentDiffs = []
+        self.verifiedGoodDiffs = []
+        self.unmatchedTrackIDs = []
+        self.downloadedMetadataCache = PersistentDownloadedMetadataCache()
+        self.cachedFolderStats = [:]
+        self.jellyfinServerErrors = [:]
+        self.jellyfinLastSyncDates = [:]
+        self.scanStatusText = ""
+        self.scanProgress = 0.0
+        self.isScanning = false
+        self.currentlyScanningFolderID = nil
+        self.searchIndexVersion &+= 1
+
+        // 6. Reset settings sources, tracks, and scan dates
+        self.settings.linkedFolders = []
+        self.settings.linkedFolderName = nil
+        self.settings.disabledFolderIDs = []
+        self.settings.lastScanDate = nil
+        self.settings.totalScannedFiles = 0
+        self.settings.serverSources = []
+        self.settings.removedJellyfinItemIDs = []
+        self.settings.removedTrackPaths = []
+        self.settings.manualCollaborativeAlbumIDs = []
+        self.settings.originalAlbumArtistsByTrackID = [:]
+        saveSettings()
+
+        // 7. Clear LibraryRepository actor state and delete library files
+        let sDir = self.storageDirectoryURL
+        Task {
+            await LibraryRepository.shared.clearAll(storageDir: sDir)
+        }
+
+        // 8. Delete all persisted cache/json files in storageDirectoryURL (except clean settings.json)
+        Task.detached(priority: .utility) {
+            let fm = FileManager.default
+            if let files = try? fm.contentsOfDirectory(at: sDir, includingPropertiesForKeys: nil) {
+                for file in files {
+                    if file.lastPathComponent != "settings.json" {
+                        try? fm.removeItem(at: file)
+                    }
+                }
+            }
+        }
+
+        // 9. Rebuild empty search index
+        buildSearchIndex(immediate: true)
+        searchModel.search(query: "")
+
+        AppLogger.storage.info("Completely cleared all sources, tracks, albums, artworks, and app data.")
+    }
+
     // Record an album played for LATEST PLAYS
     public func recordAlbumPlayed(albumID: String) {
         guard !albumID.isEmpty else { return }
@@ -6623,7 +6976,7 @@ public final class LibraryStore {
         let goodURL = self.verifiedGoodFileURL
         let unmatchURL = self.unmatchedFileURL
         let metaCacheURL = self.downloadedMetadataCacheFileURL
-        let jellyfinServers = self.settings.jellyfinServers
+        let serverSources = self.settings.serverSources
 
         // TIER 1: Ultra-fast flat repository loading with fallback to SQLite rescue and chunks
         Task.detached(priority: .userInitiated) { [weak self] in
@@ -6661,8 +7014,8 @@ public final class LibraryStore {
             let loadedUnmatched = await unmatchedTask ?? []
             let loadedMetaCache = await metaCacheTask ?? PersistentDownloadedMetadataCache()
 
-            if !jellyfinServers.isEmpty && !state.tracks.isEmpty {
-                JellyfinArtworkRegistry.shared.populateFromTracks(state.tracks, servers: jellyfinServers)
+            if !serverSources.isEmpty && !state.tracks.isEmpty {
+                ServerArtworkRegistry.shared.populateFromTracks(state.tracks, servers: serverSources)
             }
 
             await MainActor.run { [weak self] in

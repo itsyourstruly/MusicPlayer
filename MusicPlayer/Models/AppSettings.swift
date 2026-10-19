@@ -321,7 +321,7 @@ public struct AppSettings: Codable, Sendable {
     // Track ID hashing scheme version (1 = legacy full path hash, 2 = stable relative path v2)
     public var trackIDSchemeVersion: Int
     // Configured remote Jellyfin server instances
-    public var jellyfinServers: [JellyfinServerLink]
+    public var serverSources: [ServerSourceLink]
     // Silently pre-fetches upcoming cloud tracks over Wi-Fi
     public var downloadNextSongOnWiFi: Bool
     // Automatically downloads Jellyfin tracks in background when playback begins
@@ -371,7 +371,7 @@ public struct AppSettings: Codable, Sendable {
         disabledFolderIDs: Set<UUID> = [],
         isArtworkRounded: Bool = true,
         trackIDSchemeVersion: Int = 1,
-        jellyfinServers: [JellyfinServerLink] = [],
+        serverSources: [ServerSourceLink] = [],
         downloadNextSongOnWiFi: Bool = true,
         autoDownloadOnPlay: Bool = false,
         downloadOnCellular: Bool = true,
@@ -409,7 +409,7 @@ public struct AppSettings: Codable, Sendable {
         self.disabledFolderIDs = disabledFolderIDs
         self.isArtworkRounded = isArtworkRounded
         self.trackIDSchemeVersion = trackIDSchemeVersion
-        self.jellyfinServers = jellyfinServers
+        self.serverSources = serverSources
         self.downloadNextSongOnWiFi = downloadNextSongOnWiFi
         self.autoDownloadOnPlay = autoDownloadOnPlay
         self.downloadOnCellular = downloadOnCellular
@@ -480,7 +480,7 @@ public struct AppSettings: Codable, Sendable {
         case disabledFolderIDs
         case isArtworkRounded
         case trackIDSchemeVersion
-        case jellyfinServers
+        case serverSources = "jellyfinServers" // legacy key kept so existing Jellyfin links decode unchanged
         case downloadNextSongOnWiFi
         case autoDownloadOnPlay
         case downloadOnCellular
@@ -554,7 +554,7 @@ public struct AppSettings: Codable, Sendable {
         self.disabledFolderIDs = (try? container.decodeIfPresent(Set<UUID>.self, forKey: .disabledFolderIDs)) ?? []
         self.isArtworkRounded = (try? container.decodeIfPresent(Bool.self, forKey: .isArtworkRounded)) ?? true
         self.trackIDSchemeVersion = (try? container.decodeIfPresent(Int.self, forKey: .trackIDSchemeVersion)) ?? 1
-        self.jellyfinServers = (try? container.decodeIfPresent([JellyfinServerLink].self, forKey: .jellyfinServers)) ?? []
+        self.serverSources = (try? container.decodeIfPresent([ServerSourceLink].self, forKey: .serverSources)) ?? []
         self.downloadNextSongOnWiFi = (try? container.decodeIfPresent(Bool.self, forKey: .downloadNextSongOnWiFi)) ?? true
         self.autoDownloadOnPlay = (try? container.decodeIfPresent(Bool.self, forKey: .autoDownloadOnPlay)) ?? false
         self.downloadOnCellular = (try? container.decodeIfPresent(Bool.self, forKey: .downloadOnCellular)) ?? true
@@ -597,7 +597,7 @@ public struct AppSettings: Codable, Sendable {
         try container.encode(disabledFolderIDs, forKey: .disabledFolderIDs)
         try container.encode(isArtworkRounded, forKey: .isArtworkRounded)
         try container.encode(trackIDSchemeVersion, forKey: .trackIDSchemeVersion)
-        try container.encode(jellyfinServers, forKey: .jellyfinServers)
+        try container.encode(serverSources, forKey: .serverSources)
         try container.encode(downloadNextSongOnWiFi, forKey: .downloadNextSongOnWiFi)
         try container.encode(autoDownloadOnPlay, forKey: .autoDownloadOnPlay)
         try container.encode(downloadOnCellular, forKey: .downloadOnCellular)

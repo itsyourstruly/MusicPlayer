@@ -7,7 +7,7 @@ public final class JellyfinPlaybackReporter: @unchecked Sendable {
 
     private let session: URLSession
     private var currentReportingTrack: Track?
-    private var currentServerLink: JellyfinServerLink?
+    private var currentServerLink: ServerSourceLink?
     private var lastReportedTime: TimeInterval = 0
 
     public init(session: URLSession = .shared) {
@@ -30,13 +30,13 @@ public final class JellyfinPlaybackReporter: @unchecked Sendable {
 
     // MARK: - Reporting Lifecycle
 
-    public func reportPlaybackStart(track: Track, serverLink: JellyfinServerLink) {
+    public func reportPlaybackStart(track: Track, serverLink: ServerSourceLink) {
         currentReportingTrack = track
         currentServerLink = serverLink
         lastReportedTime = 0
 
         guard let itemId = Self.extractItemId(from: track),
-              let token = JellyfinKeychain.getToken(forServerId: serverLink.serverId, userId: serverLink.userId) else {
+              let token = ServerCredentialStore.token(for: serverLink) else {
             return
         }
 
@@ -65,7 +65,7 @@ public final class JellyfinPlaybackReporter: @unchecked Sendable {
         guard let track = currentReportingTrack,
               let serverLink = currentServerLink,
               let itemId = Self.extractItemId(from: track),
-              let token = JellyfinKeychain.getToken(forServerId: serverLink.serverId, userId: serverLink.userId) else {
+              let token = ServerCredentialStore.token(for: serverLink) else {
             return
         }
 
@@ -94,7 +94,7 @@ public final class JellyfinPlaybackReporter: @unchecked Sendable {
         }
     }
 
-    public func reportPlaybackProgress(track: Track, positionSeconds: TimeInterval, isPaused: Bool, serverLink: JellyfinServerLink) {
+    public func reportPlaybackProgress(track: Track, positionSeconds: TimeInterval, isPaused: Bool, serverLink: ServerSourceLink) {
         currentReportingTrack = track
         currentServerLink = serverLink
         reportPlaybackProgress(seconds: positionSeconds, isPaused: isPaused)
@@ -104,7 +104,7 @@ public final class JellyfinPlaybackReporter: @unchecked Sendable {
         guard let track = currentReportingTrack,
               let serverLink = currentServerLink,
               let itemId = Self.extractItemId(from: track),
-              let token = JellyfinKeychain.getToken(forServerId: serverLink.serverId, userId: serverLink.userId) else {
+              let token = ServerCredentialStore.token(for: serverLink) else {
             currentReportingTrack = nil
             currentServerLink = nil
             return
@@ -133,7 +133,7 @@ public final class JellyfinPlaybackReporter: @unchecked Sendable {
         }
     }
 
-    public func reportPlaybackStopped(track: Track, positionSeconds: TimeInterval, serverLink: JellyfinServerLink) {
+    public func reportPlaybackStopped(track: Track, positionSeconds: TimeInterval, serverLink: ServerSourceLink) {
         currentReportingTrack = track
         currentServerLink = serverLink
         reportPlaybackStopped(seconds: positionSeconds)

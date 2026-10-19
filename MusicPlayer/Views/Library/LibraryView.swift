@@ -82,7 +82,7 @@ public struct LibraryView: View {
     }
 
     private var totalSourcesCount: Int {
-        libraryStore.settings.linkedFolders.count + libraryStore.settings.jellyfinServers.count
+        libraryStore.settings.linkedFolders.count + libraryStore.settings.serverSources.count
     }
 
     private var hasMultipleSources: Bool {
@@ -90,7 +90,7 @@ public struct LibraryView: View {
     }
 
     private var hasAnyServers: Bool {
-        !libraryStore.settings.jellyfinServers.isEmpty
+        !libraryStore.settings.serverSources.isEmpty
     }
 
     private func title(for category: LibraryCategory) -> String {

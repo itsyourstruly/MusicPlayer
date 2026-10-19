@@ -365,7 +365,7 @@ public struct SettingsView: View {
 
                     Text({
                         let names = libraryStore.settings.linkedFolders.map { $0.name.uppercased() }
-                            + libraryStore.settings.jellyfinServers.map { $0.serverName.uppercased() }
+                            + libraryStore.settings.serverSources.map { $0.serverName.uppercased() }
                         return names.isEmpty ? "NO SOURCES" : names.joined(separator: " - ")
                     }())
                         .font(.system(size: 11.5, weight: .bold, design: .monospaced))

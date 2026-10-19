@@ -310,7 +310,7 @@ public actor LibraryRepository {
                     let alb = Album(
                         restoredFrom: record,
                         tracks: albumTracks,
-                        mainTracks: mainTracks.isEmpty ? albumTracks : mainTracks,
+                        mainTracks: (mainTracks.isEmpty && altTracks.isEmpty) ? albumTracks : mainTracks,
                         alternateTracks: altTracks
                     )
                     reconstructedAlbums.append(alb)
@@ -634,6 +634,24 @@ public actor LibraryRepository {
         saveTask?.cancel()
         saveTask = nil
         performSaveImmediate(storageDir: storageDir, settingsHash: settingsHash)
+    }
+
+    /// Completely clears in-memory library state and deletes library persistence files on disk.
+    public func clearAll(storageDir: URL) {
+        saveTask?.cancel()
+        saveTask = nil
+        tracksMap.removeAll()
+        albums.removeAll()
+        albumsByID.removeAll()
+        artists.removeAll()
+        artistLookupIndex.removeAll()
+        albumRecords.removeAll()
+        artistRecords.removeAll()
+        searchEntries = .empty
+
+        let v2URL = storageDir.appendingPathComponent("library.v2.json")
+        try? FileManager.default.removeItem(at: v2URL)
+        deleteLegacyFiles(storageDir: storageDir)
     }
 
     private func performSaveImmediate(storageDir: URL, settingsHash: String) {

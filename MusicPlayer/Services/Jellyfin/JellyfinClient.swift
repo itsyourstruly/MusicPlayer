@@ -32,7 +32,7 @@ public enum JellyfinClientError: LocalizedError, Sendable, Equatable {
 // MARK: - JellyfinClient
 
 public final class JellyfinClient: Sendable {
-    public static let shared = JellyfinClient()
+    nonisolated public static let shared = JellyfinClient()
 
     /// Dedicated session with waitsForConnectivity enabled so requests don't fail while the Local Network prompt is presented.
     public static let dedicatedSession: URLSession = {
@@ -60,7 +60,7 @@ public final class JellyfinClient: Sendable {
 
     // MARK: - Device Info & Auth Header
 
-    private var deviceName: String {
+    nonisolated var deviceName: String {
         #if os(iOS)
         return "iPhone"
         #else
@@ -68,8 +68,8 @@ public final class JellyfinClient: Sendable {
         #endif
     }
 
-    public func authHeader(token: String? = nil) -> String {
-        var header = "MediaBrowser Client=\"MusicPlayer\", Device=\"\(deviceName)\", DeviceId=\"\(JellyfinKeychain.stableDeviceId)\", Version=\"1.0.0\""
+    nonisolated public func authHeader(token: String? = nil) -> String {
+        var header = "MediaBrowser Client=\"MusicPlayer\", Device=\"\(deviceName)\", DeviceId=\"\(ServerCredentialStore.stableDeviceId)\", Version=\"1.0.0\""
         if let token = token, !token.isEmpty {
             header += ", Token=\"\(token)\""
         }
@@ -230,6 +230,12 @@ public final class JellyfinClient: Sendable {
         if let clientErr = error as? JellyfinClientError {
             return clientErr
         }
+        if let httpErr = error as? ServerHTTPError {
+            switch httpErr {
+            case .status(let code): return mapHTTPStatusError(code)
+            case .invalidResponse: return .invalidResponse
+            }
+        }
 
         if let urlErr = error as? URLError {
             switch urlErr.code {
@@ -248,7 +254,7 @@ public final class JellyfinClient: Sendable {
                  .serverCertificateNotYetValid,
                  .clientCertificateRejected,
                  .clientCertificateRequired:
-                return .networkError("HTTPS FAILED, TRY HTTP")
+                return .networkError("CERTIFICATE ERROR - USE A VALID CERTIFICATE (E.G. LET'S ENCRYPT) OR HTTP")
             default:
                 return .networkError(urlErr.localizedDescription.uppercased())
             }
@@ -394,9 +400,9 @@ public final class JellyfinClient: Sendable {
 
     // MARK: - Logout
 
-    public func logout(link: JellyfinServerLink) async {
-        guard let token = JellyfinKeychain.getToken(forServerId: link.serverId, userId: link.userId) else {
-            JellyfinKeychain.deleteToken(forServerId: link.serverId, userId: link.userId)
+    public func logout(link: ServerSourceLink) async {
+        guard let token = ServerCredentialStore.token(for: link) else {
+            ServerCredentialStore.deleteCredentials(for: link)
             return
         }
 
@@ -407,14 +413,14 @@ public final class JellyfinClient: Sendable {
         request.timeoutInterval = 5
 
         _ = try? await session.data(for: request)
-        JellyfinKeychain.deleteToken(forServerId: link.serverId, userId: link.userId)
+        ServerCredentialStore.deleteCredentials(for: link)
     }
 
     // MARK: - Delete Item
 
-    public func deleteItem(itemId: String, serverLink: JellyfinServerLink) async throws {
-        let sessionInfo = JellyfinSessionCache.shared.resolveSession(for: serverLink.id, servers: [serverLink])
-        guard let token = sessionInfo?.token ?? JellyfinKeychain.getToken(forServerId: serverLink.serverId, userId: serverLink.userId) else {
+    public func deleteItem(itemId: String, serverLink: ServerSourceLink) async throws {
+        let sessionInfo = ServerSessionCache.shared.resolveSession(for: serverLink.id, servers: [serverLink])
+        guard let token = sessionInfo?.token ?? ServerCredentialStore.token(for: serverLink) else {
             throw JellyfinClientError.authenticationFailed("MISSING JELLYFIN AUTH TOKEN")
         }
 

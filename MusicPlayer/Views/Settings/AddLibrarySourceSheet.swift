@@ -1,20 +1,20 @@
 import SwiftUI
 
-/// Sheet presenting choice of music sources: local folder / iCloud Drive or Jellyfin server.
+/// Sheet presenting choice of music sources: local folder / iCloud Drive or a media server.
 public struct AddLibrarySourceSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.appTheme) private var appTheme
     public let onSelectLocalFolder: () -> Void
-    public let onJellyfinConnected: (JellyfinServerLink) -> Void
+    public let onServerConnected: (ServerSourceLink) -> Void
 
-    @State private var showingJellyfinSignIn: Bool = false
+    @State private var showingServerSignIn: Bool = false
 
     public init(
         onSelectLocalFolder: @escaping () -> Void,
-        onJellyfinConnected: @escaping (JellyfinServerLink) -> Void
+        onServerConnected: @escaping (ServerSourceLink) -> Void
     ) {
         self.onSelectLocalFolder = onSelectLocalFolder
-        self.onJellyfinConnected = onJellyfinConnected
+        self.onServerConnected = onServerConnected
     }
 
     public var body: some View {
@@ -57,18 +57,18 @@ public struct AddLibrarySourceSheet: View {
                 }
                 .buttonStyle(.plain)
 
-                // Option 2: Jellyfin Server
+                // Option 2: Media server (Jellyfin / Subsonic / Plex, auto-detected)
                 Button {
                     HapticFeedback.selectionChanged()
-                    showingJellyfinSignIn = true
+                    showingServerSignIn = true
                 } label: {
                     HStack {
                         VStack(alignment: .leading, spacing: 4) {
-                            Text("JELLYFIN SERVER")
+                            Text("SERVER")
                                 .font(.system(size: 14, weight: .black, design: .monospaced))
                                 .foregroundStyle(Color.black)
 
-                            Text("STREAM DIRECTLY FROM YOUR HOME MEDIA SERVER")
+                            Text("JELLYFIN, SUBSONIC (NAVIDROME) OR PLEX")
                                 .font(.system(size: 10.5, weight: .bold, design: .monospaced))
                                 .foregroundStyle(Color.black.opacity(0.65))
                         }
@@ -104,10 +104,10 @@ public struct AddLibrarySourceSheet: View {
                     .foregroundStyle(appTheme.accentColor)
                 }
             }
-            .sheet(isPresented: $showingJellyfinSignIn) {
-                JellyfinSignInSheet { serverLink in
+            .sheet(isPresented: $showingServerSignIn) {
+                ServerSignInSheet { serverLink in
                     dismiss()
-                    onJellyfinConnected(serverLink)
+                    onServerConnected(serverLink)
                 }
                 .environment(\.appTheme, appTheme)
             }

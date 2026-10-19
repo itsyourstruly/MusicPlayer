@@ -1,0 +1,23 @@
+# Xcode build output
+DerivedData/
+build/
+*.xcresult
+
+# Per-user Xcode settings
+xcuserdata/
+*.xcscmblueprint
+*.xccheckout
+
+# Swift Package Manager
+.build/
+.swiftpm/
+
+# macOS
+.DS_Store
+._*
+
+# Backups and iCloud duplicates
+*.bak
+*.bak[0-9]*
+* 2.*
+* 2/

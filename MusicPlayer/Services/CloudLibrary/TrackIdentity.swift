@@ -22,9 +22,11 @@ public enum TrackIdentity: Sendable {
         return UUID.deterministic(from: "v2" + fID + normalizedPath)
     }
 
-    /// Generates a stable deterministic UUID for Jellyfin tracks.
-    public static func jellyfinTrackID(serverLinkID: UUID, itemID: String) -> UUID {
-        return UUID.deterministic(from: "jf" + serverLinkID.uuidString + itemID)
+    /// Deterministic, globally unique ID for a server item, namespaced by source ID and server kind.
+    /// For Jellyfin this is byte-for-byte the legacy formula ("jf" + linkUUID + itemID), so migrated
+    /// libraries keep identical track IDs (downloads, playlists and play counts stay attached).
+    public static func serverTrackID(sourceID: UUID, kind: ServerKind, itemID: String) -> UUID {
+        return UUID.deterministic(from: kind.identityPrefix + sourceID.uuidString + itemID)
     }
 
     /// Computes the relative path by stripping the root folder prefix, handling symlinks (/private/var vs /var).

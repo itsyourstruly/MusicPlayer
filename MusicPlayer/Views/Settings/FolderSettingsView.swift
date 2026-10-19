@@ -15,13 +15,14 @@ public struct FolderSettingsView: View {
     @State private var folderToUnlink: LinkedFolder? = nil
     @State private var showingUnlinkAlert: Bool = false
     @State private var showingAddSourceSheet: Bool = false
-    @State private var serverToUnlink: JellyfinServerLink? = nil
+    @State private var serverToUnlink: ServerSourceLink? = nil
     @State private var showingUnlinkServerAlert: Bool = false
     @State private var showingTagFinderSheet: Bool = false
     @State private var folderForPlaylistFinder: LinkedFolder? = nil
     @State private var showingClearMetadataAlert: Bool = false
     @State private var showingClearArtworkAlert: Bool = false
     @State private var showingClearDownloadsAlert: Bool = false
+    @State private var showingClearEverythingAlert: Bool = false
     @State private var showingCloudWarningAlert: Bool = false
     @State private var cloudWarningMessage: String = ""
     @State private var artworkCacheSizeBytes: Int64 = 0
@@ -141,7 +142,18 @@ public struct FolderSettingsView: View {
                 JellyfinDownloadManager.shared.deleteAllDownloads()
             }
         } message: {
-            Text("THIS WILL REMOVE ALL DOWNLOADED JELLYFIN TRACKS FROM DEVICE STORAGE. TRACKS WILL REMAIN IN YOUR LIBRARY AND CAN STILL BE STREAMED.")
+            Text("THIS WILL REMOVE ALL DOWNLOADED SERVER TRACKS FROM DEVICE STORAGE. TRACKS WILL REMAIN IN YOUR LIBRARY AND CAN STILL BE STREAMED.")
+        }
+        .alert("CLEAR EVERYTHING?", isPresented: $showingClearEverythingAlert) {
+            Button("CANCEL", role: .cancel) {}
+            Button("CLEAR EVERYTHING", role: .destructive) {
+                libraryStore.clearEverything()
+                Task {
+                    await refreshArtworkCacheSize()
+                }
+            }
+        } message: {
+            Text("THIS WILL PERMANENTLY REMOVE ALL SOURCES, TRACKS, ALBUMS, PLAYLISTS, ARTWORKS, AND ALL DATA SAVED IN THE APP. THIS ACTION CANNOT BE UNDONE.")
         }
         .alert("ICLOUD STORAGE DETECTED", isPresented: $showingCloudWarningAlert) {
             Button("OK", role: .cancel) {}
@@ -161,24 +173,24 @@ public struct FolderSettingsView: View {
                 onSelectLocalFolder: {
                     pendingOpenFolderPicker = true
                 },
-                onJellyfinConnected: { serverLink in
-                    handleJellyfinConnected(serverLink)
+                onServerConnected: { serverLink in
+                    handleServerConnected(serverLink)
                 }
             )
             .environment(\.appTheme, appTheme)
         }
-        .alert("REMOVE JELLYFIN SERVER?", isPresented: $showingUnlinkServerAlert) {
+        .alert("REMOVE SERVER?", isPresented: $showingUnlinkServerAlert) {
             Button("CANCEL", role: .cancel) {
                 serverToUnlink = nil
             }
             Button("REMOVE", role: .destructive) {
                 if let server = serverToUnlink {
-                    removeJellyfinServer(server)
+                    removeServer(server)
                     serverToUnlink = nil
                 }
             }
         } message: {
-            Text("THIS WILL REMOVE TRACKS FROM THIS JELLYFIN SERVER FROM YOUR LIBRARY.")
+            Text("THIS WILL REMOVE THIS SERVER'S TRACKS, DOWNLOADS AND ARTWORK FROM YOUR LIBRARY.")
         }
         .sheet(isPresented: $showingTagFinderSheet) {
             TrackTagFinderSheetView(libraryStore: libraryStore)
@@ -205,7 +217,7 @@ public struct FolderSettingsView: View {
     private var linkedFolderHeaderSection: some View {
         VStack(alignment: .leading, spacing: 14) {
             let hasFolders = !libraryStore.settings.linkedFolders.isEmpty
-            let hasServers = !libraryStore.settings.jellyfinServers.isEmpty
+            let hasServers = !libraryStore.settings.serverSources.isEmpty
 
             if !hasFolders && !hasServers {
                 HStack(alignment: .center) {
@@ -225,8 +237,8 @@ public struct FolderSettingsView: View {
                     linkedFolderRow(folder: folder)
                 }
 
-                ForEach(libraryStore.settings.jellyfinServers) { server in
-                    jellyfinServerRow(server: server)
+                ForEach(libraryStore.settings.serverSources) { server in
+                    serverRow(server: server)
                 }
 
                 Button(action: {
@@ -243,10 +255,10 @@ public struct FolderSettingsView: View {
         .padding(.vertical, 4)
     }
 
-    private func jellyfinServerRow(server: JellyfinServerLink) -> some View {
+    private func serverRow(server: ServerSourceLink) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .center) {
-                Text("JELLYFIN - \(server.username.uppercased())")
+                Text("\(server.displayLabel) - \(server.username.uppercased())")
                     .font(.system(size: 14, weight: .bold, design: .monospaced))
                     .foregroundStyle(Color.white)
                     .lineLimit(1)
@@ -257,7 +269,7 @@ public struct FolderSettingsView: View {
                 Menu {
                     Button {
                         HapticFeedback.selectionChanged()
-                        rescanJellyfinServer(server)
+                        rescanServer(server)
                     } label: {
                         Text("RESCAN")
                     }
@@ -562,40 +574,48 @@ public struct FolderSettingsView: View {
             .overlay(appTheme.separatorColor.opacity(0.4))
     }
 
-    private func handleJellyfinConnected(_ serverLink: JellyfinServerLink) {
+    private func handleServerConnected(_ serverLink: ServerSourceLink) {
         var linkToUse = serverLink
-        if let existingIndex = libraryStore.settings.jellyfinServers.firstIndex(where: {
-            $0.serverId == serverLink.serverId && $0.userId == serverLink.userId
+        if let existingIndex = libraryStore.settings.serverSources.firstIndex(where: {
+            $0.kind == serverLink.kind && $0.serverId == serverLink.serverId && $0.userId == serverLink.userId
         }) {
-            let existing = libraryStore.settings.jellyfinServers[existingIndex]
-            linkToUse = JellyfinServerLink(
+            let existing = libraryStore.settings.serverSources[existingIndex]
+            // Re-sign-in to an already linked server keeps the original source ID (and therefore all track IDs);
+            // move the freshly saved credentials onto it.
+            ServerCredentialStore.moveCredentials(from: serverLink.id, to: existing.id)
+            if serverLink.kind == .plex {
+                PlexConnectionStore.save(PlexConnectionStore.connections(for: serverLink.id), for: existing.id)
+                PlexConnectionStore.remove(for: serverLink.id)
+            }
+            linkToUse = ServerSourceLink(
                 id: existing.id,
+                kind: existing.kind,
                 serverId: serverLink.serverId,
                 serverName: serverLink.serverName,
                 userId: serverLink.userId,
                 userName: serverLink.username,
-                serverURL: serverLink.serverURL
+                serverURL: serverLink.serverURL,
+                dateAdded: existing.dateAdded,
+                productName: serverLink.productName ?? existing.productName
             )
-            libraryStore.settings.jellyfinServers[existingIndex] = linkToUse
+            ServerSessionCache.shared.removeSession(for: existing.id)
+            libraryStore.settings.serverSources[existingIndex] = linkToUse
             libraryStore.saveSettings()
         } else {
-            libraryStore.settings.jellyfinServers.append(linkToUse)
+            libraryStore.settings.serverSources.append(linkToUse)
             libraryStore.saveSettings()
         }
-        rescanJellyfinServer(linkToUse)
+        rescanServer(linkToUse)
     }
 
-    private func rescanJellyfinServer(_ serverLink: JellyfinServerLink) {
+    private func rescanServer(_ serverLink: ServerSourceLink) {
         Task { @MainActor in
-            await libraryStore.syncJellyfinServer(serverLink)
+            await libraryStore.syncServer(serverLink, force: true)
         }
     }
 
-    private func removeJellyfinServer(_ serverLink: JellyfinServerLink) {
-        libraryStore.removeJellyfinServer(id: serverLink.id)
-        Task {
-            await JellyfinClient.shared.logout(link: serverLink)
-        }
+    private func removeServer(_ serverLink: ServerSourceLink) {
+        libraryStore.removeServerSource(id: serverLink.id)
     }
 
     private var scanProgressLine: String {
@@ -605,7 +625,7 @@ public struct FolderSettingsView: View {
 
     private var scanBelongsToListedRow: Bool {
         guard let id = libraryStore.currentlyScanningFolderID else { return false }
-        return libraryStore.settings.jellyfinServers.contains { $0.id == id }
+        return libraryStore.settings.serverSources.contains { $0.id == id }
             || libraryStore.settings.linkedFolders.contains { $0.id == id }
     }
 
@@ -635,7 +655,8 @@ public struct FolderSettingsView: View {
     private enum StorageClearTarget: String, CaseIterable, Identifiable {
         case metadata = "LOCAL TRACKS METADATA CACHE"
         case artwork = "ARTWORK CACHE"
-        case jellyfinOffline = "JELLYFIN OFFLINE STORAGE"
+        case jellyfinOffline = "SERVER OFFLINE STORAGE"
+        case everything = "EVERYTHING"
         var id: String { rawValue }
     }
 
@@ -647,6 +668,9 @@ public struct FolderSettingsView: View {
             return ByteFormatting.formatFileSize(bytes: artworkCacheSizeBytes).uppercased()
         case .jellyfinOffline:
             return "\(JellyfinDownloadManager.shared.downloadRecords.count) TRACKS • \(JellyfinDownloadManager.shared.formattedTotalSize.uppercased())"
+        case .everything:
+            let sourceCount = libraryStore.settings.linkedFolders.count + libraryStore.settings.serverSources.count
+            return "\(sourceCount) SOURCES • \(libraryStore.tracks.count) TRACKS • \(libraryStore.albums.count) ALBUMS"
         }
     }
 
@@ -701,6 +725,7 @@ public struct FolderSettingsView: View {
                     case .metadata: showingClearMetadataAlert = true
                     case .artwork: showingClearArtworkAlert = true
                     case .jellyfinOffline: showingClearDownloadsAlert = true
+                    case .everything: showingClearEverythingAlert = true
                     }
                 } label: {
                     Text("CLEAR")

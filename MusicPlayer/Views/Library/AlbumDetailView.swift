@@ -36,6 +36,18 @@ public struct AlbumDetailView: View {
         if let normMatch = libraryStore.album(normalizedArtist: album.normalizedArtist, normalizedTitle: album.normalizedTitle) {
             return normMatch
         }
+        let validTracks = album.tracks.filter { libraryStore.tracksByID[$0.id] != nil }
+        if validTracks.count != album.tracks.count {
+            return Album(
+                title: album.title,
+                artist: album.artist,
+                year: album.year,
+                genre: album.genre,
+                artworkKey: album.artworkKey,
+                tracks: validTracks,
+                groupKey: album.groupKey
+            )
+        }
         return album
     }
 
@@ -57,7 +69,8 @@ public struct AlbumDetailView: View {
     }
 
     private func displayedAlternateTracks(for activeAlbum: Album) -> [Track] {
-        let list = activeAlbum.alternateTracks
+        let mainTrackIDs = Set(displayedMainTracks(for: activeAlbum).map(\.id))
+        let list = activeAlbum.alternateTracks.filter { !mainTrackIDs.contains($0.id) }
         guard !list.isEmpty else { return [] }
         if list.count == activeAlbum.tracks.count && !activeAlbum.tracks.contains(where: { $0.isAlternate == true }) {
             return []

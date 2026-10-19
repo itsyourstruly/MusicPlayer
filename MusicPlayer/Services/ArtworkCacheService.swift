@@ -146,6 +146,13 @@ public actor ArtworkCacheService {
         }
     }
 
+    /// Deletes every cached variant (thumbnail, _orig, _full) of an artwork key (server source removal).
+    public func removeArtwork(key: String) {
+        guard !key.isEmpty else { return }
+        invalidateCachedImage(for: key)
+        try? fileManager.removeItem(at: cacheDirectoryURL.appendingPathComponent(sanitizedKey(key) + ".art"))
+    }
+
     /// Stores original untouched raw artwork data atomically to disk as _orig.art
     public func saveOrigArtwork(data: Data, key: String) {
         guard !data.isEmpty, !key.isEmpty else { return }

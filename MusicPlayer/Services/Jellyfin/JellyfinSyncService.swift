@@ -198,7 +198,7 @@ public final class JellyfinSyncService: Sendable {
 
     /// Fetches audio track changes (upserted tracks and removed track UUIDs) incrementally.
     nonisolated public func fetchAudioTrackChanges(
-        for link: JellyfinServerLink,
+        for link: ServerSourceLink,
         token: String,
         existingTracks: [Track] = [],
         lastSyncDate: Date? = nil,
@@ -224,7 +224,7 @@ public final class JellyfinSyncService: Sendable {
                     allServerIDs.formUnion(ids)
                 }
 
-                let validServerTrackIDs = Set(allServerIDs.map { TrackIdentity.jellyfinTrackID(serverLinkID: link.id, itemID: $0) })
+                let validServerTrackIDs = Set(allServerIDs.map { TrackIdentity.serverTrackID(sourceID: link.id, kind: link.kind, itemID: $0) })
                 let removedIDs = Set(existingTracks.map(\.id).filter { !validServerTrackIDs.contains($0) })
                 let survivingTracksMap = Dictionary(existingTracks.filter { validServerTrackIDs.contains($0.id) }.map { ($0.id, $0) }, uniquingKeysWith: { _, second in second })
 
@@ -232,6 +232,7 @@ public final class JellyfinSyncService: Sendable {
                 let minDateStr = Self.iso8601Standard.string(from: adjustedDate)
 
                 var changedItemsMap: [String: JellyfinAudioItem] = [:]
+                var seenChangedPaths = Set<String>()
                 for parentID in parentIDsToQuery {
                     let items = try await fetchAudioItems(
                         link: link,
@@ -241,6 +242,11 @@ public final class JellyfinSyncService: Sendable {
                         progressHandler: progressHandler
                     )
                     for item in items {
+                        if let p = item.path, !p.isEmpty {
+                            if !seenChangedPaths.insert(p.lowercased()).inserted {
+                                continue
+                            }
+                        }
                         changedItemsMap[item.id] = item
                     }
                 }
@@ -291,7 +297,7 @@ public final class JellyfinSyncService: Sendable {
     /// determines each music library's root (common folder of its tracks), persists the roots, and
     /// returns case-preserving library-relative paths keyed by Jellyfin item ID. No images/metadata.
     nonisolated public func fetchRelativeItemPaths(
-        for link: JellyfinServerLink,
+        for link: ServerSourceLink,
         token: String
     ) async throws -> [String: String] {
         let parentIDs = await fetchMusicParentIDs(link: link, token: token)
@@ -326,7 +332,7 @@ public final class JellyfinSyncService: Sendable {
     }
 
     nonisolated private func fetchPathItems(
-        link: JellyfinServerLink,
+        link: ServerSourceLink,
         token: String,
         parentID: String?
     ) async throws -> [JellyfinPathItem] {
@@ -358,7 +364,7 @@ public final class JellyfinSyncService: Sendable {
     }
 
     nonisolated private func fetchPathPage(
-        link: JellyfinServerLink,
+        link: ServerSourceLink,
         token: String,
         parentID: String?,
         startIndex: Int,
@@ -389,27 +395,13 @@ public final class JellyfinSyncService: Sendable {
         request.setValue(JellyfinClient.shared.authHeader(token: token), forHTTPHeaderField: "Authorization")
         request.timeoutInterval = 45
 
-        var lastError: Error?
-        for attempt in 0..<2 {
-            do {
-                let (data, response) = try await session.data(for: request)
-                guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
-                    let code = (response as? HTTPURLResponse)?.statusCode ?? -1
-                    throw JellyfinClient.mapHTTPStatusError(code)
-                }
-                return try JSONDecoder().decode(JellyfinPathItemsResponse.self, from: data)
-            } catch {
-                lastError = error
-                if attempt == 0 { try? await Task.sleep(nanoseconds: 1_000_000_000) }
-            }
-        }
-        if let err = lastError { throw JellyfinClient.mapNetworkError(err) }
-        throw JellyfinClientError.networkError("SERVER DIDN'T RESPOND")
+        let data = try await Self.performRequest(request, session: session)
+        return try JSONDecoder().decode(JellyfinPathItemsResponse.self, from: data)
     }
 
     /// Fetches all audio items from the server for the specified server link, returning mapped Tracks.
     nonisolated public func fetchAudioTracks(
-        for link: JellyfinServerLink,
+        for link: ServerSourceLink,
         token: String,
         existingTracks: [Track] = [],
         lastSyncDate: Date? = nil,
@@ -453,7 +445,7 @@ public final class JellyfinSyncService: Sendable {
 
     // MARK: - Parent ID Discovery
 
-    nonisolated private func fetchMusicParentIDs(link: JellyfinServerLink, token: String) async -> [String] {
+    nonisolated private func fetchMusicParentIDs(link: ServerSourceLink, token: String) async -> [String] {
         // 1. Try GET /UserViews?userId={userId}
         var components = URLComponents(url: link.serverURL.appendingPathComponent("UserViews"), resolvingAgainstBaseURL: false)
         components?.queryItems = [URLQueryItem(name: "userId", value: link.userId)]
@@ -511,7 +503,7 @@ public final class JellyfinSyncService: Sendable {
     // MARK: - Incremental Sync Pipeline
 
     nonisolated private func fetchIncrementalTracks(
-        for link: JellyfinServerLink,
+        for link: ServerSourceLink,
         token: String,
         existingTracks: [Track],
         lastSyncDate: Date,
@@ -525,7 +517,7 @@ public final class JellyfinSyncService: Sendable {
             allServerIDs.formUnion(ids)
         }
 
-        let validServerTrackIDs = Set(allServerIDs.map { TrackIdentity.jellyfinTrackID(serverLinkID: link.id, itemID: $0) })
+        let validServerTrackIDs = Set(allServerIDs.map { TrackIdentity.serverTrackID(sourceID: link.id, kind: link.kind, itemID: $0) })
         var survivingTracksMap: [UUID: Track] = [:]
         for track in existingTracks {
             if validServerTrackIDs.contains(track.id) {
@@ -581,13 +573,14 @@ public final class JellyfinSyncService: Sendable {
     // MARK: - Full Sync Pipeline
 
     nonisolated private func fetchFullTracks(
-        for link: JellyfinServerLink,
+        for link: ServerSourceLink,
         token: String,
         existingTracks: [Track],
         parentIDs: [String?],
         progressHandler: ((Int, Int) -> Void)?
     ) async throws -> [Track] {
         var allItemsMap: [String: JellyfinAudioItem] = [:]
+        var seenPaths = Set<String>()
         var libraryRoots: [String] = []
         for parentID in parentIDs {
             let items = try await fetchAudioItems(
@@ -598,6 +591,11 @@ public final class JellyfinSyncService: Sendable {
                 progressHandler: progressHandler
             )
             for item in items {
+                if let p = item.path, !p.isEmpty {
+                    if !seenPaths.insert(p.lowercased()).inserted {
+                        continue
+                    }
+                }
                 allItemsMap[item.id] = item
             }
             // Library root = common folder of every track in this music library
@@ -634,7 +632,7 @@ public final class JellyfinSyncService: Sendable {
     // MARK: - Parallel Paged Items Fetching
 
     nonisolated private func fetchAudioItems(
-        link: JellyfinServerLink,
+        link: ServerSourceLink,
         token: String,
         parentID: String?,
         minDateLastSaved: String?,
@@ -727,7 +725,7 @@ public final class JellyfinSyncService: Sendable {
     }
 
     nonisolated private func fetchItemsPage(
-        link: JellyfinServerLink,
+        link: ServerSourceLink,
         token: String,
         parentID: String?,
         startIndex: Int,
@@ -766,35 +764,14 @@ public final class JellyfinSyncService: Sendable {
         request.setValue(JellyfinClient.shared.authHeader(token: token), forHTTPHeaderField: "Authorization")
         request.timeoutInterval = 45
 
-        var lastError: Error?
-        let decoder = JSONDecoder()
-
-        for attempt in 0..<2 {
-            do {
-                let (data, response) = try await session.data(for: request)
-                guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
-                    let code = (response as? HTTPURLResponse)?.statusCode ?? -1
-                    throw JellyfinClient.mapHTTPStatusError(code)
-                }
-                return try decoder.decode(JellyfinItemsResponse.self, from: data)
-            } catch {
-                lastError = error
-                if attempt == 0 {
-                    try? await Task.sleep(nanoseconds: 1_000_000_000)
-                }
-            }
-        }
-
-        if let err = lastError {
-            throw JellyfinClient.mapNetworkError(err)
-        }
-        throw JellyfinClientError.networkError("SERVER DIDN'T RESPOND")
+        let data = try await Self.performRequest(request, session: session)
+        return try JSONDecoder().decode(JellyfinItemsResponse.self, from: data)
     }
 
     // MARK: - Fast ID Enumeration for Deletion Detection
 
     nonisolated private func fetchAllAudioItemIDs(
-        link: JellyfinServerLink,
+        link: ServerSourceLink,
         token: String,
         parentID: String?
     ) async throws -> Set<String> {
@@ -828,11 +805,7 @@ public final class JellyfinSyncService: Sendable {
             request.setValue(JellyfinClient.shared.authHeader(token: token), forHTTPHeaderField: "Authorization")
             request.timeoutInterval = 45
 
-            let (data, response) = try await session.data(for: request)
-            guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
-                let code = (response as? HTTPURLResponse)?.statusCode ?? -1
-                throw JellyfinClient.mapHTTPStatusError(code)
-            }
+            let data = try await Self.performRequest(request, session: session)
             let idResponse = try decoder.decode(JellyfinIdOnlyResponse.self, from: data)
             guard let items = idResponse.items, !items.isEmpty else { break }
             for item in items {
@@ -847,17 +820,30 @@ public final class JellyfinSyncService: Sendable {
         return validIDs
     }
 
+    /// Executes a Jellyfin API request through the shared retry/backoff policy and maps failures to Jellyfin errors.
+    nonisolated private static func performRequest(_ request: URLRequest, session: URLSession) async throws -> Data {
+        do {
+            return try await ServerHTTPClient.data(for: request, session: session).0
+        } catch ServerHTTPError.status(let code) {
+            throw JellyfinClient.mapHTTPStatusError(code)
+        } catch let error as JellyfinClientError {
+            throw error
+        } catch {
+            throw JellyfinClient.mapNetworkError(error)
+        }
+    }
+
     // MARK: - Track Mapping & Helpers
 
     nonisolated private func mapItemToTrack(
         item: JellyfinAudioItem,
-        link: JellyfinServerLink,
+        link: ServerSourceLink,
         token: String,
         commonPrefix: String,
         libraryRoots: [String] = [],
         existingTracksByID: [UUID: Track]
     ) -> Track? {
-        JellyfinSessionCache.shared.register(serverLink: link, token: token)
+        ServerSessionCache.shared.register(serverLink: link, token: token)
 
         let name = item.name ?? "Unknown Title"
         let artist: String
@@ -878,23 +864,10 @@ public final class JellyfinSyncService: Sendable {
             duration = ticks / 10_000_000.0
         }
 
-        let container = item.container?.lowercased() ?? ""
-        let needsTranscoding = container == "wma" || container == "webm" || container == "dsf" || container == "dff"
-
-        // Canonical stream URL without baked-in api_key token for safe persistence
-        let streamURL: URL
-        if needsTranscoding {
-            streamURL = link.serverURL.appendingPathComponent("Audio/\(item.id)/stream.mp3")
-        } else {
-            streamURL = link.serverURL.appendingPathComponent("Audio/\(item.id)/stream")
-        }
-
-        var streamComponents = URLComponents(url: streamURL, resolvingAgainstBaseURL: false)
-        var queryItems: [URLQueryItem] = []
-        if !needsTranscoding {
-            queryItems.append(URLQueryItem(name: "static", value: "true"))
-        }
-        streamComponents?.queryItems = queryItems.isEmpty ? nil : queryItems
+        // Canonical, token-free item URL used only as a persistent identifier. Actual stream/download/transcode
+        // URLs are always built at request time by JellyfinProvider.mediaRequest (TranscodePolicy decides).
+        var streamComponents = URLComponents(url: link.serverURL.appendingPathComponent("Audio/\(item.id)/stream"), resolvingAgainstBaseURL: false)
+        streamComponents?.queryItems = [URLQueryItem(name: "static", value: "true")]
 
         guard let finalStreamURL = streamComponents?.url else { return nil }
 
@@ -945,7 +918,7 @@ public final class JellyfinSyncService: Sendable {
             relativePath = TrackIdentity.normalizeRelativePath("\(artist)/\(album)/\(name).mp3")
         }
 
-        let trackID = TrackIdentity.jellyfinTrackID(serverLinkID: link.id, itemID: item.id)
+        let trackID = TrackIdentity.serverTrackID(sourceID: link.id, kind: link.kind, itemID: item.id)
         let existingTrack = existingTracksByID[trackID]
         let parsedDate = Self.parseDateCreated(item.dateCreated)
         let finalDateAdded = existingTrack?.dateAdded ?? parsedDate ?? Date()
@@ -970,21 +943,19 @@ public final class JellyfinSyncService: Sendable {
         }
         let primaryItemID = item.albumId ?? item.id
         let fallbackItemID: String? = (item.albumId != nil && item.albumId != item.id) ? item.id : nil
-        JellyfinArtworkRegistry.shared.register(
+        ServerArtworkRegistry.shared.register(
             key: artworkKey,
-            serverURL: link.serverURL,
-            token: token,
-            itemId: primaryItemID,
-            fallbackItemId: fallbackItemID
+            link: link,
+            imageId: primaryItemID,
+            fallbackImageId: fallbackItemID
         )
         let canonKey = ArtworkCacheService.albumArtworkKey(artist: artist, album: album)
         if canonKey != artworkKey {
-            JellyfinArtworkRegistry.shared.register(
+            ServerArtworkRegistry.shared.register(
                 key: canonKey,
-                serverURL: link.serverURL,
-                token: token,
-                itemId: primaryItemID,
-                fallbackItemId: fallbackItemID
+                link: link,
+                imageId: primaryItemID,
+                fallbackImageId: fallbackItemID
             )
         }
 
@@ -1047,7 +1018,7 @@ public final class JellyfinSyncService: Sendable {
 
     nonisolated private func prefetchAlbumArtworks(
         items: [JellyfinAudioItem],
-        link: JellyfinServerLink,
+        link: ServerSourceLink,
         token: String
     ) {
         // No-op: Artwork is fetched lazily on-demand when rendered by UI rows.

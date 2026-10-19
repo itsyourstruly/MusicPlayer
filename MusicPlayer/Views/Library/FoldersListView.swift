@@ -21,7 +21,7 @@ public struct FoldersListView: View {
         public let albumCount: Int
         public let isJellyfin: Bool
         public let linkedFolder: LinkedFolder?
-        public let jellyfinServer: JellyfinServerLink?
+        public let jellyfinServer: ServerSourceLink?
     }
 
     private var allSources: [SourceItem] {
@@ -42,7 +42,7 @@ public struct FoldersListView: View {
             ))
         }
 
-        for server in libraryStore.settings.jellyfinServers {
+        for server in libraryStore.settings.serverSources {
             let tCount = libraryStore.trackCount(for: server)
             let aCount = libraryStore.albumCount(for: server)
             items.append(SourceItem(
@@ -74,7 +74,7 @@ public struct FoldersListView: View {
     }
 
     private var isSourcesPlural: Bool {
-        (libraryStore.settings.linkedFolders.count + libraryStore.settings.jellyfinServers.count) > 1 || !libraryStore.settings.jellyfinServers.isEmpty
+        (libraryStore.settings.linkedFolders.count + libraryStore.settings.serverSources.count) > 1 || !libraryStore.settings.serverSources.isEmpty
     }
 
     public var body: some View {
@@ -133,7 +133,7 @@ public struct FoldersListView: View {
                     }
                 } else if let server = source.jellyfinServer {
                     Task {
-                        await libraryStore.syncJellyfinServer(server)
+                        await libraryStore.syncServer(server, force: true)
                     }
                 }
             } label: {

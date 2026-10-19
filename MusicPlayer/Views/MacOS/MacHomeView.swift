@@ -43,7 +43,7 @@ public struct MacHomeView: View {
         ScrollView(.vertical, showsIndicators: true) {
             LazyVStack(alignment: .leading, spacing: 24) {
                 // Top Hero / Header
-                if libraryStore.tracks.isEmpty && !libraryStore.isInitialLoading && libraryStore.settings.linkedFolders.isEmpty && libraryStore.settings.jellyfinServers.isEmpty {
+                if libraryStore.tracks.isEmpty && !libraryStore.isInitialLoading && libraryStore.settings.linkedFolders.isEmpty && libraryStore.settings.serverSources.isEmpty {
                     unlinkedFolderBanner
                 } else if !libraryStore.tracks.isEmpty {
                     desktopQuickActionsDeck

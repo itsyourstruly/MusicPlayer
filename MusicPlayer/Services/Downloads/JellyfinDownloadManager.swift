@@ -161,13 +161,12 @@ public final class JellyfinDownloadManager: NSObject, @unchecked Sendable {
     public nonisolated let downloadsDirectoryURL: URL
     private let indexFileURL: URL
 
-    @ObservationIgnored private var cachedTokensByServerID: [UUID: String] = [:]
     @ObservationIgnored private var perTrackStates: [UUID: DownloadItemState] = [:]
     @ObservationIgnored private var activeTasks: [UUID: URLSessionDownloadTask] = [:]
-    @ObservationIgnored private var downloadQueue: [(track: Track, server: JellyfinServerLink)] = []
+    @ObservationIgnored private var downloadQueue: [(track: Track, server: ServerSourceLink)] = []
     @ObservationIgnored private var taskToTrackID: [Int: UUID] = [:]
     @ObservationIgnored private var taskToTrack: [Int: Track] = [:]
-    @ObservationIgnored private var taskToServer: [Int: JellyfinServerLink] = [:]
+    @ObservationIgnored private var taskToServer: [Int: ServerSourceLink] = [:]
     @ObservationIgnored private var saveIndexTask: Task<Void, Never>?
     private let maxConcurrentDownloads = 3
 
@@ -469,7 +468,7 @@ public final class JellyfinDownloadManager: NSObject, @unchecked Sendable {
     // MARK: - Download Actions
 
     /// Enqueues a single track for download.
-    public func download(track: Track, server: JellyfinServerLink) {
+    public func download(track: Track, server: ServerSourceLink) {
         guard !isDownloaded(trackId: track.id) else { return }
         guard !downloadStates[track.id, default: .notDownloaded].isDownloading else { return }
 
@@ -485,7 +484,7 @@ public final class JellyfinDownloadManager: NSObject, @unchecked Sendable {
     }
 
     /// Enqueues multiple tracks for download.
-    public func download(tracks: [Track], server: JellyfinServerLink) {
+    public func download(tracks: [Track], server: ServerSourceLink) {
         var didEnqueue = false
         for track in tracks {
             guard !isDownloaded(trackId: track.id) else { continue }
@@ -506,14 +505,14 @@ public final class JellyfinDownloadManager: NSObject, @unchecked Sendable {
         }
     }
 
-    /// Enqueues a single track for download by matching its folderID to a JellyfinServerLink.
-    public func download(track: Track, servers: [JellyfinServerLink]) {
+    /// Enqueues a single track for download by matching its folderID to a ServerSourceLink.
+    public func download(track: Track, servers: [ServerSourceLink]) {
         guard let server = servers.first(where: { $0.id == track.folderID }) ?? servers.first else { return }
         download(track: track, server: server)
     }
 
-    /// Enqueues multiple tracks for download by matching their folderID to JellyfinServerLink items.
-    public func download(tracks: [Track], servers: [JellyfinServerLink]) {
+    /// Enqueues multiple tracks for download by matching their folderID to ServerSourceLink items.
+    public func download(tracks: [Track], servers: [ServerSourceLink]) {
         let serversByID = Dictionary(servers.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let fallback = servers.first
         var didEnqueue = false
@@ -539,15 +538,15 @@ public final class JellyfinDownloadManager: NSObject, @unchecked Sendable {
 
     /// Enqueues a single track for download, resolving the Jellyfin server automatically.
     public func download(track: Track) {
-        let server = (track.folderID.flatMap { JellyfinSessionCache.shared.serverLink(for: $0) })
-            ?? JellyfinSessionCache.shared.allLinks.first
+        let server = (track.folderID.flatMap { ServerSessionCache.shared.serverLink(for: $0) })
+            ?? ServerSessionCache.shared.allLinks.first
         guard let server else { return }
         download(track: track, server: server)
     }
 
     /// Enqueues multiple tracks for download, resolving servers automatically.
     public func download(tracks: [Track]) {
-        download(tracks: tracks, servers: JellyfinSessionCache.shared.allLinks)
+        download(tracks: tracks, servers: ServerSessionCache.shared.allLinks)
     }
 
     /// Cancels an in-progress or queued download.
@@ -630,46 +629,8 @@ public final class JellyfinDownloadManager: NSObject, @unchecked Sendable {
         let track = item.track
         let server = item.server
 
-        // Determine token and stream URL with local cache to avoid synchronous Keychain IPC calls
-        let token: String
-        if let cached = cachedTokensByServerID[server.id], !cached.isEmpty {
-            token = cached
-        } else {
-            let sessionInfo = JellyfinSessionCache.shared.resolveSession(for: server.id, servers: [server])
-            let resolved = sessionInfo?.token ?? JellyfinKeychain.getToken(forServerId: server.serverId, userId: server.userId) ?? ""
-            if !resolved.isEmpty {
-                cachedTokensByServerID[server.id] = resolved
-            }
-            token = resolved
-        }
-        let sessionInfo = JellyfinSessionCache.shared.resolveSession(for: server.id, servers: [server])
-        let serverURL = sessionInfo?.serverURL ?? server.serverURL
-
-        let itemId = track.jellyfinItemId ?? track.url.lastPathComponent
-        guard !itemId.isEmpty else {
-            let state = JellyfinDownloadState.failed("INVALID ITEM ID")
-            downloadStates[track.id] = state
-            perTrackStates[track.id]?.state = state
-            invalidateSummaries()
-            processNextInQueue()
-            return
-        }
-
-        // Determine stream URL: if the track is in a container that AVFoundation cannot play (e.g. ogg, opus, wma, webm), request mp3 stream
-        let ext = (track.fileInfo?.fileExtension ?? track.url.pathExtension).lowercased()
-        let needsTranscode = ["ogg", "opus", "wma", "webm", "ape", "wv", "mka", "mpc", "dsf", "dff"].contains(ext)
-        let streamPath = needsTranscode ? "Audio/\(itemId)/stream.mp3" : "Audio/\(itemId)/stream"
-
-        var components = URLComponents(url: serverURL.appendingPathComponent(streamPath), resolvingAgainstBaseURL: true)
-        var queryItems = [
-            URLQueryItem(name: "api_key", value: token)
-        ]
-        if !needsTranscode {
-            queryItems.append(URLQueryItem(name: "static", value: "true"))
-        }
-        components?.queryItems = queryItems
-
-        guard let requestURL = components?.url else {
+        // Original file for AVPlayer-native formats, AAC 320 M4A for everything else (TranscodePolicy via provider).
+        guard let request = ServerProviderRegistry.provider(for: server)?.mediaRequest(for: track, purpose: .download) else {
             let state = JellyfinDownloadState.failed("INVALID URL")
             downloadStates[track.id] = state
             perTrackStates[track.id]?.state = state
@@ -677,9 +638,6 @@ public final class JellyfinDownloadManager: NSObject, @unchecked Sendable {
             processNextInQueue()
             return
         }
-
-        var request = URLRequest(url: requestURL)
-        request.setValue("MediaBrowser Client=\"MusicPlayer\", Device=\"Apple\", DeviceId=\"MusicPlayerClient\", Version=\"1.0.0\", Token=\"\(token)\"", forHTTPHeaderField: "X-Emby-Authorization")
 
         let task = session.downloadTask(with: request)
         activeTasks[track.id] = task
@@ -699,7 +657,7 @@ public final class JellyfinDownloadManager: NSObject, @unchecked Sendable {
         taskToTrackID[taskID]
     }
 
-    fileprivate func downloadContext(forTaskID taskID: Int) -> (track: Track?, server: JellyfinServerLink?, trackID: UUID?) {
+    fileprivate func downloadContext(forTaskID taskID: Int) -> (track: Track?, server: ServerSourceLink?, trackID: UUID?) {
         (taskToTrack[taskID], taskToServer[taskID], taskToTrack[taskID]?.id ?? taskToTrackID[taskID])
     }
 

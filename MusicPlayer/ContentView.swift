@@ -215,8 +215,8 @@ public struct ContentView: View {
         .onChange(of: libraryStore.settings.downloadNextSongOnWiFi) { _, _ in
             playerService.downloadNextSongOnWiFi = true
         }
-        .onChange(of: libraryStore.settings.jellyfinServers) { _, servers in
-            playerService.jellyfinServers = servers
+        .onChange(of: libraryStore.settings.serverSources) { _, servers in
+            playerService.serverSources = servers
         }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
             playerService.refreshAudioSessionAndRoute()
@@ -224,6 +224,8 @@ public struct ContentView: View {
         .onChange(of: scenePhase) { _, newPhase in
             if newPhase == .background {
                 JellyfinDownloadManager.shared.flushIndex()
+            } else if newPhase == .active {
+                Task { await libraryStore.syncStaleServers() }
             }
         }
         .preferredColorScheme(.dark)
@@ -263,7 +265,7 @@ public struct ContentView: View {
         playerService.rememberPlaybackPosition = libraryStore.settings.rememberPlaybackPosition
         playerService.rememberPlaybackPositionMinMinutes = libraryStore.settings.rememberPlaybackPositionMinMinutes
         playerService.downloadNextSongOnWiFi = true
-        playerService.jellyfinServers = libraryStore.settings.jellyfinServers
+        playerService.serverSources = libraryStore.settings.serverSources
         playerService.autoDownloadOnPlay = false
         playerService.downloadOnCellular = true
         JellyfinDownloadManager.shared.allowsCellularAccess = true

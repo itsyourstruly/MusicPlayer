@@ -247,21 +247,45 @@ public final class AudioPlayerService {
     // Cloud streaming, prefetch & Jellyfin reporting state
     public private(set) var cloudWaitTrackID: UUID?
     public var cloudPlaybackError: String?
-    public var jellyfinServers: [JellyfinServerLink] = []
+    public var serverSources: [ServerSourceLink] = []
     public var autoDownloadOnPlay: Bool = false
     public var downloadOnCellular: Bool = true
 
-    private func getJellyfinServer(for folderID: UUID?) -> JellyfinServerLink? {
+    /// Provider for a server track's source, or nil for local tracks / unsupported server kinds.
+    private func serverProvider(for track: Track) -> (any MediaServerProvider)? {
+        guard let link = serverSource(for: track.folderID) ?? serverSources.first else { return nil }
+        return ServerProviderRegistry.provider(for: link)
+    }
+
+    private func mediaRequest(for track: Track, purpose: ServerMediaPurpose) -> URLRequest? {
+        serverProvider(for: track)?.mediaRequest(for: track, purpose: purpose)
+    }
+
+    /// AAC transcode request followed by the provider's fallback (MP3 320) if it has one.
+    private func transcodeRequests(for track: Track) -> [URLRequest] {
+        guard let provider = serverProvider(for: track) else { return [] }
+        return [provider.mediaRequest(for: track, purpose: .stream), provider.transcodeFallbackRequest(for: track)].compactMap { $0 }
+    }
+
+    /// True when a server track needs a server-side transcode that has not been fully fetched to disk yet.
+    private func needsTranscodePrefetch(_ track: Track) -> Bool {
+        (track.isJellyfinItem || track.metadataSource == .server)
+            && TranscodePolicy.requiresTranscode(track)
+            && JellyfinDownloadManager.shared.localFileURL(for: track.id) == nil
+            && ServerTranscodeCache.cachedFileURL(for: track) == nil
+    }
+
+    private func serverSource(for folderID: UUID?) -> ServerSourceLink? {
         guard let folderID = folderID else { return nil }
-        if let match = jellyfinServers.first(where: { $0.id == folderID }) {
+        if let match = serverSources.first(where: { $0.id == folderID }) {
             return match
         }
         if let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
             let settingsURL = appSupport.appendingPathComponent("settings.json")
             if let data = try? Data(contentsOf: settingsURL),
                let settings = try? JSONDecoder().decode(AppSettings.self, from: data) {
-                self.jellyfinServers = settings.jellyfinServers
-                return settings.jellyfinServers.first(where: { $0.id == folderID })
+                self.serverSources = settings.serverSources
+                return settings.serverSources.first(where: { $0.id == folderID })
             }
         }
         return nil
@@ -1323,6 +1347,35 @@ public final class AudioPlayerService {
         activeTrackSecurityScopeURL = nil
         clearNowPlayingInfo()
     }
+
+    /// Prunes tracks with the given IDs from playback, upcoming queue, play next, and cache.
+    public func pruneTracks(withIDs ids: Set<UUID>) {
+        guard !ids.isEmpty else { return }
+        if let current = currentTrack, ids.contains(current.id) {
+            stopAndClear()
+            return
+        }
+        for id in ids {
+            localTrackLookupMap.removeValue(forKey: id)
+        }
+        playNextQueue.removeAll { ids.contains($0.trackID) }
+        queue.removeAll { ids.contains($0.trackID) }
+        originalQueue.removeAll { ids.contains($0.trackID) }
+        if let curr = currentTrack, let idx = queue.firstIndex(where: { $0.trackID == curr.id }) {
+            currentIndex = idx
+        } else if queue.isEmpty {
+            currentIndex = nil
+        }
+        if let pw = prewarmedTrackID, ids.contains(pw) {
+            prewarmTask?.cancel()
+            prewarmTask = nil
+            prewarmedTrackID = nil
+            prewarmedPlayerItem = nil
+            prewarmingTrackID = nil
+        }
+        updateQueueBadges()
+        prewarmNextTrackIfNeeded()
+    }
     
     /// Clears upcoming tracks from the queue while keeping current track playing.
     public func clearQueue() {
@@ -1383,52 +1436,19 @@ public final class AudioPlayerService {
             } else {
                 AppLogger.audio.debug("Resolved local audio file (\(exists ? "EXISTS" : "MISSING")): \(resolvedURL.path)")
             }
+        } else if let transcodedURL = ServerTranscodeCache.cachedFileURL(for: track) {
+            resolvedURL = transcodedURL
+            AppLogger.audio.debug("Resolved pre-fetched server transcode: \(transcodedURL.lastPathComponent)")
         } else if track.isJellyfinItem || track.metadataSource == .server {
-            let matchedServer = getJellyfinServer(for: track.folderID) ?? jellyfinServers.first
-            let sessionInfo: (serverURL: URL, token: String)?
-            if let server = matchedServer {
-                sessionInfo = JellyfinSessionCache.shared.resolveSession(
-                    for: server.id,
-                    servers: jellyfinServers
-                )
-            } else if let folderID = track.folderID {
-                sessionInfo = JellyfinSessionCache.shared.resolveSession(
-                    for: folderID,
-                    servers: jellyfinServers
-                )
+            if let request = mediaRequest(for: track, purpose: .stream), let url = request.url {
+                resolvedURL = url
+                if let headers = request.allHTTPHeaderFields, !headers.isEmpty {
+                    assetOptions["AVURLAssetHTTPHeaderFieldsKey"] = headers
+                }
             } else {
-                sessionInfo = nil
+                resolvedURL = track.url
             }
-            let token = sessionInfo?.token ?? (matchedServer.flatMap { JellyfinKeychain.getToken(forServerId: $0.serverId, userId: $0.userId) } ?? "")
-            let serverURL = sessionInfo?.serverURL ?? matchedServer?.serverURL
-
-            let itemId = track.jellyfinItemId ?? track.url.lastPathComponent
-            let baseServer = serverURL ?? track.url.deletingLastPathComponent().deletingLastPathComponent()
-
-            let ext = (track.fileInfo?.fileExtension ?? track.url.pathExtension).lowercased()
-            let needsTranscode = ["ogg", "opus", "wma", "webm"].contains(ext)
-
-            let streamPath = needsTranscode ? "Audio/\(itemId)/universal" : "Audio/\(itemId)/stream"
-            var components = URLComponents(url: baseServer.appendingPathComponent(streamPath), resolvingAgainstBaseURL: true)
-            var queryItems = [
-                URLQueryItem(name: "static", value: "true"),
-                URLQueryItem(name: "api_key", value: token)
-            ]
-            if needsTranscode {
-                queryItems.append(URLQueryItem(name: "audioCodec", value: "aac"))
-                queryItems.append(URLQueryItem(name: "transcodingContainer", value: "ts"))
-                queryItems.append(URLQueryItem(name: "audioBitRate", value: "320000"))
-                queryItems.append(URLQueryItem(name: "maxStreamingBitrate", value: "140000000"))
-            }
-            components?.queryItems = queryItems
-            resolvedURL = components?.url ?? track.url
-            AppLogger.audio.debug("Resolved Jellyfin remote stream URL (itemId: \(itemId), transcode: \(needsTranscode), ext: \(ext)): \(resolvedURL.absoluteString)")
-
-            if !token.isEmpty {
-                assetOptions["AVURLAssetHTTPHeaderFieldsKey"] = [
-                    "X-Emby-Authorization": "MediaBrowser Client=\"MusicPlayer\", Device=\"Apple\", DeviceId=\"MusicPlayerClient\", Version=\"1.0.0\", Token=\"\(token)\""
-                ]
-            }
+            AppLogger.audio.debug("Resolved server stream (transcode: \(TranscodePolicy.requiresTranscode(track))) for track \(track.id.uuidString)")
         } else {
             resolvedURL = track.url
             AppLogger.audio.debug("Resolved standard track URL: \(resolvedURL.absoluteString)")
@@ -1523,6 +1543,35 @@ public final class AudioPlayerService {
             }
         }
 
+        // Unsupported server formats are transcoded to AAC and fully fetched before playback so seeking,
+        // EQ, pitch and crossfade behave exactly like local files.
+        if needsTranscodePrefetch(track) {
+            let requests = transcodeRequests(for: track)
+            guard !requests.isEmpty else {
+                self.playbackStatus = .paused
+                self.cloudPlaybackError = "SERVER UNAVAILABLE"
+                return
+            }
+            self.playbackStatus = .buffering
+            self.cloudWaitTrackID = track.id
+            cloudDownloadTask = Task { @MainActor [weak self] in
+                do {
+                    _ = try await ServerTranscodeCache.shared.ensureLocal(track: track, requests: requests)
+                    guard let self, self.cloudWaitTrackID == track.id, self.currentTrack?.id == track.id else { return }
+                    self.cloudWaitTrackID = nil
+                    self.finishLoadAndPlay(track: track, resumePosition: resumePosition)
+                } catch {
+                    guard let self, self.cloudWaitTrackID == track.id else { return }
+                    self.cloudWaitTrackID = nil
+                    self.playbackStatus = .paused
+                    self.cloudPlaybackError = "TRANSCODE FAILED"
+                    HapticFeedback.notificationError()
+                    AppLogger.audio.error("Server transcode pre-fetch failed: \(error.localizedDescription)")
+                }
+            }
+            return
+        }
+
         self.cloudWaitTrackID = nil
         self.finishLoadAndPlay(track: track, resumePosition: resumePosition)
     }
@@ -1556,7 +1605,7 @@ public final class AudioPlayerService {
         playerItem.preferredForwardBufferDuration = isRemoteStream ? 30.0 : 0.0
 
         if (track.isJellyfinItem || track.metadataSource == .server) && autoDownloadOnPlay {
-            if let server = getJellyfinServer(for: track.folderID) {
+            if let server = serverSource(for: track.folderID) {
                 JellyfinDownloadManager.shared.download(track: track, server: server)
             }
         }
@@ -1637,9 +1686,7 @@ public final class AudioPlayerService {
 
         // Jellyfin playback reporting start
         if track.metadataSource == .server {
-            if let match = getJellyfinServer(for: track.folderID) {
-                JellyfinPlaybackReporter.shared.reportPlaybackStart(track: track, serverLink: match)
-            }
+            serverProvider(for: track)?.reportPlayback(.started, track: track)
         }
 
         AppLogger.audio.info("Now playing: \(track.title) by \(track.artist) (rate: \(currentSpeed)x, resumed at: \(resumePosition)s)")
@@ -1733,6 +1780,14 @@ public final class AudioPlayerService {
         }
         // Never open, decode or prewarm cloud-only tracks that are not downloaded
         guard next.canReadLocalBytes || next.metadataSource == .server else {
+            return
+        }
+        // Next track needs a transcode: fetch it fully in the background; it is prewarmed from disk once ready.
+        if needsTranscodePrefetch(next) {
+            let requests = transcodeRequests(for: next)
+            if !requests.isEmpty {
+                Task { await ServerTranscodeCache.shared.prefetch(track: next, requests: requests) }
+            }
             return
         }
         
@@ -2165,14 +2220,10 @@ public final class AudioPlayerService {
             if let track = self.currentTrack, track.metadataSource == .server {
                 if Int(seconds) / 10 != Int(self.lastJellyfinReportedSeconds) / 10 {
                     self.lastJellyfinReportedSeconds = seconds
-                    if let match = self.getJellyfinServer(for: track.folderID) {
-                        JellyfinPlaybackReporter.shared.reportPlaybackProgress(
-                            track: track,
-                            positionSeconds: seconds,
-                            isPaused: self.playbackStatus != .playing,
-                            serverLink: match
-                        )
-                    }
+                    self.serverProvider(for: track)?.reportPlayback(
+                        .progress(position: seconds, isPaused: self.playbackStatus != .playing),
+                        track: track
+                    )
                 }
             }
         }
@@ -2181,9 +2232,7 @@ public final class AudioPlayerService {
     // Handle track ended
     private func handleTrackEnded() {
         if let track = currentTrack, track.metadataSource == .server {
-            if let match = getJellyfinServer(for: track.folderID) {
-                JellyfinPlaybackReporter.shared.reportPlaybackStopped(track: track, positionSeconds: duration, serverLink: match)
-            }
+            serverProvider(for: track)?.reportPlayback(.stopped(position: duration), track: track)
         }
         if !hasCountedCurrentPlay, let track = currentTrack {
             hasCountedCurrentPlay = true
@@ -2234,6 +2283,10 @@ public final class AudioPlayerService {
             guard let target = nextPlaybackTarget() else { return }
             // Do not crossfade into an undownloaded cloud file
             if !target.track.canReadLocalBytes && target.track.metadataSource != .server {
+                return
+            }
+            // Never crossfade into a transcode that is not fully on disk yet
+            if needsTranscodePrefetch(target.track) {
                 return
             }
             startCrossfade(to: target.track, nextIndex: target.nextIndex, isFromPlayNext: target.isFromPlayNext)

@@ -38,7 +38,7 @@ public struct HomeView: View {
         ScrollView(.vertical, showsIndicators: false) {
             VStack(alignment: .leading, spacing: 24) {
                 // Unlinked Source Banner or Quick Action Deck
-                if libraryStore.tracks.isEmpty && !libraryStore.isInitialLoading && libraryStore.settings.linkedFolders.isEmpty && libraryStore.settings.jellyfinServers.isEmpty {
+                if libraryStore.tracks.isEmpty && !libraryStore.isInitialLoading && libraryStore.settings.linkedFolders.isEmpty && libraryStore.settings.serverSources.isEmpty {
                     emptyLibraryBanner
                 } else {
                     quickActionsDeck
