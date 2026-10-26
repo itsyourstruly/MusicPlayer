@@ -1,5 +1,6 @@
 import Foundation
 import Security
+import os
 
 // MARK: - ServerCredentials
 
@@ -46,6 +47,24 @@ nonisolated public enum ServerCredentialStore {
     private static let service = "com.musicplayer.server"
     private static let legacyJellyfinService = "com.musicplayer.jellyfin"
 
+    /// In-memory copy of each source's credentials, keyed by source ID. The Keychain stays the source of truth:
+    /// only successful reads/saves populate it, and every write path (save, move, delete) updates or clears it,
+    /// so URL building (stream, prewarm, getCoverArt) doesn't hit the Keychain per request.
+    private static let cache = OSAllocatedUnfairLock<[UUID: ServerCredentials]>(initialState: [:])
+
+    private static func cached(_ id: UUID) -> ServerCredentials? {
+        cache.withLock { $0[id] }
+    }
+
+    private static func setCached(_ credentials: ServerCredentials?, for id: UUID) {
+        cache.withLock { $0[id] = credentials }
+    }
+
+    /// Loads credentials for the given sources into the in-memory cache. Call off the main thread.
+    public static func warm(_ links: [ServerSourceLink]) {
+        for link in links { _ = credentials(for: link) }
+    }
+
     /// Stable per-install device identifier shared by all providers
     /// (Jellyfin DeviceId, future Plex X-Plex-Client-Identifier). Key unchanged so existing Jellyfin sessions stay valid.
     public static var stableDeviceId: String {
@@ -67,7 +86,11 @@ nonisolated public enum ServerCredentialStore {
 
     /// Returns stored credentials for a source, migrating a legacy Jellyfin keychain entry if needed.
     public static func credentials(for link: ServerSourceLink) -> ServerCredentials? {
+        if let hit = cached(link.id) {
+            return hit
+        }
         if let stored = read(account: link.id.uuidString) {
+            setCached(stored, for: link.id)
             return stored
         }
         return migrateLegacyJellyfinToken(for: link)
@@ -92,17 +115,26 @@ nonisolated public enum ServerCredentialStore {
             kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
         ]
         let updateStatus = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
-        if updateStatus == errSecSuccess { return true }
-        guard updateStatus == errSecItemNotFound else { return false }
+        if updateStatus == errSecSuccess {
+            setCached(credentials, for: sourceID)
+            return true
+        }
+        guard updateStatus == errSecItemNotFound else {
+            setCached(nil, for: sourceID)
+            return false
+        }
         var addQuery = query
         addQuery.merge(attributes) { _, new in new }
-        return SecItemAdd(addQuery as CFDictionary, nil) == errSecSuccess
+        let added = SecItemAdd(addQuery as CFDictionary, nil) == errSecSuccess
+        setCached(added ? credentials : nil, for: sourceID)
+        return added
     }
 
     /// Moves credentials saved under a provisional source ID onto an existing source (re-sign-in to a linked server).
     public static func moveCredentials(from oldID: UUID, to newID: UUID) {
         guard oldID != newID, let creds = read(account: oldID.uuidString) else { return }
         if save(creds, for: newID) {
+            setCached(nil, for: oldID)
             SecItemDelete([
                 kSecClass as String: kSecClassGenericPassword,
                 kSecAttrService as String: service,
@@ -114,6 +146,7 @@ nonisolated public enum ServerCredentialStore {
     /// Removes the source's credentials (and any un-migrated legacy Jellyfin entry).
     @discardableResult
     public static func deleteCredentials(for link: ServerSourceLink) -> Bool {
+        setCached(nil, for: link.id)
         let status = SecItemDelete([
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,

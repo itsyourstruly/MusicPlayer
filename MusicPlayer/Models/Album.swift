@@ -39,6 +39,13 @@ nonisolated public struct Album: Identifiable, Codable, Sendable, Hashable {
     public let artworkKey: String?
     // Tracks
     public let tracks: [Track]
+    /// Normalized album-artist names (`ServerCredits.nameKey`) when this album mirrors media-server credits.
+    /// Nil for local-only albums, whose attribution keeps using ArtistParser rules.
+    public let albumArtistKeys: [String]?
+    /// Normalized names of server track-artist entities credited on this album who are not album artists ("Appears on").
+    public let featuredArtistKeys: [String]?
+    /// Server-provided sort title (e.g. Jellyfin SortName, Subsonic sortName, Plex titleSort).
+    public let sortName: String?
 
     /// Unique identifiers of all tracks contained in this album.
     public var trackIDs: [UUID] {
@@ -54,10 +61,6 @@ nonisolated public struct Album: Identifiable, Codable, Sendable, Hashable {
 
     // Pre-computed classification and partition properties
     public let resolvedYear: Int?
-    public let isSingle: Bool
-    public let isRemix: Bool
-    public let isLive: Bool
-    public let isStudioAlbum: Bool
     public let mainTracks: [Track]
     public let alternateTracks: [Track]
 
@@ -77,14 +80,13 @@ nonisolated public struct Album: Identifiable, Codable, Sendable, Hashable {
         self.genre = record.genre
         self.artworkKey = record.artworkKey
         self.tracks = tracks
+        self.albumArtistKeys = record.albumArtistKeys
+        self.featuredArtistKeys = record.featuredArtistKeys
+        self.sortName = record.sortName
         self.normalizedTitle = record.normalizedTitle
         self.normalizedArtist = record.normalizedArtist
         self.searchTokens = record.searchTokens
         self.resolvedYear = record.resolvedYear
-        self.isSingle = record.isSingle
-        self.isRemix = record.isRemix
-        self.isLive = record.isLive
-        self.isStudioAlbum = record.isStudioAlbum
         self.mainTracks = mainTracks
         self.alternateTracks = alternateTracks
     }
@@ -97,7 +99,10 @@ nonisolated public struct Album: Identifiable, Codable, Sendable, Hashable {
         genre: String? = nil,
         artworkKey: String? = nil,
         tracks: [Track] = [],
-        groupKey: String? = nil
+        groupKey: String? = nil,
+        albumArtistKeys: [String]? = nil,
+        featuredArtistKeys: [String]? = nil,
+        sortName: String? = nil
     ) {
         var cleanTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
         if cleanTitle.hasSuffix(" (Alternates)") {
@@ -107,6 +112,9 @@ nonisolated public struct Album: Identifiable, Codable, Sendable, Hashable {
         }
 
         self.groupKey = groupKey
+        self.albumArtistKeys = albumArtistKeys
+        self.featuredArtistKeys = featuredArtistKeys
+        self.sortName = sortName
         self.title = cleanTitle
         self.artist = artist
         self.year = year
@@ -145,11 +153,6 @@ nonisolated public struct Album: Identifiable, Codable, Sendable, Hashable {
         self.tracks = sortedTracks
 
         self.resolvedYear = Album.computeResolvedYear(tracks: sortedTracks, fallbackYear: year)
-        let classification = Album.computeClassification(title: cleanTitle, tracks: sortedTracks)
-        self.isSingle = classification.isSingle
-        self.isRemix = classification.isRemix
-        self.isLive = classification.isLive
-        self.isStudioAlbum = classification.isStudioAlbum
 
         let partitions = Album.computeTrackPartitions(tracks: sortedTracks)
         self.mainTracks = partitions.main
@@ -162,6 +165,7 @@ nonisolated public struct Album: Identifiable, Codable, Sendable, Hashable {
     private enum CodingKeys: String, CodingKey {
         // Title option
         case groupKey, title, artist, year, genre, artworkKey, tracks
+        case albumArtistKeys, featuredArtistKeys, sortName
     }
 
     /// Custom decoder so we can recompute normalised fields after decoding stored data.
@@ -173,6 +177,9 @@ nonisolated public struct Album: Identifiable, Codable, Sendable, Hashable {
         self.artist = try container.decodeIfPresent(String.self, forKey: .artist) ?? "Unknown Artist"
         self.year = try container.decodeIfPresent(Int.self, forKey: .year)
         self.genre = try container.decodeIfPresent(String.self, forKey: .genre)
+        self.albumArtistKeys = try container.decodeIfPresent([String].self, forKey: .albumArtistKeys)
+        self.featuredArtistKeys = try container.decodeIfPresent([String].self, forKey: .featuredArtistKeys)
+        self.sortName = try container.decodeIfPresent(String.self, forKey: .sortName)
         let storedArtworkKey = try container.decodeIfPresent(String.self, forKey: .artworkKey)
         let decodedTracks = try container.decodeIfPresent([Track].self, forKey: .tracks) ?? []
         self.artworkKey = Album.computeConsensusArtworkKey(tracks: decodedTracks, fallbackKey: storedArtworkKey)
@@ -203,11 +210,6 @@ nonisolated public struct Album: Identifiable, Codable, Sendable, Hashable {
         self.tracks = sortedTracks
 
         self.resolvedYear = Album.computeResolvedYear(tracks: sortedTracks, fallbackYear: self.year)
-        let classification = Album.computeClassification(title: self.title, tracks: sortedTracks)
-        self.isSingle = classification.isSingle
-        self.isRemix = classification.isRemix
-        self.isLive = classification.isLive
-        self.isStudioAlbum = classification.isStudioAlbum
 
         let partitions = Album.computeTrackPartitions(tracks: sortedTracks)
         self.mainTracks = partitions.main
@@ -225,6 +227,25 @@ nonisolated public struct Album: Identifiable, Codable, Sendable, Hashable {
         try container.encodeIfPresent(genre, forKey: .genre)
         try container.encodeIfPresent(artworkKey, forKey: .artworkKey)
         try container.encode(tracks, forKey: .tracks)
+        try container.encodeIfPresent(albumArtistKeys, forKey: .albumArtistKeys)
+        try container.encodeIfPresent(featuredArtistKeys, forKey: .featuredArtistKeys)
+        try container.encodeIfPresent(sortName, forKey: .sortName)
+    }
+
+    /// Returns this album with a different track list, keeping identity (groupKey), attribution keys and sort name.
+    public func withTracks(_ newTracks: [Track]) -> Album {
+        Album(
+            title: title,
+            artist: artist,
+            year: year,
+            genre: genre,
+            artworkKey: artworkKey,
+            tracks: newTracks,
+            groupKey: groupKey,
+            albumArtistKeys: albumArtistKeys,
+            featuredArtistKeys: featuredArtistKeys,
+            sortName: sortName
+        )
     }
 
     // MARK: - Computed Properties
@@ -278,34 +299,9 @@ nonisolated public struct Album: Identifiable, Codable, Sendable, Hashable {
         return nil
     }
 
-    /// Precomputes classification flags for singles, remixes, live recordings, and studio releases.
-    private static func computeClassification(title: String, tracks: [Track]) -> (isSingle: Bool, isRemix: Bool, isLive: Bool, isStudioAlbum: Bool) {
-        let lower = title.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-        let single = (lower == "single" || lower.hasSuffix(" - single") || lower.hasSuffix(" (single)") || lower.hasSuffix(" [single]") || lower.hasSuffix(" - ep") || lower.hasSuffix(" (ep)") || lower.hasSuffix(" [ep]") || tracks.count <= 2)
-
-        var remix = (lower.hasSuffix("(remixes & alternates)") || lower.hasSuffix("(remixes)") || lower.hasSuffix("[remixes]") || lower.hasSuffix("- remixes") || lower.hasSuffix("(remix)") || lower.hasSuffix("(alternates)") || lower.hasSuffix("(alternatives)") || lower == "remixes" || lower == "remixes & alternates" || lower == "remixes & alternatives")
-        if !remix && !tracks.isEmpty && tracks.allSatisfy({ MetadataSanitizer.isRemixOrAlternateVersion(title: $0.title, album: $0.album) }) {
-            remix = true
-        }
-
-        var live = (lower.hasSuffix("(live)") || lower.hasSuffix("[live]") || lower.hasSuffix("- live") || lower.contains("live at") || lower.contains("live in") || lower.contains("live from") || lower == "live recordings" || lower == "live")
-        if !live && !tracks.isEmpty && tracks.allSatisfy({ MetadataSanitizer.isLiveRecording(title: $0.title, album: $0.album) }) {
-            live = true
-        }
-
-        let studio = !single && !remix && !live
-        return (single, remix, live, studio)
-    }
-
     /// Partitions tracks into main canonical tracks and alternate/bonus cuts once upon creation.
     private static func computeTrackPartitions(tracks: [Track]) -> (main: [Track], alts: [Track]) {
-        let rawAlts = tracks.filter { track in
-            if let isAlt = track.isAlternate {
-                return isAlt
-            }
-            return MetadataSanitizer.isRemixOrAlternateVersion(title: track.title, album: track.album) ||
-                   MetadataSanitizer.isLiveRecording(title: track.title, album: track.album)
-        }
+        let rawAlts = tracks.filter(DiscographyClassifier.isAlternateTrack)
 
         if rawAlts.isEmpty {
             return (tracks, [])
@@ -396,6 +392,16 @@ nonisolated public struct Album: Identifiable, Codable, Sendable, Hashable {
 
     // MARK: - Artist Attribution
 
+    /// Server credit keys contain the artist: exact name key first, then the punctuation-insensitive canonical key
+    /// (the same identity `Artist.id` uses), so the merged library artist always finds its server albums.
+    static func serverKeys(_ keys: [String], contain artistName: String) -> Bool {
+        guard !keys.isEmpty else { return false }
+        if keys.contains(ServerCredits.nameKey(artistName)) { return true }
+        let canonical = ArtistParser.canonicalArtistKey(artistName)
+        guard !canonical.isEmpty else { return false }
+        return keys.contains { ArtistParser.canonicalArtistKey($0) == canonical }
+    }
+
     /// Determines if a given artist is a lead creator or primary collaborator on this album.
     /// Returns true for solo albums and multi-artist collaboration albums, and false for simple guest features.
     /// If an album's artist or tracks belong to a joined artist rule, it only matches if `artistName` is that joined artist.
@@ -403,6 +409,12 @@ nonisolated public struct Album: Identifiable, Codable, Sendable, Hashable {
         // Clean name
         let cleanName = artistName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleanName.isEmpty else { return false }
+        // Server-mirrored albums: the server's album-artist list is authoritative. The library artist is resolved
+        // from the server's artist id at grouping time, so a punctuation variant ("Anderson Paak" vs "Anderson .Paak")
+        // of the same artist still matches.
+        if let keys = albumArtistKeys {
+            return Album.serverKeys(keys, contain: cleanName)
+        }
         let canonicalCleanName = ArtistParser.canonicalArtistKey(cleanName)
 
         // 1. Direct album artist match (e.g. Album.artist == "Pete & Bas" or "Drake" or "J. Cole" vs "J Cole")
@@ -468,6 +480,11 @@ nonisolated public struct Album: Identifiable, Codable, Sendable, Hashable {
         // Clean name
         let cleanName = artistName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleanName.isEmpty else { return false }
+        // Server-mirrored albums: "Appears on" only where the server credits the artist as a track-artist entity.
+        if let keys = albumArtistKeys {
+            return !Album.serverKeys(keys, contain: cleanName)
+                && Album.serverKeys(featuredArtistKeys ?? [], contain: cleanName)
+        }
         let canonicalCleanName = ArtistParser.canonicalArtistKey(cleanName)
 
         // If this is the artist's own lead or collaboration album, it is not a guest feature
@@ -543,31 +560,17 @@ nonisolated public struct Album: Identifiable, Codable, Sendable, Hashable {
 
     /// Canonical release type title for top bar display: "ALBUM", "SINGLE", "EP", or "ALTERNATE".
     public var releaseTypeDisplayTitle: String {
-        let lower = title.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-
-        // 1. ALTERNATE: remixes, live recordings, alternates
-        if isRemix || isLive ||
-           lower.hasSuffix("(alternates)") || lower.hasSuffix("[alternates]") ||
-           lower.hasSuffix("(alternatives)") || lower.hasSuffix("[alternatives]") ||
-           lower.contains("alternate") || lower.contains("alternative") ||
-           lower.contains("remix") ||
-           (!tracks.isEmpty && tracks.allSatisfy { $0.isAlternate == true }) {
-            return "ALTERNATE"
-        }
-
-        // 2. EP: explicit EP suffix/prefix or short 3-6 tracks single
-        if lower == "ep" || lower.hasSuffix(" - ep") || lower.hasSuffix(" (ep)") || lower.hasSuffix(" [ep]") ||
-           lower.hasPrefix("ep:") || lower.hasPrefix("ep - ") ||
-           (isSingle && tracks.count >= 3 && tracks.count <= 6) {
-            return "EP"
-        }
-
-        // 3. SINGLE: explicit single or 1-2 tracks
-        if isSingle || lower == "single" || lower.hasSuffix(" - single") || lower.hasSuffix(" (single)") || lower.hasSuffix(" [single]") || tracks.count <= 2 {
-            return "SINGLE"
-        }
-
-        // 4. Default: ALBUM
-        return "ALBUM"
+        DiscographyClassifier.displayTitle(for: self)
     }
+
+    // MARK: - Classification (thin wrappers over DiscographyClassifier, the single source of truth)
+
+    /// Discography section for this album as the artist's own release (plan §3.8).
+    public var releaseSection: DiscographySection { DiscographyClassifier.releaseSection(for: self) }
+    /// Classified as a single or EP.
+    public var isSingle: Bool { releaseSection == .singlesAndEPs }
+    /// Classified as an alternate release (remix, live, deluxe-style qualifier, version, …).
+    public var isAlternateRelease: Bool { releaseSection == .alternates }
+    /// Classified as a regular studio album.
+    public var isStudioAlbum: Bool { releaseSection == .albums }
 }

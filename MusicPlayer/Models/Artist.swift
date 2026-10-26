@@ -14,6 +14,8 @@ nonisolated public struct Artist: Identifiable, Codable, Sendable, Hashable {
     public let albums: [Album]
     // Tracks
     public let tracks: [Track]
+    /// Server-provided sort name (e.g. "Beatles, The"); nil uses `name`.
+    public let sortName: String?
 
     // Pre-normalized for fuzzy search — computed once to avoid repeated string work at query time.
     public let normalizedName: String
@@ -40,6 +42,7 @@ nonisolated public struct Artist: Identifiable, Codable, Sendable, Hashable {
         self.name = record.name
         self.albums = albums
         self.tracks = tracks
+        self.sortName = record.sortName
         self.normalizedName = record.normalizedName
         self.searchTokens = record.searchTokens
         self.ownAlbumCount = record.ownAlbumCount
@@ -50,8 +53,9 @@ nonisolated public struct Artist: Identifiable, Codable, Sendable, Hashable {
     }
 
     // Initialize with configured properties
-    public init(name: String, albums: [Album] = [], tracks: [Track] = [], joinedArtists: [String] = []) {
+    public init(name: String, albums: [Album] = [], tracks: [Track] = [], joinedArtists: [String] = [], sortName: String? = nil) {
         self.name = name
+        self.sortName = sortName
         // Albums sorted newest-first so discography views show recent releases at the top.
         let sortedAlbums = albums.sorted { ($0.resolvedYear ?? $0.year ?? 0) > ($1.resolvedYear ?? $1.year ?? 0) }
         self.albums = sortedAlbums
@@ -93,6 +97,7 @@ nonisolated public struct Artist: Identifiable, Codable, Sendable, Hashable {
         // Name option
         case name, albums, tracks
         case ownAlbumCount, ownTrackCount, ownTotalDuration, discographySummary, mostRecentArtworkKey
+        case sortName
     }
 
     /// Custom decoder so sort order is enforced after loading from persisted JSON.
@@ -100,6 +105,7 @@ nonisolated public struct Artist: Identifiable, Codable, Sendable, Hashable {
         // Container
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.name = try container.decodeIfPresent(String.self, forKey: .name) ?? "Unknown Artist"
+        self.sortName = try container.decodeIfPresent(String.self, forKey: .sortName)
         // Decoded albums
         let decodedAlbums = try container.decodeIfPresent([Album].self, forKey: .albums) ?? []
         // Decoded tracks
@@ -164,6 +170,12 @@ nonisolated public struct Artist: Identifiable, Codable, Sendable, Hashable {
         try container.encode(ownTotalDuration, forKey: .ownTotalDuration)
         try container.encode(discographySummary, forKey: .discographySummary)
         try container.encodeIfPresent(mostRecentArtworkKey, forKey: .mostRecentArtworkKey)
+        try container.encodeIfPresent(sortName, forKey: .sortName)
+    }
+
+    /// Returns this artist with different albums/tracks, keeping name and sort name.
+    public func withContent(albums: [Album], tracks: [Track], joinedArtists: [String] = []) -> Artist {
+        Artist(name: name, albums: albums, tracks: tracks, joinedArtists: joinedArtists, sortName: sortName)
     }
 
     // MARK: - Computed Properties

@@ -25,6 +25,9 @@ nonisolated public struct AlbumRecord: Codable, Sendable, Identifiable {
     public let isLive: Bool
     public let isStudioAlbum: Bool
     public let searchKey: String
+    public let albumArtistKeys: [String]?
+    public let featuredArtistKeys: [String]?
+    public let sortName: String?
 
     public init(
         id: String,
@@ -45,7 +48,10 @@ nonisolated public struct AlbumRecord: Codable, Sendable, Identifiable {
         isRemix: Bool = false,
         isLive: Bool = false,
         isStudioAlbum: Bool = true,
-        searchKey: String = ""
+        searchKey: String = "",
+        albumArtistKeys: [String]? = nil,
+        featuredArtistKeys: [String]? = nil,
+        sortName: String? = nil
     ) {
         self.id = id
         self.groupKey = groupKey
@@ -66,6 +72,9 @@ nonisolated public struct AlbumRecord: Codable, Sendable, Identifiable {
         self.isLive = isLive
         self.isStudioAlbum = isStudioAlbum
         self.searchKey = searchKey
+        self.albumArtistKeys = albumArtistKeys
+        self.featuredArtistKeys = featuredArtistKeys
+        self.sortName = sortName
     }
 
     public init(from decoder: Decoder) throws {
@@ -90,6 +99,9 @@ nonisolated public struct AlbumRecord: Codable, Sendable, Identifiable {
         self.isLive = try c.decodeIfPresent(Bool.self, forKey: .isLive) ?? false
         self.isStudioAlbum = try c.decodeIfPresent(Bool.self, forKey: .isStudioAlbum) ?? true
         self.searchKey = try c.decodeIfPresent(String.self, forKey: .searchKey) ?? ""
+        self.albumArtistKeys = try c.decodeIfPresent([String].self, forKey: .albumArtistKeys)
+        self.featuredArtistKeys = try c.decodeIfPresent([String].self, forKey: .featuredArtistKeys)
+        self.sortName = try c.decodeIfPresent(String.self, forKey: .sortName)
     }
 }
 
@@ -107,6 +119,7 @@ nonisolated public struct ArtistRecord: Codable, Sendable, Identifiable {
     public let discographySummary: String
     public let mostRecentArtworkKey: String?
     public let searchKey: String
+    public let sortName: String?
 
     public init(
         id: String,
@@ -120,7 +133,8 @@ nonisolated public struct ArtistRecord: Codable, Sendable, Identifiable {
         ownTotalDuration: TimeInterval = 0,
         discographySummary: String = "",
         mostRecentArtworkKey: String? = nil,
-        searchKey: String = ""
+        searchKey: String = "",
+        sortName: String? = nil
     ) {
         self.id = id
         self.name = name
@@ -134,6 +148,7 @@ nonisolated public struct ArtistRecord: Codable, Sendable, Identifiable {
         self.discographySummary = discographySummary
         self.mostRecentArtworkKey = mostRecentArtworkKey
         self.searchKey = searchKey
+        self.sortName = sortName
     }
 
     public init(from decoder: Decoder) throws {
@@ -150,6 +165,7 @@ nonisolated public struct ArtistRecord: Codable, Sendable, Identifiable {
         self.discographySummary = try c.decodeIfPresent(String.self, forKey: .discographySummary) ?? ""
         self.mostRecentArtworkKey = try c.decodeIfPresent(String.self, forKey: .mostRecentArtworkKey)
         self.searchKey = try c.decodeIfPresent(String.self, forKey: .searchKey) ?? ""
+        self.sortName = try c.decodeIfPresent(String.self, forKey: .sortName)
     }
 }
 
@@ -396,7 +412,8 @@ public actor LibraryRepository {
                     originalAlbumArtistsByTrackID: settings.originalAlbumArtistsByTrackID,
                     verifiedGoodDiffs: [],
                     downloadedMetadataCache: PersistentDownloadedMetadataCache(),
-                    scanMethod: settings.libraryScanMethod
+                    scanMethod: settings.libraryScanMethod,
+            serverSourceOrder: settings.serverSources.map(\.id)
                 )
                 let state = updateFullState(
                     tracks: res.tracks,
@@ -446,7 +463,8 @@ public actor LibraryRepository {
             originalAlbumArtistsByTrackID: settings.originalAlbumArtistsByTrackID,
             verifiedGoodDiffs: verifiedGoodDiffs,
             downloadedMetadataCache: downloadedMetadataCache,
-            scanMethod: settings.libraryScanMethod
+            scanMethod: settings.libraryScanMethod,
+            serverSourceOrder: settings.serverSources.map(\.id)
         )
 
         return updateFullState(
@@ -472,7 +490,8 @@ public actor LibraryRepository {
             originalAlbumArtistsByTrackID: settings.originalAlbumArtistsByTrackID,
             verifiedGoodDiffs: verifiedGoodDiffs,
             downloadedMetadataCache: downloadedMetadataCache,
-            scanMethod: settings.libraryScanMethod
+            scanMethod: settings.libraryScanMethod,
+            serverSourceOrder: settings.serverSources.map(\.id)
         )
         return updateFullState(
             tracks: res.tracks,
@@ -511,7 +530,8 @@ public actor LibraryRepository {
             originalAlbumArtistsByTrackID: settings.originalAlbumArtistsByTrackID,
             verifiedGoodDiffs: verifiedGoodDiffs,
             downloadedMetadataCache: downloadedMetadataCache,
-            scanMethod: settings.libraryScanMethod
+            scanMethod: settings.libraryScanMethod,
+            serverSourceOrder: settings.serverSources.map(\.id)
         )
 
         return updateFullState(
@@ -560,11 +580,15 @@ public actor LibraryRepository {
                 normalizedArtist: a.normalizedArtist,
                 searchTokens: a.searchTokens,
                 resolvedYear: a.resolvedYear,
+                // Persisted for format compatibility only; never read back (Album classifies via DiscographyClassifier).
                 isSingle: a.isSingle,
-                isRemix: a.isRemix,
-                isLive: a.isLive,
+                isRemix: a.isAlternateRelease,
+                isLive: false,
                 isStudioAlbum: a.isStudioAlbum,
-                searchKey: key
+                searchKey: key,
+                albumArtistKeys: a.albumArtistKeys,
+                featuredArtistKeys: a.featuredArtistKeys,
+                sortName: a.sortName
             ))
             albumSearchEntries.append(SearchIndexEntry(id: a.id, key: key, primaryLength: primaryLen))
         }
@@ -590,7 +614,8 @@ public actor LibraryRepository {
                 ownTotalDuration: art.ownTotalDuration,
                 discographySummary: art.discographySummary,
                 mostRecentArtworkKey: art.mostRecentArtworkKey,
-                searchKey: key
+                searchKey: key,
+                sortName: art.sortName
             ))
             artistSearchEntries.append(SearchIndexEntry(id: art.id, key: key, primaryLength: primaryLen))
         }

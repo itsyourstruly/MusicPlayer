@@ -49,6 +49,14 @@ public struct FolderSettingsView: View {
                 Divider()
                     .overlay(appTheme.separatorColor.opacity(0.4))
 
+                // MARK: - Server download toggles (only while a server source exists; updates live)
+                if !libraryStore.settings.serverSources.isEmpty {
+                    serverDownloadTogglesSection
+
+                    Divider()
+                        .overlay(appTheme.separatorColor.opacity(0.4))
+                }
+
                 // MARK: - 2. Find Track Tags Button (local sources only)
                 if !libraryStore.settings.linkedFolders.isEmpty {
                     findTrackTagsButtonSection
@@ -275,6 +283,16 @@ public struct FolderSettingsView: View {
                     }
                     .disabled(libraryStore.isScanning)
 
+                    if libraryStore.jellyfinServerErrors[server.id] != nil {
+                        Button {
+                            HapticFeedback.selectionChanged()
+                            Task { @MainActor in await libraryStore.syncServer(server) }
+                        } label: {
+                            Text("RETRY")
+                        }
+                        .disabled(libraryStore.isScanning)
+                    }
+
                     Divider()
                     Button(role: .destructive) {
                         serverToUnlink = server
@@ -299,13 +317,19 @@ public struct FolderSettingsView: View {
                 .lineLimit(1)
                 .foregroundStyle(.secondary)
 
+            if libraryStore.serverRescanRecommended.contains(server.id) && !libraryStore.isScanning {
+                Text("RESCAN RECOMMENDED: SONG CREDITS ARE FROM AN OLDER VERSION")
+                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+                    .foregroundStyle(.secondary)
+            }
+
             if let error = libraryStore.jellyfinServerErrors[server.id] {
                 HStack(spacing: 8) {
                     Text(error)
                         .font(.system(size: 10, weight: .bold, design: .monospaced))
                         .foregroundStyle(.red)
 
-                    if error.contains("LOCAL NETWORK ACCESS IS OFF") {
+                    if error == JellyfinClientError.localNetworkDenied.localizedDescription {
                         #if os(iOS)
                         Button {
                             if let url = URL(string: UIApplication.openSettingsURLString),
@@ -453,6 +477,33 @@ public struct FolderSettingsView: View {
     }
 
     // MARK: - 4. Disk Write Toggle
+    private var serverDownloadTogglesSection: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            TypographicToggleRow(
+                title: "AUTO-DOWNLOAD ON PLAY",
+                isOn: Binding(
+                    get: { libraryStore.settings.autoDownloadOnPlay },
+                    set: { newValue in
+                        libraryStore.settings.autoDownloadOnPlay = newValue
+                        libraryStore.saveSettings()
+                    }
+                ),
+                onLongPress: { activeDetail = SettingOptionCatalog.autoDownloadOnPlay }
+            )
+            TypographicToggleRow(
+                title: "DOWNLOAD OVER CELLULAR",
+                isOn: Binding(
+                    get: { libraryStore.settings.downloadOverCellular },
+                    set: { newValue in
+                        libraryStore.settings.downloadOverCellular = newValue
+                        libraryStore.saveSettings()
+                    }
+                ),
+                onLongPress: { activeDetail = SettingOptionCatalog.downloadOverCellular }
+            )
+        }
+    }
+
     private var diskWriteToggleSection: some View {
         TypographicToggleRow(
             title: "WRITE METADATA TO FILES ON DISK",

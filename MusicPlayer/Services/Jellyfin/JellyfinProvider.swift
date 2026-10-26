@@ -18,6 +18,19 @@ nonisolated public struct JellyfinProvider: MediaServerProvider {
         throw JellyfinClientError.authenticationFailed("TOKEN MISSING: PLEASE SIGN IN AGAIN")
     }
 
+    /// Fail-fast pre-sync check: one cheap authenticated call (8 s) proves the server is reachable and the
+    /// token is still accepted before a long sync starts. 401 means the token was revoked: sign in again.
+    public func prepareSession() async throws {
+        let (serverURL, token) = try session()
+        var request = URLRequest(url: serverURL.appendingPathComponent("System/Info"), timeoutInterval: 8)
+        request.setValue(JellyfinClient.shared.authHeader(token: token), forHTTPHeaderField: "Authorization")
+        ServerRequestLog.log(request, caller: "jellyfinProvider")
+        let (_, response) = try await JellyfinClient.syncSession.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw JellyfinClientError.invalidResponse }
+        if http.statusCode == 503 && http.value(forHTTPHeaderField: "Message") != nil { throw ServerHTTPError.serverStarting }
+        guard (200...299).contains(http.statusCode) else { throw JellyfinClient.mapHTTPStatusError(http.statusCode) }
+    }
+
     // MARK: Sync
 
     public func fetchTrackChanges(
@@ -41,6 +54,11 @@ nonisolated public struct JellyfinProvider: MediaServerProvider {
     public func fetchRelativePaths() async throws -> [String: String] {
         let token = try session().token
         return try await JellyfinSyncService.shared.fetchRelativeItemPaths(for: link, token: token)
+    }
+
+    public func fetchCatalog() async throws -> ServerCatalog {
+        let token = try session().token
+        return try await JellyfinSyncService.shared.fetchCatalog(for: link, token: token)
     }
 
     // MARK: Media URLs
@@ -82,21 +100,19 @@ nonisolated public struct JellyfinProvider: MediaServerProvider {
 
     // MARK: Artwork
 
-    public func artworkRequests(imageId: String, fullResolution: Bool) -> [URLRequest] {
+    public func artworkRequests(imageId: String, size: ArtworkFetchSize, version: String?) -> [URLRequest] {
         guard let (serverURL, token) = try? session() else { return [] }
-        let variants: [(params: [URLQueryItem], timeout: TimeInterval)] = fullResolution
-            ? [([URLQueryItem(name: "maxWidth", value: "2048"), URLQueryItem(name: "quality", value: "96")], 12),
-               ([], 12)] // unconstrained original as a fallback
-            : [([URLQueryItem(name: "maxWidth", value: "800"), URLQueryItem(name: "quality", value: "90")], 10)]
-        return variants.compactMap { variant in
-            var components = URLComponents(url: serverURL.appendingPathComponent("Items/\(imageId)/Images/Primary"), resolvingAgainstBaseURL: true)
-            components?.queryItems = variant.params + [URLQueryItem(name: "api_key", value: token)]
-            guard let url = components?.url else { return nil }
-            var request = URLRequest(url: url, timeoutInterval: variant.timeout)
-            request.setValue(JellyfinClient.shared.authHeader(token: token), forHTTPHeaderField: "Authorization")
-            request.setValue("image/*, */*", forHTTPHeaderField: "Accept")
-            return request
-        }
+        // Jellyfin pre-generates no thumbnail sizes. Swiftfin (official iOS client) requests posters as
+        // Images/Primary?tag=… with no size or quality, which Jellyfin serves as the stored image without
+        // resizing; both tiers use that one URL and every smaller size is scaled on device.
+        let tag = version.flatMap { $0.isEmpty ? nil : [URLQueryItem(name: "tag", value: $0)] } ?? []
+        var components = URLComponents(url: serverURL.appendingPathComponent("Items/\(imageId)/Images/Primary"), resolvingAgainstBaseURL: true)
+        components?.queryItems = tag + [URLQueryItem(name: "api_key", value: token)]
+        guard let url = components?.url else { return [] }
+        var request = URLRequest(url: url, timeoutInterval: size.requestTimeout)
+        request.setValue(JellyfinClient.shared.authHeader(token: token), forHTTPHeaderField: "Authorization")
+        request.setValue("image/*, */*", forHTTPHeaderField: "Accept")
+        return [request]
     }
 
     // MARK: Reporting

@@ -4,7 +4,7 @@ import Observation
 import os
 
 /// Global equalizer state coordinator managing 10-band line graph settings, volume boost, playback speed,
-/// global defaults, per-track equalizer presets, and built-in acoustic sound curves.
+/// global defaults, per-track equalizer presets, and user-saved presets.
 @Observable
 @MainActor
 public final class EqualizerManager {
@@ -64,6 +64,10 @@ public final class EqualizerManager {
     private let perTrackEQKey = "audio_eq_per_track_map_v1"
     private let isEQEnabledKey = "audio_eq_is_enabled_v1"
     private let volumeBoostKey = "audio_eq_volume_boost_v1"
+    private let userPresetsKey = "audio_eq_user_presets_v1"
+
+    /// User-saved presets, in creation order.
+    public private(set) var userPresets: [EqualizerPreset] = []
 
     /// Weak reference to AudioPlayerService for dynamic rate changes
     public weak var playerService: AudioPlayerService?
@@ -83,13 +87,43 @@ public final class EqualizerManager {
         bands[bandIndex].gainDB = rounded
     }
 
-    /// Applies a built-in equalizer preset.
+    /// Applies a saved equalizer preset.
     public func applyPreset(_ preset: EqualizerPreset) {
         guard preset.gains.count == bands.count else { return }
         for i in 0..<bands.count {
             bands[i].gainDB = preset.gains[i]
         }
         isEqualizerEnabled = true
+    }
+
+    // MARK: - User Presets
+
+    /// Saves the current bands as a new preset named 'PRESET' / 'PRESET 2' / ...
+    @discardableResult
+    public func saveCurrentAsPreset() -> EqualizerPreset {
+        let preset = EqualizerPreset(name: EqualizerPreset.nextDefaultName(existing: userPresets.map(\.name)),
+                                     gains: bands.map { $0.gainDB })
+        userPresets.append(preset)
+        saveUserPresets()
+        return preset
+    }
+
+    public func renamePreset(id: UUID, to newName: String) {
+        let clean = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !clean.isEmpty, let i = userPresets.firstIndex(where: { $0.id == id }) else { return }
+        userPresets[i].name = clean
+        saveUserPresets()
+    }
+
+    public func deletePreset(id: UUID) {
+        userPresets.removeAll { $0.id == id }
+        saveUserPresets()
+    }
+
+    private func saveUserPresets() {
+        if let data = try? JSONEncoder().encode(userPresets) {
+            UserDefaults.standard.set(data, forKey: userPresetsKey)
+        }
     }
 
     // MARK: - Global Default Management
@@ -169,6 +203,10 @@ public final class EqualizerManager {
     // MARK: - Persistence Helpers
 
     private func loadPersistedState() {
+        if let data = UserDefaults.standard.data(forKey: userPresetsKey),
+           let saved = try? JSONDecoder().decode([EqualizerPreset].self, from: data) {
+            self.userPresets = saved.filter { $0.gains.count == EqualizerBand.standard10Bands.count }
+        }
         if let savedMap = UserDefaults.standard.dictionary(forKey: perTrackEQKey) as? [String: [Double]] {
             self.perTrackEQMap = savedMap
         }

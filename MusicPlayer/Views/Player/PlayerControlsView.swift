@@ -130,11 +130,11 @@ public struct PlayerControlsView: View {
                         playerService.cycleRepeatMode()
                     }
                 }) {
-                    Text("REPEAT")
+                    Text(playerService.repeatMode == .one ? "ONE" : playerService.repeatMode == .all ? "ALL" : "REPEAT")
                         .font(.system(size: 12, weight: playerService.repeatMode != .off ? .black : .bold, design: .monospaced))
                         .foregroundStyle(
                             playerService.repeatMode != .off
-                                ? foregroundColor
+                                ? Color.white
                                 : secondaryForegroundColor.opacity(0.45)
                         )
                         .lineLimit(1)

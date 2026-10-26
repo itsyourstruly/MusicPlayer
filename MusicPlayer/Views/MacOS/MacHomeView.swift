@@ -12,8 +12,6 @@ public struct MacHomeView: View {
     public let onNavigateToAlbum: (Album) -> Void
     // On navigate to search
     public let onNavigateToSearch: () -> Void
-    // On navigate to discovery
-    public let onNavigateToDiscovery: () -> Void
     // On open settings
     public let onOpenSettings: () -> Void
 
@@ -26,7 +24,6 @@ public struct MacHomeView: View {
         onNavigateToPlaylist: @escaping (Playlist) -> Void,
         onNavigateToAlbum: @escaping (Album) -> Void,
         onNavigateToSearch: @escaping () -> Void,
-        onNavigateToDiscovery: @escaping () -> Void,
         onOpenSettings: @escaping () -> Void
     ) {
         self.libraryStore = libraryStore
@@ -34,7 +31,6 @@ public struct MacHomeView: View {
         self.onNavigateToPlaylist = onNavigateToPlaylist
         self.onNavigateToAlbum = onNavigateToAlbum
         self.onNavigateToSearch = onNavigateToSearch
-        self.onNavigateToDiscovery = onNavigateToDiscovery
         self.onOpenSettings = onOpenSettings
     }
 
@@ -89,17 +85,6 @@ public struct MacHomeView: View {
                         .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
                 }
                 .buttonStyle(.plain)
-
-                Button(action: onNavigateToDiscovery) {
-                    Text("SEARCH ONLINE")
-                        .font(.system(size: 10, weight: .bold, design: .monospaced))
-                        .foregroundStyle(appTheme.primaryTextColor)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 6)
-                        .background(appTheme.tertiaryBackgroundColor)
-                        .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
-                }
-                .buttonStyle(.plain)
             }
             .padding(.top, 2)
         }
@@ -137,16 +122,7 @@ public struct MacHomeView: View {
                 onNavigateToSearch()
             }
 
-            // 3. Online Discovery
-            quickActionButton(
-                title: "DISCOVER",
-                subtitle: "Online metadata",
-                isAccent: false
-            ) {
-                onNavigateToDiscovery()
-            }
-
-            // 4. Rescan
+            // 3. Rescan
             quickActionButton(
                 title: "RESCAN",
                 subtitle: libraryStore.isScanning ? "Scanning..." : "Update files",

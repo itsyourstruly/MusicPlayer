@@ -23,7 +23,9 @@ nonisolated enum ServerProbe {
         return URLSession(configuration: config)
     }()
 
-    /// Candidate base URLs for user input: the exact URL when it has a port or https, otherwise each default port.
+    /// Candidate base URLs for user input. Explicit scheme: used as typed (http adds the default ports when no
+    /// port is given). No scheme: LAN/Tailscale hosts get http (default ports unless one is typed); public hosts
+    /// get https only, since plain http to the internet is never chosen automatically.
     static func candidates(for input: String) -> [URL] {
         var str = input.trimmingCharacters(in: .whitespacesAndNewlines)
         while str.hasSuffix("/") { str.removeLast() }
@@ -31,8 +33,18 @@ nonisolated enum ServerProbe {
             str = String(str.dropLast(suffix.count))
         }
         guard !str.isEmpty else { return [] }
-        if !str.lowercased().hasPrefix("http://") && !str.lowercased().hasPrefix("https://") { str = "http://" + str }
+        let hasScheme = str.lowercased().hasPrefix("http://") || str.lowercased().hasPrefix("https://")
+        if !hasScheme {
+            let hostPart = String(str.split(separator: "/", maxSplits: 1).first ?? "")
+            let bareHost = hostPart.hasPrefix("[") ? hostPart : String(hostPart.split(separator: ":").first ?? "")
+            let host = bareHost.trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
+            let privateHost = JellyfinClient.isLocalHost(host) || JellyfinClient.isTailscaleOrVPNHost(host)
+            str = (privateHost ? "http://" : "https://") + str
+        }
         guard var comps = URLComponents(string: str), let host = comps.host, !host.isEmpty else { return [] }
+        comps.user = nil
+        comps.password = nil
+        if let port = comps.port, !(1...65535).contains(port) { return [] }
         if comps.port != nil || comps.scheme?.lowercased() == "https" {
             return comps.url.map { [$0] } ?? []
         }
@@ -44,11 +56,16 @@ nonisolated enum ServerProbe {
 
     /// Probes every candidate for every (or only the requested) kind and returns the best match:
     /// Jellyfin/Emby, then Subsonic, then Plex; within a kind the first candidate port wins.
-    static func detect(input: String, only kind: ServerKind? = nil) async -> Detection? {
+    /// Throws only `JellyfinClientError.localNetworkDenied` (a probe failure is otherwise "not detected").
+    static func detect(input: String, only kind: ServerKind? = nil) async throws -> Detection? {
         let urls = candidates(for: input)
         guard !urls.isEmpty else { return nil }
         if let first = urls.first, let host = first.host {
-            try? await JellyfinClient.triggerLocalNetworkPrompt(host: host, port: first.port ?? 80)
+            do {
+                try await JellyfinClient.triggerLocalNetworkPrompt(host: host, port: first.port ?? 80)
+            } catch JellyfinClientError.localNetworkDenied {
+                throw JellyfinClientError.localNetworkDenied
+            } catch {}
         }
         let results = await withTaskGroup(of: (Int, Detection?).self) { group in
             for (i, url) in urls.enumerated() {

@@ -1,6 +1,7 @@
 import Foundation
 import AVFoundation
 import MediaPlayer
+import ImageIO
 import Observation
 import SwiftUI
 import os
@@ -257,14 +258,23 @@ public final class AudioPlayerService {
         return ServerProviderRegistry.provider(for: link)
     }
 
-    private func mediaRequest(for track: Track, purpose: ServerMediaPurpose) -> URLRequest? {
-        serverProvider(for: track)?.mediaRequest(for: track, purpose: purpose)
+    /// Signed server audio request via the single ServerStreamRequestBuilder (throws instead of falling back
+    /// to the unsigned identity URL).
+    func signedServerRequest(for track: Track, purpose: ServerMediaPurpose, caller: String) throws -> URLRequest {
+        try ServerStreamRequestBuilder.request(for: track, link: serverSource(for: track.folderID) ?? serverSources.first,
+                                               purpose: purpose, caller: caller)
+    }
+
+    /// Provider used for a server track's lyrics (nil for local tracks).
+    public func lyricsProvider(for track: Track) -> (any MediaServerProvider)? {
+        serverProvider(for: track)
     }
 
     /// AAC transcode request followed by the provider's fallback (MP3 320) if it has one.
     private func transcodeRequests(for track: Track) -> [URLRequest] {
         guard let provider = serverProvider(for: track) else { return [] }
-        return [provider.mediaRequest(for: track, purpose: .stream), provider.transcodeFallbackRequest(for: track)].compactMap { $0 }
+        return [try? signedServerRequest(for: track, purpose: .stream, caller: "transcodePrefetch"),
+                provider.transcodeFallbackRequest(for: track)].compactMap { $0 }
     }
 
     /// True when a server track needs a server-side transcode that has not been fully fetched to disk yet.
@@ -291,6 +301,8 @@ public final class AudioPlayerService {
         return nil
     }
     @ObservationIgnored private var cloudDownloadTask: Task<Void, Never>?
+    /// Next track whose signed request failed during crossfade (avoids retrying every time tick).
+    @ObservationIgnored private var crossfadeFailedTrackID: UUID?
     @ObservationIgnored private var hasTriggeredWiFiPrefetch: Bool = false
     @ObservationIgnored private var lastJellyfinReportedSeconds: TimeInterval = 0
     @ObservationIgnored private var isSmoothSkipping: Bool = false
@@ -623,6 +635,7 @@ public final class AudioPlayerService {
     
     /// Begins playback of a specific track within a provided playlist or queue context.
     public func play(track: Track, inQueue newQueue: [Track] = [], startIndex: Int? = nil) {
+        PlaybackTiming.tap(track.id)
         registerTracks([track])
         if !newQueue.isEmpty {
             registerTracks(newQueue)
@@ -1420,7 +1433,8 @@ public final class AudioPlayerService {
     // MARK: - Internal Audio Engine Logic
     
     /// Prepares and configures a uniform AVPlayerItem for any track, applying the appropriate audio time-pitch algorithm and EQ audio mix tap.
-    public func makePlayerItem(for track: Track) -> AVPlayerItem {
+    /// Throws ServerStreamError for server tracks whose signed request cannot be built (never plays track.url).
+    public func makePlayerItem(for track: Track, caller: String = "play") throws -> AVPlayerItem {
         let resolvedURL: URL
         var assetOptions: [String: Any] = [AVURLAssetPreferPreciseDurationAndTimingKey: false]
 
@@ -1440,13 +1454,11 @@ public final class AudioPlayerService {
             resolvedURL = transcodedURL
             AppLogger.audio.debug("Resolved pre-fetched server transcode: \(transcodedURL.lastPathComponent)")
         } else if track.isJellyfinItem || track.metadataSource == .server {
-            if let request = mediaRequest(for: track, purpose: .stream), let url = request.url {
-                resolvedURL = url
-                if let headers = request.allHTTPHeaderFields, !headers.isEmpty {
-                    assetOptions["AVURLAssetHTTPHeaderFieldsKey"] = headers
-                }
-            } else {
-                resolvedURL = track.url
+            let request = try signedServerRequest(for: track, purpose: .stream, caller: caller)
+            guard let url = request.url else { throw ServerStreamError.noProvider }
+            resolvedURL = url
+            if let headers = request.allHTTPHeaderFields, !headers.isEmpty {
+                assetOptions["AVURLAssetHTTPHeaderFieldsKey"] = headers
             }
             AppLogger.audio.debug("Resolved server stream (transcode: \(TranscodePolicy.requiresTranscode(track))) for track \(track.id.uuidString)")
         } else {
@@ -1462,7 +1474,7 @@ public final class AudioPlayerService {
         AppLogger.audio.info("Item audioTimePitchAlgorithm: \(item.audioTimePitchAlgorithm.rawValue), EqualizerManager.playbackSpeed: \(EqualizerManager.shared.playbackSpeed)")
         let isRemoteJellyfin = (track.isJellyfinItem || track.metadataSource == .server) && JellyfinDownloadManager.shared.localFileURL(for: track.id) == nil
         if isRemoteJellyfin {
-            item.preferredForwardBufferDuration = 30.0
+            item.preferredForwardBufferDuration = 0.0 // 0 = let AVFoundation choose (fixed 30 s buffer rejected)
             item.canUseNetworkResourcesForLiveStreamingWhilePaused = false
         } else {
             item.preferredForwardBufferDuration = 0.0
@@ -1473,6 +1485,7 @@ public final class AudioPlayerService {
 
     // Load and play
     private func loadAndPlay(track: Track) {
+        PlaybackTiming.tap(track.id)
         if let current = currentTrack, current.id != track.id {
             saveCurrentPlaybackPositionIfNeeded()
         }
@@ -1502,7 +1515,7 @@ public final class AudioPlayerService {
         let ext = (track.fileInfo?.fileExtension ?? track.url.pathExtension).uppercased()
         let isLocal = track.url.isFileURL && FileManager.default.fileExists(atPath: track.url.path)
         let isJellyfin = track.isJellyfinItem || track.metadataSource == .server
-        AppLogger.audio.info("Initiating playback: \"\(track.title)\" by \"\(track.artist)\" [ID: \(track.id.uuidString)] [Type: .\(ext)] [Local: \(isLocal ? "YES" : "NO")] [Jellyfin: \(isJellyfin ? "YES" : "NO")] [Resume: \(resumePosition > 0 ? "\(String(format: "%.2f", resumePosition))s" : "start")]")
+        AppLogger.audio.info("Initiating playback: \"\(track.title)\" by \"\(track.artist)\" [ID: \(track.id.uuidString)] [Type: .\(ext)] [Local: \(isLocal ? "YES" : "NO")] [Server: \(isJellyfin ? "YES" : "NO")] [Resume: \(resumePosition > 0 ? "\(String(format: "%.2f", resumePosition))s" : "start")]")
 
         // If track is a file URL but not downloaded yet, pause/buffer and wait for download
         if track.url.isFileURL && (!CloudFileAvailability.isLocal(url: track.url) || CloudFileAvailability.isCloudItem(url: track.url)) {
@@ -1596,13 +1609,23 @@ public final class AudioPlayerService {
             prewarmedPlayerItem = nil
             prewarmingTrackID = nil
         } else {
-            playerItem = makePlayerItem(for: track)
+            do {
+                playerItem = try makePlayerItem(for: track, caller: "play")
+            } catch {
+                player?.pause()
+                self.playbackStatus = .paused
+                self.cloudPlaybackError = error.localizedDescription
+                HapticFeedback.notificationError()
+                AppLogger.audio.error("Cannot build signed server stream: \(error.localizedDescription)")
+                return
+            }
         }
+        PlaybackTiming.mark("itemCreated", trackID: track.id)
         if playerItem.audioMix == nil {
             attachAudioMix(to: playerItem)
         }
         let isRemoteStream = (track.isJellyfinItem || track.metadataSource == .server) && JellyfinDownloadManager.shared.localFileURL(for: track.id) == nil
-        playerItem.preferredForwardBufferDuration = isRemoteStream ? 30.0 : 0.0
+        playerItem.preferredForwardBufferDuration = 0.0 // 0 = system-chosen buffer for local and remote
 
         if (track.isJellyfinItem || track.metadataSource == .server) && autoDownloadOnPlay {
             if let server = serverSource(for: track.folderID) {
@@ -1753,6 +1776,45 @@ public final class AudioPlayerService {
         AppLogger.audio.info("Attached AudioDSPProcessor tap to player item (\(inputParams.count) audio track(s)).")
     }
 
+    /// Attaches the DSP tap before the item ever plays, using the asset's audio tracks.
+    /// Works for plain AVPlayerItem(url:) (WAV/AIFF/CAF): it loads tracks on the item's own asset (no options),
+    /// so the tap is never attached to a live item (which rebuilds the render chain and causes a dropout).
+    private func attachAudioMixBeforePlayback(to playerItem: AVPlayerItem) async {
+        let needsDSP = EqualizerManager.shared.isEqualizerEnabled || abs(EqualizerManager.shared.volumeBoosterDB) > 0.05
+        guard needsDSP, playerItem.audioMix == nil else { return }
+        guard let audioTracks = try? await playerItem.asset.loadTracks(withMediaType: .audio),
+              !audioTracks.isEmpty,
+              playerItem.audioMix == nil else { return }
+        var inputParams: [AVAudioMixInputParameters] = []
+        for track in audioTracks {
+            let params = AVMutableAudioMixInputParameters(track: track)
+            if let tap = AudioDSPProcessor.shared.createAudioProcessingTap() {
+                params.audioTapProcessor = tap
+                inputParams.append(params)
+            }
+        }
+        guard !inputParams.isEmpty else { return }
+        let audioMix = AVMutableAudioMix()
+        audioMix.inputParameters = inputParams
+        playerItem.audioMix = audioMix
+        AppLogger.audio.info("Attached AudioDSPProcessor tap before playback (\(inputParams.count) audio track(s)).")
+    }
+
+    /// Waits (on the main actor) until the item is ready to play. Returns false on failure, timeout or cancellation.
+    private func waitUntilReadyToPlay(_ item: AVPlayerItem, timeout: TimeInterval) async -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while !Task.isCancelled {
+            switch item.status {
+            case .readyToPlay: return true
+            case .failed: return false
+            default: break
+            }
+            if Date() >= deadline { return false }
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+        return false
+    }
+
     /// Dynamically ensures the audio mix DSP tap is attached on the currently playing item if needed.
     public func updateAudioMixForCurrentItem() {
         // Do not attach or detach audioMix on a live playing item.
@@ -1795,9 +1857,13 @@ public final class AudioPlayerService {
         prewarmTask?.cancel()
         prewarmTask = Task { [weak self] in
             guard let self = self else { return }
-            let item = self.makePlayerItem(for: next)
-            let isRemoteNext = (next.isJellyfinItem || next.metadataSource == .server) && JellyfinDownloadManager.shared.localFileURL(for: next.id) == nil
-            item.preferredForwardBufferDuration = isRemoteNext ? 30.0 : 0.0
+            guard let item = try? self.makePlayerItem(for: next, caller: "prewarm") else {
+                self.prewarmingTrackID = nil
+                return
+            }
+            item.preferredForwardBufferDuration = 0.0
+            // Attach the EQ/boost tap now, while the item is not playing.
+            await self.attachAudioMixBeforePlayback(to: item)
             
             // Only prewarm waveform amplitude peaks for local files
             if next.canReadLocalBytes {
@@ -1888,7 +1954,7 @@ public final class AudioPlayerService {
                     self.updateNowPlayingPlaybackState()
                 case .paused:
                     // If currently loading / replacing a track item, seeking, switching routes, smoothly fading out, or transitioning tracks, do not let the transient state trigger an unexpected pause
-                    if self.isTransitioningTrack || self.isSeeking || self.isRoutingChanging || self.isFadingOutPause || self.isSmoothSkipping || self.isStaggeredTransitioning {
+                    if self.isTransitioningTrack || self.isSeeking || self.isRoutingChanging || self.isFadingOutPause || self.isSmoothSkipping || self.isStaggeredTransitioning || self.isCrossfading {
                         return
                     }
                     if self.playbackStatus != .stopped {
@@ -1908,14 +1974,18 @@ public final class AudioPlayerService {
     }
     
     // Setup player item observers
-    private func setupPlayerItemObservers(for playerItem: AVPlayerItem, track: Track) {
+    private func setupPlayerItemObservers(for playerItem: AVPlayerItem, track: Track, isHandoff: Bool = false) {
         // 1. Observe playerItem.status
         itemStatusObserver = playerItem.observe(\.status, options: [.new, .initial]) { [weak self] item, _ in
             Task { @MainActor [weak self] in
                 guard let self = self else { return }
                 switch item.status {
                 case .readyToPlay:
-                    self.attachAudioMix(to: item)
+                    PlaybackTiming.mark("readyToPlay", trackID: track.id)
+                    // A handed-off item is already playing with its tap attached: never touch audioMix live.
+                    if !isHandoff {
+                        self.attachAudioMix(to: item)
+                    }
                     let dSec = CMTimeGetSeconds(item.duration)
                     if !dSec.isNaN && !dSec.isInfinite && dSec > 0 {
                         self.duration = dSec
@@ -1929,8 +1999,10 @@ public final class AudioPlayerService {
                         self.playbackStatus = .playing
                     }
                     let speed = Float(EqualizerManager.shared.playbackSpeed)
-                    self.player?.defaultRate = speed
-                    self.player?.play()
+                    if !isHandoff {
+                        self.player?.defaultRate = speed
+                        self.player?.play()
+                    }
 
                     let audioTracks = item.tracks.compactMap { $0.assetTrack }.filter { $0.mediaType == .audio }
                     let formats = audioTracks.compactMap { $0.formatDescriptions.first }.map { String(describing: $0) }.joined(separator: ", ")
@@ -2152,15 +2224,19 @@ public final class AudioPlayerService {
         times.append(countTime)
         
         if isCrossfadeEnabled && crossfadeDuration >= 0.5 && duration > (crossfadeDuration * 1.2) {
-            let xfadeSeconds = max(0.0, duration - crossfadeDuration)
+            // Lead time so preparation (tap attach, ready, preroll) finishes before the fade must start.
+            let xfadeSeconds = max(0.0, duration - crossfadeDuration - Self.crossfadePrepLead)
             let xfadeTime = CMTime(seconds: xfadeSeconds, preferredTimescale: 600)
             times.append(xfadeTime)
         }
         
+        let triggerSlack = Self.crossfadeTriggerSlack
         let nsValues = times.map { NSValue(time: $0) }
         let token = targetPlayer.addBoundaryTimeObserver(forTimes: nsValues, queue: .main) { [weak self] in
             guard let self = self else { return }
-            let cur = self.currentTime
+            // Read the player's own clock (self.currentTime is only refreshed every 0.35 s).
+            let playerSec = CMTimeGetSeconds(targetPlayer.currentTime())
+            let cur = (playerSec.isNaN || playerSec.isInfinite) ? self.currentTime : playerSec
             
             // 1. Wi-Fi prefetch check
             if !self.hasTriggeredWiFiPrefetch && cur >= 9.8 {
@@ -2186,7 +2262,7 @@ public final class AudioPlayerService {
             // 3. Crossfade check
             if self.isCrossfadeEnabled && !self.isCrossfading && self.duration > 0 {
                 let remaining = self.duration - cur
-                if remaining <= self.crossfadeDuration + 0.2 && remaining > 0 {
+                if remaining <= self.crossfadeDuration + triggerSlack && remaining > 0 {
                     self.checkAndTriggerCrossfadeIfNeeded()
                 }
             }
@@ -2204,6 +2280,30 @@ public final class AudioPlayerService {
             guard !seconds.isNaN && !seconds.isInfinite else { return }
             self.currentTime = seconds
             self.progress.currentTime = seconds
+            if seconds > 0, (self.player?.rate ?? 0) > 0 {
+                PlaybackTiming.mark("firstAudio", trackID: self.currentTrack?.id)
+            }
+            
+            // Duration refined after load (VBR MP3, server streams): rebuild the boundaries so the crossfade point is right.
+            // The observer is delivered on the main queue, so main-actor isolation holds here.
+            MainActor.assumeIsolated {
+            if !self.isCrossfading, self.duration > 0, let itemDur = self.player?.currentItem?.duration,
+               self.player?.currentItem?.status == .readyToPlay {
+                let dSec = CMTimeGetSeconds(itemDur)
+                if !dSec.isNaN && !dSec.isInfinite && dSec > 0 && abs(dSec - self.duration) > 0.5 {
+                    self.duration = dSec
+                    self.progress.duration = dSec
+                    self.updateNowPlayingDuration(dSec)
+                    if let p = self.player, let cur = self.currentTrack {
+                        self.setupBoundaryTimeObservers(for: p, track: cur, duration: dSec)
+                    }
+                }
+            }
+            // Backup crossfade trigger in case the one-shot boundary was missed (idempotent).
+            if self.isCrossfadeEnabled && !self.isCrossfading && self.duration > 0 {
+                self.checkAndTriggerCrossfadeIfNeeded()
+            }
+            }
             
             if self.duration <= 0, let itemDur = self.player?.currentItem?.duration {
                 let dSec = CMTimeGetSeconds(itemDur)
@@ -2277,10 +2377,15 @@ public final class AudioPlayerService {
               playbackStatus == .playing,
               autoPlayNext || repeatMode != .off else { return }
         
-        // Remaining
-        let remaining = duration - currentTime
-        if remaining <= crossfadeDuration && remaining > 0 {
+        // Remaining, from the player's own clock
+        let playerSec = player.map { CMTimeGetSeconds($0.currentTime()) } ?? currentTime
+        let now = (playerSec.isNaN || playerSec.isInfinite) ? currentTime : playerSec
+        let remaining = duration - now
+        if remaining <= crossfadeDuration + Self.crossfadeTriggerSlack && remaining > 0 {
+            // Next-item creation waits until the current item is ready to play.
+            guard player?.currentItem?.status == .readyToPlay else { return }
             guard let target = nextPlaybackTarget() else { return }
+            if crossfadeFailedTrackID == target.track.id { return }
             // Do not crossfade into an undownloaded cloud file
             if !target.track.canReadLocalBytes && target.track.metadataSource != .server {
                 return
@@ -2293,10 +2398,32 @@ public final class AudioPlayerService {
         }
     }
     
+    /// Extra lead before (duration - crossfadeDuration) so preparation completes and the full fade is kept.
+    private static let crossfadePrepLead: Double = 0.3
+    /// Tolerance when checking the trigger window (avoids missing the one-shot boundary).
+    private static let crossfadeTriggerSlack: Double = 0.5
+
     // Start crossfade
     private func startCrossfade(to nextTrack: Track, nextIndex: Int?, isFromPlayNext: Bool = false) {
         // Ensure preconditions are met before proceeding
-        guard !isCrossfading else { return }
+        guard !isCrossfading, let outgoingPlayer = self.player else { return }
+        // Next item: reuse the prewarmed item if it matches, else unified makePlayerItem (signed).
+        // On failure the track ends normally and the regular advance surfaces the error.
+        let nextItem: AVPlayerItem
+        if prewarmedTrackID == nextTrack.id, let prewarmed = prewarmedPlayerItem {
+            nextItem = prewarmed
+            prewarmedTrackID = nil
+            prewarmedPlayerItem = nil
+            prewarmingTrackID = nil
+        } else {
+            do {
+                nextItem = try makePlayerItem(for: nextTrack, caller: "crossfade")
+            } catch {
+                crossfadeFailedTrackID = nextTrack.id
+                AppLogger.audio.error("Crossfade skipped: \(error.localizedDescription)")
+                return
+            }
+        }
         saveCurrentPlaybackPositionIfNeeded()
         isCrossfading = true
         crossfadeTask?.cancel()
@@ -2305,13 +2432,32 @@ public final class AudioPlayerService {
             playNextQueue.removeFirst()
         }
         
-        // Next item using unified makePlayerItem
-        let nextItem = makePlayerItem(for: nextTrack)
         nextItem.preferredForwardBufferDuration = 0.0
         
+        // Old-track bookkeeping, run against the OLD track before switching
+        if let oldTrack = self.currentTrack {
+            if oldTrack.metadataSource == .server {
+                serverProvider(for: oldTrack)?.reportPlayback(.stopped(position: duration), track: oldTrack)
+            }
+            if !hasCountedCurrentPlay {
+                hasCountedCurrentPlay = true
+                onTrackPlay?(oldTrack.id)
+            }
+            clearSavedPlaybackPosition(for: oldTrack.id)
+        }
+        
+        // Detach the outgoing player's clock, boundaries and item observers so only the incoming clock drives the UI
+        // and the old item's end notification cannot act on the new track.
+        if let token = self.timeObserverToken {
+            outgoingPlayer.removeTimeObserver(token)
+            self.timeObserverToken = nil
+        }
+        teardownItemObservers() // also clears boundary observers on the outgoing player
+        
         // Incoming player
+        let isRemoteStream = (nextTrack.isJellyfinItem || nextTrack.metadataSource == .server) && JellyfinDownloadManager.shared.localFileURL(for: nextTrack.id) == nil
         let incomingPlayer = AVPlayer(playerItem: nextItem)
-        incomingPlayer.automaticallyWaitsToMinimizeStalling = true
+        incomingPlayer.automaticallyWaitsToMinimizeStalling = isRemoteStream
         incomingPlayer.allowsExternalPlayback = true
         #if os(iOS)
         incomingPlayer.usesExternalPlaybackWhileExternalScreenIsActive = true
@@ -2320,20 +2466,20 @@ public final class AudioPlayerService {
         incomingPlayer.isMuted = false
         self.fadePlayer = incomingPlayer
         
-        // Outgoing player
-        let outgoingPlayer = self.player
-        
-        // Immediately update track metadata & UI to next track
+        // Switch the UI to the next track at fade start, progress from 0
         self.currentTrack = nextTrack
         self.currentIndex = nextIndex
         self.duration = nextTrack.duration
         self.currentTime = 0.0
         self.progress.currentTime = 0.0
         self.progress.duration = nextTrack.duration
-        self.setupNowPlayingInfo(for: nextTrack)
+        self.hasCountedCurrentPlay = false
+        self.playbackAccumulatedTime = 0
+        self.hasTriggeredWiFiPrefetch = false
+        self.lastJellyfinReportedSeconds = 0
         
-        // Attach real-time observer to incoming player so UI progress bar tracks next track smoothly from 0.0s
-        let interval = CMTime(seconds: 0.35, preferredTimescale: 600)
+        // Single progress clock: the incoming player
+        let interval = CMTime(seconds: 0.08, preferredTimescale: 600)
         self.fadeTimeObserverToken = incomingPlayer.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self] time in
             Task { @MainActor [weak self] in
                 guard let self = self, !self.isSeeking else { return }
@@ -2347,17 +2493,36 @@ public final class AudioPlayerService {
         
         let speed = Float(EqualizerManager.shared.playbackSpeed)
         incomingPlayer.defaultRate = speed
-        incomingPlayer.play()
-        AppLogger.audio.info("Starting crossfade (\(self.crossfadeDuration)s) to: \(nextTrack.title) at \(speed)x")
         
-        // Total fade duration
         let totalFadeDuration = max(self.crossfadeDuration, 0.5)
         // Fade steps
         let fadeSteps = 40
         // Step duration
         let stepDuration = totalFadeDuration / Double(fadeSteps)
         
-        crossfadeTask = Task { @MainActor in
+        crossfadeTask = Task { @MainActor [weak self] in
+            guard let self = self else { return }
+            
+            // Prepare before the incoming track is heard: tap attached, per-track EQ, ready, preroll.
+            await self.attachAudioMixBeforePlayback(to: nextItem)
+            guard !Task.isCancelled else { return }
+            EqualizerManager.shared.trackWillPlay(track: nextTrack)
+            let ready = await self.waitUntilReadyToPlay(nextItem, timeout: isRemoteStream ? 8.0 : 2.5)
+            guard !Task.isCancelled else { return }
+            if ready {
+                if nextItem.audioMix == nil {
+                    self.attachAudioMix(to: nextItem) // still not playing
+                }
+                if !isRemoteStream && incomingPlayer.status == .readyToPlay && incomingPlayer.rate == 0 {
+                    _ = await incomingPlayer.preroll(atRate: speed)
+                }
+                guard !Task.isCancelled else { return }
+            } else if nextItem.status == .failed {
+                AppLogger.audio.error("Crossfade incoming item failed; handing over to regular playback.")
+            }
+            incomingPlayer.play()
+            AppLogger.audio.info("Starting crossfade (\(self.crossfadeDuration)s) to: \(nextTrack.title) at \(speed)x")
+            
             for step in 1...fadeSteps {
                 if Task.isCancelled { break }
                 try? await Task.sleep(nanoseconds: UInt64(stepDuration * 1_000_000_000))
@@ -2368,26 +2533,19 @@ public final class AudioPlayerService {
                 // Angle
                 let angle = progress * (Float.pi / 2.0)
                 // Smooth equal-power curve (prevents volume dip in middle of crossfade) scaled by master volume
-                outgoingPlayer?.volume = max(0.0, cos(angle)) * self.volume
+                outgoingPlayer.volume = max(0.0, cos(angle)) * self.volume
                 incomingPlayer.volume = min(1.0, sin(angle)) * self.volume
             }
             
             // Ensure preconditions are met before proceeding
             guard !Task.isCancelled else { return }
             
-            // Finalize crossfade handoff: pause and zero volume
-            outgoingPlayer?.pause()
-            outgoingPlayer?.volume = 0.0
-            
-            // Teardown outgoing player's tap and observers after volume ramp reached 0
-            if let outgoing = outgoingPlayer {
-                if let token = self.timeObserverToken {
-                    outgoing.removeTimeObserver(token)
-                    self.timeObserverToken = nil
-                }
-                self.clearBoundaryTimeObservers(for: outgoing)
-                outgoing.currentItem?.audioMix = nil
-            }
+            // Finalize crossfade handoff: stop listening to the old player's state first, then pause it
+            self.playerTimeControlObserver?.invalidate()
+            self.playerTimeControlObserver = nil
+            outgoingPlayer.pause()
+            outgoingPlayer.volume = 0.0
+            outgoingPlayer.replaceCurrentItem(with: nil)
             
             if let token = self.fadeTimeObserverToken {
                 incomingPlayer.removeTimeObserver(token)
@@ -2406,13 +2564,18 @@ public final class AudioPlayerService {
             let currentSec = CMTimeGetSeconds(incomingPlayer.currentTime())
             if !currentSec.isNaN && !currentSec.isInfinite {
                 self.currentTime = currentSec
+                self.progress.currentTime = currentSec
             }
-            self.updateNowPlayingElapsedTime()
             
-            // Attach observers to active player
-            self.setupPlayerItemObservers(for: nextItem, track: nextTrack)
+            // Attach observers to active player (handoff: no live tap attach, no extra play/rate)
+            self.setupPlayerItemObservers(for: nextItem, track: nextTrack, isHandoff: true)
             self.setupPeriodicTimeObserver()
             self.setupPlayerObservers(for: incomingPlayer)
+            if incomingPlayer.timeControlStatus == .playing {
+                self.playbackStatus = .playing
+            }
+            self.setupNowPlayingInfo(for: nextTrack)
+            self.updateNowPlayingElapsedTime()
             
             AppLogger.audio.info("Crossfade cleanly completed at exact track position: \(self.currentTime)s")
         }
@@ -2476,7 +2639,7 @@ public final class AudioPlayerService {
         self.playbackStatus = .playing
         self.hasCountedCurrentPlay = false
         self.playbackAccumulatedTime = 0
-        self.setupNowPlayingInfo(for: nextTrack)
+        // Now Playing / artwork is updated after the fade (keeps main-thread work out of the transition).
         
         // Retain outgoing player
         self.skipOutgoingPlayer = outgoingPlayer
@@ -2497,7 +2660,14 @@ public final class AudioPlayerService {
             prewarmedPlayerItem = nil
             prewarmingTrackID = nil
         } else {
-            playerItem = makePlayerItem(for: nextTrack)
+            do {
+                playerItem = try makePlayerItem(for: nextTrack, caller: "smoothSkip")
+            } catch {
+                // Hand over to the regular path, which stops playback and shows the error.
+                self.isStaggeredTransitioning = false
+                loadAndPlay(track: nextTrack)
+                return
+            }
         }
         playerItem.preferredForwardBufferDuration = 0.0
         
@@ -2526,24 +2696,55 @@ public final class AudioPlayerService {
             }
         }
         
-        // Start incoming track immediately at volume 0.0
-        incoming.play()
-        
-        // 5. Run 2-Phase Staggered Envelope:
-        // Phase 1: Incoming track fades in from 0.0 to masterVol while current track plays at full volume
+        // 5. Prepare first (tap attached, per-track EQ applied, item ready + prerolled), then play and run the envelope:
+        // Phase 1: Incoming track fades in from 0.0 to masterVol (~240 ms) while current track plays at full volume
         // Phase 2: Once incoming track is fully faded in, outgoing track fades out to 0.0, pauses, and unloads
         skipTransitionTask = Task { @MainActor [weak self] in
             guard let self = self else { return }
             
-            // --- Phase 1: Next track fades in first while current track plays at full volume (120ms: 8 steps * 15ms) ---
-            let fadeInSteps = 8
+            // Attach the EQ/boost tap while the item is not playing (never after play()).
+            await self.attachAudioMixBeforePlayback(to: playerItem)
+            guard !Task.isCancelled else { return }
+            
+            // Apply the per-track EQ before the incoming track is heard.
+            EqualizerManager.shared.trackWillPlay(track: nextTrack)
+            
+            // Play only once the item is ready.
+            let ready = await self.waitUntilReadyToPlay(playerItem, timeout: 2.5)
+            guard !Task.isCancelled else { return }
+            guard ready else {
+                // Hand over to the regular path, which handles errors and slow items.
+                if let token = self.fadeTimeObserverToken {
+                    incoming.removeTimeObserver(token)
+                    self.fadeTimeObserverToken = nil
+                }
+                incoming.pause()
+                incoming.replaceCurrentItem(with: nil)
+                self.skipIncomingPlayer = nil
+                self.skipOutgoingPlayer = nil
+                self.isStaggeredTransitioning = false
+                self.loadAndPlay(track: nextTrack)
+                return
+            }
+            // Fallback: if the asset path could not attach the tap, attach now (item still not playing).
+            if playerItem.audioMix == nil {
+                self.attachAudioMix(to: playerItem)
+            }
+            if incoming.status == .readyToPlay && incoming.rate == 0 {
+                _ = await incoming.preroll(atRate: speed)
+            }
+            guard !Task.isCancelled else { return }
+            incoming.play()
+            
+            // --- Phase 1: Next track fades in (equal-power, 240ms: 16 steps * 15ms) while current track plays at full volume ---
+            let fadeInSteps = 16
             let fadeInDuration: UInt64 = 15_000_000
             for step in 1...fadeInSteps {
                 if Task.isCancelled { break }
                 try? await Task.sleep(nanoseconds: fadeInDuration)
                 if Task.isCancelled { break }
                 let progress = Float(step) / Float(fadeInSteps)
-                incoming.volume = min(masterVol, max(0.0, masterVol * progress))
+                incoming.volume = min(masterVol, max(0.0, masterVol * sin(progress * Float.pi / 2.0)))
                 outgoingPlayer.volume = masterVol
             }
             
@@ -2591,10 +2792,10 @@ public final class AudioPlayerService {
             }
             self.updateNowPlayingElapsedTime()
             
-            EqualizerManager.shared.trackWillPlay(track: nextTrack)
-            self.setupPlayerItemObservers(for: playerItem, track: nextTrack)
+            self.setupPlayerItemObservers(for: playerItem, track: nextTrack, isHandoff: true)
             self.setupPeriodicTimeObserver()
             self.setupPlayerObservers(for: incoming)
+            self.setupNowPlayingInfo(for: nextTrack)
         }
     }
     
@@ -2645,6 +2846,7 @@ public final class AudioPlayerService {
                 player?.volume = self.volume
                 player?.isMuted = self.isMuted
                 setupPlayerObservers(for: nextPlayer)
+                setupPeriodicTimeObserver()
                 fadePlayer = nil
             }
             isCrossfading = false
@@ -3166,60 +3368,40 @@ public final class AudioPlayerService {
         #endif
         
         MPNowPlayingInfoCenter.default().nowPlayingInfo = info
-        
-        Task { [weak self] in
-            guard let self = self else { return }
-            var image: PlatformImage? = nil
-            if let artKey = track.artworkKey, !artKey.isEmpty {
-                if let artData = await ArtworkCacheService.shared.loadArtworkAsync(key: artKey) {
-                    image = self.platformImage(from: artData)
-                }
-            }
-            if image == nil {
-                #if os(iOS)
-                image = UIImage(named: "art")
-                #elseif os(macOS)
-                image = NSImage(named: "art")
-                #endif
-            }
-            guard let image = image else { return }
 
-            #if os(iOS)
-            guard image.size.width > 0 && image.size.height > 0 else { return }
-            // Bound artwork dimensions to prevent blowing out Bluetooth AVRCP throughput
-            let maxDimension: CGFloat = 600
-            let originalSize = image.size
-            let scale = min(maxDimension / originalSize.width, maxDimension / originalSize.height, 1.0)
-            let boundedSize = CGSize(
-                width: max(1, (originalSize.width * scale).rounded()),
-                height: max(1, (originalSize.height * scale).rounded())
-            )
-            let mpArtwork = MPMediaItemArtwork(boundsSize: boundedSize) { requestedSize in
-                guard requestedSize.width > 0 && requestedSize.height > 0,
-                      !requestedSize.width.isNaN && !requestedSize.height.isNaN,
-                      !requestedSize.width.isInfinite && !requestedSize.height.isInfinite else {
-                    return image
-                }
-                let renderWidth = max(1, min(requestedSize.width, maxDimension))
-                let renderHeight = max(1, min(requestedSize.height, maxDimension))
-                let targetSize = CGSize(width: renderWidth, height: renderHeight)
-                let format = UIGraphicsImageRendererFormat.default()
-                format.scale = 1.0
-                let renderer = UIGraphicsImageRenderer(size: targetSize, format: format)
-                return renderer.image { _ in
-                    image.draw(in: CGRect(origin: .zero, size: targetSize))
-                }
+        // Artwork: the 600 px tier first, then the original (requested on demand for the current track only;
+        // never prefetched). A generation token drops late results that belong to a previous track.
+        nowPlayingArtworkGeneration &+= 1
+        let generation = nowPlayingArtworkGeneration
+        let trackID = track.id
+        Task { [weak self] in
+            guard let self else { return }
+            let artKey = track.artworkKey ?? ""
+            var shownData: Data?
+            if !artKey.isEmpty, let data = await ArtworkCacheService.shared.loadArtworkAsync(key: artKey) {
+                shownData = data
             }
-            #elseif os(macOS)
-            guard image.size.width > 0 && image.size.height > 0 else { return }
-            let mpArtwork = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
-            #endif
-            await MainActor.run {
-                guard var currentInfo = MPNowPlayingInfoCenter.default().nowPlayingInfo else { return }
-                currentInfo[MPMediaItemPropertyArtwork] = mpArtwork
-                MPNowPlayingInfoCenter.default().nowPlayingInfo = currentInfo
+            if let artwork = await NowPlayingArtworkSource.makeArtwork(data: shownData) {
+                guard self.applyNowPlayingArtwork(artwork, generation: generation, trackID: trackID) else { return }
             }
+            guard !artKey.isEmpty,
+                  let original = await ArtworkCacheService.shared.loadArtworkAsync(key: artKey, fullResolution: true),
+                  original != shownData,
+                  let artwork = await NowPlayingArtworkSource.makeArtwork(data: original) else { return }
+            _ = self.applyNowPlayingArtwork(artwork, generation: generation, trackID: trackID)
         }
+    }
+
+    /// Bumped on every Now Playing setup; artwork from an older setup (previous track) is ignored.
+    private var nowPlayingArtworkGeneration = 0
+
+    /// Sets the artwork if it still belongs to the current track. Returns false when it was stale.
+    private func applyNowPlayingArtwork(_ artwork: MPMediaItemArtwork, generation: Int, trackID: Track.ID) -> Bool {
+        guard generation == nowPlayingArtworkGeneration, currentTrack?.id == trackID,
+              var currentInfo = MPNowPlayingInfoCenter.default().nowPlayingInfo else { return false }
+        currentInfo[MPMediaItemPropertyArtwork] = artwork
+        MPNowPlayingInfoCenter.default().nowPlayingInfo = currentInfo
+        return true
     }
     
     /// Updates the playback duration dynamically in MPNowPlayingInfoCenter as soon as the AVPlayerItem resolves it
@@ -3275,17 +3457,6 @@ public final class AudioPlayerService {
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
     }
     
-#if os(iOS)
-    // Platform image
-    private func platformImage(from data: Data) -> UIImage? {
-        UIImage(data: data)
-    }
-#else
-    // Platform image
-    private func platformImage(from data: Data) -> NSImage? {
-        NSImage(data: data)
-    }
-#endif
 
     // MARK: - Diagnostics
 
@@ -3343,3 +3514,77 @@ public final class AudioPlayerService {
     }
 }
 
+/// Thread-safe source for `MPMediaItemArtwork`. The request handler can be called on any thread, so it is
+/// nonisolated and only touches immutable data plus a lock-protected cache. Each requested bounds size is
+/// produced with an ImageIO thumbnail (downsampled on decode, never the full image); on the main thread it
+/// returns the image prepared off the main thread at creation instead of decoding.
+nonisolated final class NowPlayingArtworkSource: @unchecked Sendable {
+    private let data: Data
+    private let prepared: PlatformImage
+    private let lock = NSLock()
+    /// Longest side of any Now Playing artwork image, in pixels.
+    private static let maxPixels = 1024
+    private var rendered: [Int: PlatformImage] = [:]
+
+    private init(data: Data, prepared: PlatformImage) {
+        self.data = data
+        self.prepared = prepared
+    }
+
+    /// Builds the artwork off the main thread; falls back to the bundled placeholder when there is no data.
+    static func makeArtwork(data: Data?) async -> MPMediaItemArtwork? {
+        await Task.detached(priority: .userInitiated) { () -> MPMediaItemArtwork? in
+            if let data, let source = CGImageSourceCreateWithData(data as CFData, [kCGImageSourceShouldCache: false] as CFDictionary),
+               let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+               let w = props[kCGImagePropertyPixelWidth] as? Int, let h = props[kCGImagePropertyPixelHeight] as? Int,
+               w > 0, h > 0,
+               let prepared = thumbnail(source: source, maxPixels: min(max(w, h), maxPixels)) {
+                let artworkSource = NowPlayingArtworkSource(data: data, prepared: prepared)
+                // Advertise the pixel size scaled to fit within maxPixels, keeping the aspect ratio.
+                let fit = min(1, CGFloat(maxPixels) / CGFloat(max(w, h)))
+                let bounds = CGSize(width: max(1, (CGFloat(w) * fit).rounded()), height: max(1, (CGFloat(h) * fit).rounded()))
+                return MPMediaItemArtwork(boundsSize: bounds) { size in
+                    artworkSource.image(for: size)
+                }
+            }
+            #if os(iOS)
+            guard let placeholder = UIImage(named: "art"), placeholder.size.width > 0 else { return nil }
+            #else
+            guard let placeholder = NSImage(named: "art"), placeholder.size.width > 0 else { return nil }
+            #endif
+            return MPMediaItemArtwork(boundsSize: placeholder.size) { _ in placeholder }
+        }.value
+    }
+
+    private func image(for size: CGSize) -> PlatformImage {
+        guard size.width.isFinite, size.height.isFinite, size.width > 0, size.height > 0 else { return prepared }
+        // Longest side is capped at maxPixels regardless of the requested size.
+        let pixels = min(Int(max(size.width, size.height).rounded(.up)), Self.maxPixels)
+        lock.lock()
+        if let cached = rendered[pixels] { lock.unlock(); return cached }
+        lock.unlock()
+        if Thread.isMainThread { return prepared }
+        guard let source = CGImageSourceCreateWithData(data as CFData, [kCGImageSourceShouldCache: false] as CFDictionary),
+              let image = Self.thumbnail(source: source, maxPixels: pixels) else { return prepared }
+        lock.lock()
+        if rendered.count >= 4 { rendered.removeAll() }
+        rendered[pixels] = image
+        lock.unlock()
+        return image
+    }
+
+    private static func thumbnail(source: CGImageSource, maxPixels: Int) -> PlatformImage? {
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceShouldCacheImmediately: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: max(32, maxPixels)
+        ]
+        guard let cg = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { return nil }
+        #if os(iOS)
+        return UIImage(cgImage: cg)
+        #else
+        return NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height))
+        #endif
+    }
+}

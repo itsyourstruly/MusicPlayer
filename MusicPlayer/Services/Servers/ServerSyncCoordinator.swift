@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 /// Serializes server syncs: one queue per source (duplicate requests coalesce onto the running sync),
 /// plus a global concurrency limit so server syncs never contend with each other or the local scanner
@@ -28,7 +29,8 @@ actor ServerSyncCoordinator {
         }
         running[sourceID] = task
         await task.value
-        running[sourceID] = nil
+        // Only clear our own entry: after cancel(sourceID:) a newer sync may already be registered.
+        if running[sourceID] == task { running[sourceID] = nil }
     }
 
     /// Cancels a queued or running sync (e.g. when the source is removed).
@@ -50,6 +52,36 @@ actor ServerSyncCoordinator {
             activeCount -= 1
         } else {
             waiters.removeFirst().resume()
+        }
+    }
+}
+
+// MARK: - Stall watchdog
+
+/// Cancels a long operation (a server sync) when it stops reporting progress, so a server that accepts the
+/// connection but never finishes can't hold the sync slot forever. Progress is any status/progress callback.
+nonisolated final class ServerStallWatchdog: Sendable {
+    struct Stalled: Error, Sendable {}
+
+    private let lastProgress = OSAllocatedUnfairLock<Date>(initialState: Date())
+
+    func touch() { lastProgress.withLock { $0 = Date() } }
+
+    func run<T: Sendable>(limit: TimeInterval, _ operation: @escaping @Sendable () async throws -> T) async throws -> T {
+        touch()
+        return try await withThrowingTaskGroup(of: T?.self) { group in
+            group.addTask { try await operation() }
+            group.addTask { [self] in
+                while true {
+                    try await Task.sleep(nanoseconds: 5_000_000_000)
+                    if Date().timeIntervalSince(lastProgress.withLock { $0 }) > limit { throw Stalled() }
+                }
+            }
+            defer { group.cancelAll() }
+            while let result = try await group.next() {
+                if let result { return result }
+            }
+            throw CancellationError()
         }
     }
 }

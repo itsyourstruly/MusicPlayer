@@ -6,8 +6,6 @@ public enum MacNavigationItem: Hashable, Identifiable, Sendable {
     case home
     // Search option
     case search
-    // Discovery option
-    case discovery
     // All tracks option
     case allTracks
     // Albums option
@@ -26,7 +24,6 @@ public enum MacNavigationItem: Hashable, Identifiable, Sendable {
         switch self {
         case .home: return "home"
         case .search: return "search"
-        case .discovery: return "discovery"
         case .allTracks: return "allTracks"
         case .albums: return "albums"
         case .artists: return "artists"
@@ -42,7 +39,6 @@ public enum MacNavigationItem: Hashable, Identifiable, Sendable {
         switch self {
         case .home: return "HOME"
         case .search: return "SEARCH"
-        case .discovery: return "ONLINE DISCOVERY"
         case .allTracks: return "ALL SONGS"
         case .albums: return "ALBUMS"
         case .artists: return "ARTISTS"

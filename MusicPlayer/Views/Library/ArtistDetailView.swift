@@ -12,7 +12,6 @@ public struct ArtistDetailView: View {
     @State private var selectedTrackForInfo: Track? = nil
     @State private var selectedTrackForPlaylist: Track? = nil
     @State private var showingFavorites: Bool = false
-    @State private var showingOnlineDiscovery: Bool = false
     @State private var showingDiscographyReviewSheet: Bool = false
     @State private var selectedSectionDestination: ArtistSectionDestination? = nil
     @Environment(\.appTheme) private var appTheme
@@ -36,7 +35,7 @@ public struct ArtistDetailView: View {
 
     /// Dynamically resolves the latest artist state from the library store with O(1) indexed lookup.
     private var currentArtist: Artist {
-        if let direct = libraryStore.artistLookupIndex[artist.id] {
+        if let direct = libraryStore.artist(forID: artist.id) {
             return direct
         }
         let rawKey = artist.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -330,8 +329,7 @@ public struct ArtistDetailView: View {
             ToolbarItem(placement: .topBarTrailing) {
                 ArtistDetailToolbarMenuView(
                     currentArtist: currentArtist,
-                    libraryStore: libraryStore,
-                    showingOnlineDiscovery: $showingOnlineDiscovery
+                    libraryStore: libraryStore
                 )
             }
         }
@@ -343,16 +341,6 @@ public struct ArtistDetailView: View {
         }
         .sheet(item: $selectedTrackForPlaylist) { track in
             playlistPickerSheet(for: [track])
-        }
-        .sheet(isPresented: $showingOnlineDiscovery) {
-            NavigationStack {
-                GlobalSearchView(
-                    libraryStore: libraryStore,
-                    playerService: playerService,
-                    initialQuery: currentArtist.name,
-                    initialOnlineMode: true
-                )
-            }
         }
         .sheet(isPresented: $showingDiscographyReviewSheet) {
             if let result = libraryStore.discographyScanResult {
@@ -568,36 +556,18 @@ public struct ArtistDetailView: View {
 
     private func categorizeDiscography(for activeArtist: Artist) -> CategorizedDiscography {
         let joined = libraryStore.settings.joinedArtists
-        let versionKey = activeArtist.albums.count ^ (activeArtist.tracks.count << 4) ^ joined.hashValue
+        let versionKey = activeArtist.albums.count ^ (activeArtist.tracks.count << 4) ^ joined.hashValue ^ (ReleaseTypeRegistry.shared.revision &* 31)
 
         if let cached = Self.discographyCache[activeArtist.id], cached.version == versionKey {
             return cached.discography
         }
 
         var result = CategorizedDiscography()
-        for album in activeArtist.albums {
-            if album.isFeaturedAlbum(for: activeArtist.name, joinedArtists: joined) {
-                result.featuredAlbums.append(album)
-            } else if album.isLeadOrCollaborativeAlbum(for: activeArtist.name, joinedArtists: joined) {
-                if album.isRemix || album.isLive {
-                    result.alternates.append(album)
-                } else if album.isSingle {
-                    result.singles.append(album)
-                } else {
-                    result.studioAlbums.append(album)
-                }
-            }
-        }
-        let sortBlock: (Album, Album) -> Bool = { lhs, rhs in
-            let yL = lhs.resolvedYear ?? 0
-            let yR = rhs.resolvedYear ?? 0
-            if yL != yR { return yL > yR }
-            return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
-        }
-        result.studioAlbums.sort(by: sortBlock)
-        result.singles.sort(by: sortBlock)
-        result.alternates.sort(by: sortBlock)
-        result.featuredAlbums.sort(by: sortBlock)
+        let sections = DiscographyClassifier.sections(for: activeArtist.albums, artistName: activeArtist.name, joinedArtists: joined)
+        result.studioAlbums = sections.albums
+        result.singles = sections.singlesAndEPs
+        result.alternates = sections.alternates
+        result.featuredAlbums = sections.featuredOn
 
         Self.discographyCache[activeArtist.id] = (versionKey, result)
         return result
@@ -668,7 +638,6 @@ public struct ArtistDetailView: View {
 private struct ArtistDetailToolbarMenuView: View {
     let currentArtist: Artist
     @Bindable var libraryStore: LibraryStore
-    @Binding var showingOnlineDiscovery: Bool
 
     var body: some View {
         Menu {
@@ -717,15 +686,8 @@ private struct ArtistDetailToolbarMenuView: View {
             } label: {
                 Text("FIND METADATA (DISCOGRAPHY)...")
             }
-
-            Button(action: {
-                HapticFeedback.lightImpact()
-                showingOnlineDiscovery = true
-            }) {
-                Text("FIND ONLINE")
-            }
         } label: {
-            Image(systemName: "globe")
+            Image(systemName: "ellipsis.circle")
                 .font(.system(size: 16, weight: .semibold))
                 .foregroundStyle(Color.primary)
                 .padding(.horizontal, 4)

@@ -55,12 +55,14 @@ private struct JellyfinMediaStream: Codable, Sendable {
     let bitRate: Int?
     let channels: Int?
     let type: String?
+    let bitDepth: Int?
     enum CodingKeys: String, CodingKey {
         case codec = "Codec"
         case sampleRate = "SampleRate"
         case bitRate = "BitRate"
         case channels = "Channels"
         case type = "Type"
+        case bitDepth = "BitDepth"
     }
 }
 
@@ -68,6 +70,7 @@ private struct JellyfinAudioItem: Codable, Sendable {
     let id: String
     let name: String?
     let artists: [String]?
+    let artistItems: [JellyfinNameIdPair]?
     let albumArtist: String?
     let albumArtists: [JellyfinNameIdPair]?
     let album: String?
@@ -88,6 +91,7 @@ private struct JellyfinAudioItem: Codable, Sendable {
         case id = "Id"
         case name = "Name"
         case artists = "Artists"
+        case artistItems = "ArtistItems"
         case albumArtist = "AlbumArtist"
         case albumArtists = "AlbumArtists"
         case album = "Album"
@@ -103,6 +107,23 @@ private struct JellyfinAudioItem: Codable, Sendable {
         case imageTags = "ImageTags"
         case genres = "Genres"
         case mediaSources = "MediaSources"
+    }
+}
+
+private struct JellyfinSortItemsResponse: Codable, Sendable {
+    struct Item: Codable, Sendable {
+        let id: String?
+        let name: String?
+        let sortName: String?
+        enum CodingKeys: String, CodingKey {
+            case id = "Id"
+            case name = "Name"
+            case sortName = "SortName"
+        }
+    }
+    let items: [Item]?
+    enum CodingKeys: String, CodingKey {
+        case items = "Items"
     }
 }
 
@@ -443,6 +464,67 @@ public final class JellyfinSyncService: Sendable {
         )
     }
 
+    // MARK: - Catalog (sort names)
+
+    /// Album-artist and album sort names exactly as Jellyfin sorts them (Album Artists view + albums).
+    nonisolated public func fetchCatalog(for link: ServerSourceLink, token: String) async throws -> ServerCatalog {
+        let parentIDs = await fetchMusicParentIDs(link: link, token: token)
+        let parents: [String?] = parentIDs.isEmpty ? [nil] : parentIDs.map { Optional($0) }
+        var catalog = ServerCatalog()
+        for parent in parents {
+            for item in try await fetchSortItems(link: link, token: token, path: "Artists/AlbumArtists", parentID: parent, extra: [
+                URLQueryItem(name: "UserId", value: link.userId)
+            ]) {
+                catalog.addArtist(name: item.name, sortName: item.sortName)
+            }
+            for item in try await fetchSortItems(link: link, token: token, path: "Users/\(link.userId)/Items", parentID: parent, extra: [
+                URLQueryItem(name: "IncludeItemTypes", value: "MusicAlbum"),
+                URLQueryItem(name: "Recursive", value: "true")
+            ]) {
+                catalog.addAlbum(key: item.id, title: item.name, sortName: item.sortName)
+            }
+        }
+        return catalog
+    }
+
+    nonisolated private func fetchSortItems(
+        link: ServerSourceLink,
+        token: String,
+        path: String,
+        parentID: String?,
+        extra: [URLQueryItem]
+    ) async throws -> [JellyfinSortItemsResponse.Item] {
+        var all: [JellyfinSortItemsResponse.Item] = []
+        var startIndex = 0
+        let limit = 5_000
+        while true {
+            try Task.checkCancellation()
+            var components = URLComponents(url: link.serverURL.appendingPathComponent(path), resolvingAgainstBaseURL: false)
+            var queryItems = extra + [
+                URLQueryItem(name: "Fields", value: "SortName"),
+                URLQueryItem(name: "EnableImages", value: "false"),
+                URLQueryItem(name: "EnableUserData", value: "false"),
+                URLQueryItem(name: "EnableTotalRecordCount", value: "false"),
+                URLQueryItem(name: "Limit", value: String(limit)),
+                URLQueryItem(name: "StartIndex", value: String(startIndex))
+            ]
+            if let parentID, !parentID.isEmpty {
+                queryItems.append(URLQueryItem(name: "ParentId", value: parentID))
+            }
+            components?.queryItems = queryItems
+            guard let url = components?.url else { throw JellyfinClientError.invalidURL }
+            var request = URLRequest(url: url)
+            request.setValue(JellyfinClient.shared.authHeader(token: token), forHTTPHeaderField: "Authorization")
+            request.timeoutInterval = 45
+            let data = try await Self.performRequest(request, session: session)
+            let page = try JSONDecoder().decode(JellyfinSortItemsResponse.self, from: data).items ?? []
+            all += page
+            if page.count < limit { break }
+            startIndex += page.count
+        }
+        return all
+    }
+
     // MARK: - Parent ID Discovery
 
     nonisolated private func fetchMusicParentIDs(link: ServerSourceLink, token: String) async -> [String] {
@@ -454,6 +536,7 @@ public final class JellyfinSyncService: Sendable {
             request.httpMethod = "GET"
             request.setValue(JellyfinClient.shared.authHeader(token: token), forHTTPHeaderField: "Authorization")
             request.timeoutInterval = 20
+            ServerRequestLog.log(request, caller: "jellyfinSync")
             if let (data, response) = try? await session.data(for: request),
                let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode),
                let views = try? JSONDecoder().decode(JellyfinViewsResponse.self, from: data),
@@ -471,6 +554,7 @@ public final class JellyfinSyncService: Sendable {
         fallbackReq.httpMethod = "GET"
         fallbackReq.setValue(JellyfinClient.shared.authHeader(token: token), forHTTPHeaderField: "Authorization")
         fallbackReq.timeoutInterval = 20
+        ServerRequestLog.log(fallbackReq, caller: "jellyfinSync")
         if let (data, response) = try? await session.data(for: fallbackReq),
            let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode),
            let views = try? JSONDecoder().decode(JellyfinViewsResponse.self, from: data),
@@ -853,7 +937,12 @@ public final class JellyfinSyncService: Sendable {
             artist = item.albumArtist ?? "Unknown Artist"
         }
         let album = item.album ?? "Unknown Album"
-        let albumArtist = item.albumArtists?.first?.name ?? item.albumArtist
+        // Album artists exactly as Jellyfin's Album Artists view lists them.
+        let albumArtistPairs = (item.albumArtists ?? []).filter { !($0.name ?? "").isEmpty }
+        let albumArtistNames = albumArtistPairs.compactMap(\.name)
+        let albumArtist: String? = albumArtistNames.isEmpty ? item.albumArtist : albumArtistNames.joined(separator: ", ")
+        let artistEntityPairs = (item.artistItems ?? []).filter { !($0.name ?? "").isEmpty }
+        let artistEntityNames = artistEntityPairs.compactMap(\.name)
         let genre = item.genres?.first
         let year = item.productionYear
         let trackNumber = item.indexNumber
@@ -959,6 +1048,16 @@ public final class JellyfinSyncService: Sendable {
             )
         }
 
+        let credits = ServerCredits(
+            albumArtists: albumArtistNames.isEmpty ? [item.albumArtist].compactMap { $0 } : albumArtistNames,
+            artists: artistEntityNames.isEmpty ? (item.artists ?? []) : artistEntityNames,
+            artistsAreEntities: true,
+            bitDepth: audioStream?.bitDepth,
+            imageVersion: item.albumPrimaryImageTag ?? item.imageTags?["Primary"],
+            albumArtistIDs: albumArtistPairs.isEmpty ? nil : albumArtistPairs.map(\.id),
+            artistIDs: artistEntityPairs.isEmpty ? nil : artistEntityPairs.map(\.id)
+        )
+
         return Track(
             id: trackID,
             title: name,
@@ -981,7 +1080,8 @@ public final class JellyfinSyncService: Sendable {
             metadataSource: .server,
             tagSnapshot: tagSnap,
             jellyfinItemId: item.id,
-            jellyfinAlbumId: item.albumId
+            jellyfinAlbumId: item.albumId,
+            serverCredits: credits
         )
     }
 

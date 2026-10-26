@@ -37,15 +37,16 @@ public struct ArtistSectionFullListView: View {
     private var activeAlbums: [Album] {
         if let currentArtist = libraryStore.findArtist(name: artistName) {
             let joined = libraryStore.settings.joinedArtists
+            let sections = DiscographyClassifier.sections(for: currentArtist.albums, artistName: currentArtist.name, joinedArtists: joined)
             switch title.uppercased() {
             case "ALBUMS":
-                return currentArtist.albums.filter { $0.isLeadOrCollaborativeAlbum(for: currentArtist.name, joinedArtists: joined) && $0.isStudioAlbum }
+                return sections.albums
             case "SINGLES & EPS":
-                return currentArtist.albums.filter { $0.isLeadOrCollaborativeAlbum(for: currentArtist.name, joinedArtists: joined) && $0.isSingle }
+                return sections.singlesAndEPs
             case "ALTERNATES":
-                return currentArtist.albums.filter { $0.isLeadOrCollaborativeAlbum(for: currentArtist.name, joinedArtists: joined) && ($0.isRemix || $0.isLive) }
+                return sections.alternates
             case "FEATURED ON":
-                return currentArtist.albums.filter { $0.isFeaturedAlbum(for: currentArtist.name, joinedArtists: joined) }
+                return sections.featuredOn
             default:
                 return currentArtist.albums
             }

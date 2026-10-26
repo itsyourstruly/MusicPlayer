@@ -111,8 +111,8 @@ public enum DisambiguationMatcher {
 
         // Album Similarity & Single Detection
         let isAlbumKnown = !MetadataSanitizer.isUnknownAlbum(signature.standardAlbum) && !signature.standardAlbum.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        let isOnlineSingle = online.isSingle || online.album.lowercased().hasSuffix("single") || normalize(DeluxeAlbumDetector.cleanToStandardAlbumName(online.album)) == normOnlineTitle
-        let isLocalSingle = !isAlbumKnown || signature.standardAlbum.lowercased().hasSuffix("single") || normalize(DeluxeAlbumDetector.cleanToStandardAlbumName(signature.standardAlbum)) == normLocalTitle
+        let isOnlineSingle = online.isSingle || DiscographyClassifier.hasSingleOrEPSuffix(online.album) || normalize(DeluxeAlbumDetector.cleanToStandardAlbumName(online.album)) == normOnlineTitle
+        let isLocalSingle = !isAlbumKnown || DiscographyClassifier.hasSingleOrEPSuffix(signature.standardAlbum) || normalize(DeluxeAlbumDetector.cleanToStandardAlbumName(signature.standardAlbum)) == normLocalTitle
 
         var albumSim: Double = 1.0
         if isAlbumKnown && !isLocalSingle {

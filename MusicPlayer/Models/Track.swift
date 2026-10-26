@@ -3,7 +3,7 @@ import CryptoKit
 
 extension UUID {
     /// Generates a deterministic, reproducible UUID from a string (such as a normalized canonical file path).
-    public static func deterministic(from string: String) -> UUID {
+    nonisolated public static func deterministic(from string: String) -> UUID {
         let digest = Insecure.MD5.hash(data: Data(string.utf8))
         var bytes = Array(digest)
         // Set version 3 (MD5-based UUID) and RFC 4122 variant
@@ -115,6 +115,8 @@ nonisolated public struct Track: Identifiable, Codable, Sendable, Hashable {
     public let jellyfinAlbumId: String?
     /// Server-specific artwork identifier (Subsonic coverArt id, Plex thumb path). Nil for Jellyfin (uses item IDs).
     public let serverCoverArtId: String?
+    /// Server-reported artist credits and quality facts (server tracks only).
+    public let serverCredits: ServerCredits?
 
     /// Checks if local bytes can be read without triggering a cloud download or streaming error.
     public var canReadLocalBytes: Bool {
@@ -189,7 +191,8 @@ nonisolated public struct Track: Identifiable, Codable, Sendable, Hashable {
         tagSnapshot: TagSnapshot? = nil,
         jellyfinItemId: String? = nil,
         jellyfinAlbumId: String? = nil,
-        serverCoverArtId: String? = nil
+        serverCoverArtId: String? = nil,
+        serverCredits: ServerCredits? = nil
     ) {
         self.id = id
         self.title = title
@@ -220,6 +223,7 @@ nonisolated public struct Track: Identifiable, Codable, Sendable, Hashable {
         self.jellyfinItemId = jellyfinItemId
         self.jellyfinAlbumId = jellyfinAlbumId
         self.serverCoverArtId = serverCoverArtId
+        self.serverCredits = serverCredits
 
         // N title
         let nTitle = FuzzyMatcher.normalize(title)
@@ -289,6 +293,7 @@ nonisolated public struct Track: Identifiable, Codable, Sendable, Hashable {
         self.jellyfinItemId = try container.decodeIfPresent(String.self, forKey: .jellyfinItemId)
         self.jellyfinAlbumId = try container.decodeIfPresent(String.self, forKey: .jellyfinAlbumId)
         self.serverCoverArtId = try container.decodeIfPresent(String.self, forKey: .serverCoverArtId)
+        self.serverCredits = try container.decodeIfPresent(ServerCredits.self, forKey: .serverCredits)
 
         // Fast-path: deserialize precomputed search tokens if cached, avoiding expensive runtime normalization
         if let nTitle = try container.decodeIfPresent(String.self, forKey: .normalizedTitle),
@@ -317,7 +322,7 @@ nonisolated public struct Track: Identifiable, Codable, Sendable, Hashable {
         // Id option
         case id, title, artist, album, albumArtist, composer, performer, genre, year, trackNumber, originalTrackNumber, deluxeTrackNumber, totalTracks, discNumber, discTotal, duration, url, artworkKey, dateAdded, fileInfo, lyrics, isAlternate, folderID
         case relativePath, metadataSource, tagSnapshot
-        case jellyfinItemId, jellyfinAlbumId, serverCoverArtId
+        case jellyfinItemId, jellyfinAlbumId, serverCoverArtId, serverCredits
         case normalizedTitle, normalizedArtist, normalizedAlbum, searchTokens
     }
 
@@ -354,6 +359,7 @@ nonisolated public struct Track: Identifiable, Codable, Sendable, Hashable {
         try container.encodeIfPresent(jellyfinItemId, forKey: .jellyfinItemId)
         try container.encodeIfPresent(jellyfinAlbumId, forKey: .jellyfinAlbumId)
         try container.encodeIfPresent(serverCoverArtId, forKey: .serverCoverArtId)
+        try container.encodeIfPresent(serverCredits, forKey: .serverCredits)
         try container.encode(normalizedTitle, forKey: .normalizedTitle)
         try container.encode(normalizedArtist, forKey: .normalizedArtist)
         try container.encode(normalizedAlbum, forKey: .normalizedAlbum)
@@ -444,7 +450,8 @@ nonisolated public struct Track: Identifiable, Codable, Sendable, Hashable {
             tagSnapshot: self.tagSnapshot,
             jellyfinItemId: self.jellyfinItemId,
             jellyfinAlbumId: self.jellyfinAlbumId,
-            serverCoverArtId: self.serverCoverArtId
+            serverCoverArtId: self.serverCoverArtId,
+            serverCredits: self.serverCredits
         )
     }
 
@@ -479,7 +486,8 @@ nonisolated public struct Track: Identifiable, Codable, Sendable, Hashable {
             tagSnapshot: self.tagSnapshot,
             jellyfinItemId: self.jellyfinItemId,
             jellyfinAlbumId: self.jellyfinAlbumId,
-            serverCoverArtId: self.serverCoverArtId
+            serverCoverArtId: self.serverCoverArtId,
+            serverCredits: self.serverCredits
         )
     }
 
@@ -514,7 +522,8 @@ nonisolated public struct Track: Identifiable, Codable, Sendable, Hashable {
             tagSnapshot: self.tagSnapshot,
             jellyfinItemId: self.jellyfinItemId,
             jellyfinAlbumId: self.jellyfinAlbumId,
-            serverCoverArtId: self.serverCoverArtId
+            serverCoverArtId: self.serverCoverArtId,
+            serverCredits: self.serverCredits
         )
     }
 
@@ -549,7 +558,8 @@ nonisolated public struct Track: Identifiable, Codable, Sendable, Hashable {
             tagSnapshot: self.tagSnapshot,
             jellyfinItemId: self.jellyfinItemId,
             jellyfinAlbumId: self.jellyfinAlbumId,
-            serverCoverArtId: self.serverCoverArtId
+            serverCoverArtId: self.serverCoverArtId,
+            serverCredits: self.serverCredits
         )
     }
 
@@ -597,7 +607,8 @@ nonisolated public struct Track: Identifiable, Codable, Sendable, Hashable {
             tagSnapshot: self.tagSnapshot,
             jellyfinItemId: self.jellyfinItemId,
             jellyfinAlbumId: self.jellyfinAlbumId,
-            serverCoverArtId: self.serverCoverArtId
+            serverCoverArtId: self.serverCoverArtId,
+            serverCredits: self.serverCredits
         )
     }
 
@@ -635,7 +646,8 @@ nonisolated public struct Track: Identifiable, Codable, Sendable, Hashable {
             tagSnapshot: tagSnapshot ?? self.tagSnapshot,
             jellyfinItemId: self.jellyfinItemId,
             jellyfinAlbumId: self.jellyfinAlbumId,
-            serverCoverArtId: self.serverCoverArtId
+            serverCoverArtId: self.serverCoverArtId,
+            serverCredits: self.serverCredits
         )
     }
 
@@ -670,7 +682,8 @@ nonisolated public struct Track: Identifiable, Codable, Sendable, Hashable {
             tagSnapshot: self.tagSnapshot,
             jellyfinItemId: self.jellyfinItemId,
             jellyfinAlbumId: self.jellyfinAlbumId,
-            serverCoverArtId: self.serverCoverArtId
+            serverCoverArtId: self.serverCoverArtId,
+            serverCredits: self.serverCredits
         )
     }
 
@@ -705,7 +718,8 @@ nonisolated public struct Track: Identifiable, Codable, Sendable, Hashable {
             tagSnapshot: self.tagSnapshot,
             jellyfinItemId: self.jellyfinItemId,
             jellyfinAlbumId: self.jellyfinAlbumId,
-            serverCoverArtId: self.serverCoverArtId
+            serverCoverArtId: self.serverCoverArtId,
+            serverCredits: self.serverCredits
         )
     }
 
@@ -740,7 +754,8 @@ nonisolated public struct Track: Identifiable, Codable, Sendable, Hashable {
             tagSnapshot: self.tagSnapshot,
             jellyfinItemId: self.jellyfinItemId,
             jellyfinAlbumId: self.jellyfinAlbumId,
-            serverCoverArtId: self.serverCoverArtId
+            serverCoverArtId: self.serverCoverArtId,
+            serverCredits: self.serverCredits
         )
     }
 
@@ -783,7 +798,8 @@ nonisolated public struct Track: Identifiable, Codable, Sendable, Hashable {
             tagSnapshot: self.tagSnapshot,
             jellyfinItemId: self.jellyfinItemId,
             jellyfinAlbumId: self.jellyfinAlbumId,
-            serverCoverArtId: self.serverCoverArtId
+            serverCoverArtId: self.serverCoverArtId,
+            serverCredits: self.serverCredits
         )
     }
 
@@ -824,7 +840,8 @@ nonisolated public struct Track: Identifiable, Codable, Sendable, Hashable {
             tagSnapshot: tagSnapshot ?? self.tagSnapshot,
             jellyfinItemId: self.jellyfinItemId,
             jellyfinAlbumId: self.jellyfinAlbumId,
-            serverCoverArtId: self.serverCoverArtId
+            serverCoverArtId: self.serverCoverArtId,
+            serverCredits: self.serverCredits
         )
     }
 
@@ -859,7 +876,8 @@ nonisolated public struct Track: Identifiable, Codable, Sendable, Hashable {
             tagSnapshot: self.tagSnapshot,
             jellyfinItemId: itemId ?? self.jellyfinItemId,
             jellyfinAlbumId: albumId ?? self.jellyfinAlbumId,
-            serverCoverArtId: self.serverCoverArtId
+            serverCoverArtId: self.serverCoverArtId,
+            serverCredits: self.serverCredits
         )
     }
 

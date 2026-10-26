@@ -1310,10 +1310,11 @@ public struct FullScreenPlayerView: View {
             return
         }
 
-        let extracted = await AudioScannerService.extractLyrics(from: track.url)
+        // No file or network I/O on track change: only a result the lyrics view already loaded counts.
+        // Unknown songs keep the lyrics button; the lyrics view reports a miss once it has looked.
+        let cached = await LyricsCache.shared.cachedResult(for: track.id)
         if !Task.isCancelled {
-            let parsed = LyricsParser.parse(extracted)
-            let hasLyrics = !parsed.isEmpty
+            let hasLyrics = cached.map { !LyricsParser.parse($0).isEmpty } ?? true
             withAnimation(.spring(response: 0.42, dampingFraction: 0.82)) {
                 currentTrackHasLyrics = hasLyrics
             }

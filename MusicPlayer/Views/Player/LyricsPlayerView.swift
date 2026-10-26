@@ -14,6 +14,8 @@ public struct LyricsPlayerView: View {
     public let onNoLyricsAvailable: (() -> Void)?
     public let onLyricsAvailabilityChanged: ((Bool) -> Void)?
     public let onExpansionChanged: ((Bool) -> Void)?
+    /// False while the hosting player is collapsed; server lyrics are only fetched when visible.
+    public let isVisible: Bool
 
     private var currentTime: TimeInterval {
         playerService?.currentTime ?? explicitCurrentTime ?? 0
@@ -29,6 +31,7 @@ public struct LyricsPlayerView: View {
         playerService: AudioPlayerService,
         rawLyrics: String? = nil,
         trackURL: URL? = nil,
+        isVisible: Bool = true,
         duration: TimeInterval,
         foregroundColor: Color = .white,
         secondaryForegroundColor: Color = .white.opacity(0.65),
@@ -48,11 +51,13 @@ public struct LyricsPlayerView: View {
         self.onNoLyricsAvailable = onNoLyricsAvailable
         self.onLyricsAvailabilityChanged = onLyricsAvailabilityChanged
         self.onExpansionChanged = onExpansionChanged
+        self.isVisible = isVisible
     }
 
     public init(
         rawLyrics: String? = nil,
         trackURL: URL? = nil,
+        isVisible: Bool = true,
         currentTime: TimeInterval,
         duration: TimeInterval,
         foregroundColor: Color = .white,
@@ -73,6 +78,7 @@ public struct LyricsPlayerView: View {
         self.onNoLyricsAvailable = onNoLyricsAvailable
         self.onLyricsAvailabilityChanged = onLyricsAvailabilityChanged
         self.onExpansionChanged = onExpansionChanged
+        self.isVisible = isVisible
     }
 
     public var body: some View {
@@ -120,12 +126,22 @@ public struct LyricsPlayerView: View {
         .onChange(of: trackURL) { _, _ in
             fetchLyricsIfNeeded()
         }
+        .onChange(of: isVisible) { _, visible in
+            if visible { fetchLyricsIfNeeded() }
+        }
+        .onChange(of: isPlayingNow) { _, playing in
+            if playing { fetchLyricsIfNeeded() }
+        }
         .onChange(of: currentTime) { _, newTime in
             updateActiveIndex(for: newTime)
         }
         .onDisappear {
             lyricsLoadTask?.cancel()
         }
+    }
+
+    private var isPlayingNow: Bool {
+        (playerService ?? AudioPlayerService.shared)?.playbackStatus.isPlaying == true
     }
 
     private func fetchLyricsIfNeeded() {
@@ -154,9 +170,29 @@ public struct LyricsPlayerView: View {
             return
         }
 
+        // The playing song, when this view shows it: lookups go through the shared per-song cache.
+        let service = playerService ?? AudioPlayerService.shared
+        let currentTrack = service?.currentTrack.flatMap { $0.url == url ? $0 : nil }
+        let isServerTrack = currentTrack.map { $0.isJellyfinItem || $0.metadataSource == .server } ?? !url.isFileURL
+        // Server lyrics are only requested while the song plays and this view is on screen.
+        let mayFetchFromServer = isVisible && isPlayingNow
+
         isLoadingLyrics = true
         lyricsLoadTask = Task { @MainActor in
-            let extracted = await AudioScannerService.extractLyrics(from: url)
+            let extracted: String?
+            if let currentTrack {
+                if let cached = await LyricsCache.shared.cachedResult(for: currentTrack.id) {
+                    extracted = cached
+                } else if isServerTrack && !mayFetchFromServer {
+                    return // Retried by onChange(isVisible / isPlayingNow).
+                } else {
+                    extracted = await LyricsCache.shared.lyrics(for: currentTrack)
+                }
+            } else if url.isFileURL {
+                extracted = await AudioScannerService.extractLyrics(from: url)
+            } else {
+                extracted = nil
+            }
             if !Task.isCancelled {
                 let parsedResult = LyricsParser.parse(extracted)
                 if case .empty = parsedResult {

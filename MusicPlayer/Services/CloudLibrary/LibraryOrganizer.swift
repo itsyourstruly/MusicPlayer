@@ -13,9 +13,9 @@ nonisolated public enum LibraryOrganizer: Sendable {
         layout: FolderHierarchyLayout = .auto,
         rootFolderName: String? = nil
     ) -> Track {
-        // Jellyfin tracks are ALWAYS folder-organized (smart AUTO layout), regardless of the local mode.
+        // Media-server tracks mirror the server's organization, independent of the local mode.
         if track.isJellyfinItem {
-            return organizeJellyfin(track: track, override: override)
+            return organizeServer(track: track, override: override)
         }
         let effectiveMode: LibraryScanMethod = mode
 
@@ -114,20 +114,9 @@ nonisolated public enum LibraryOrganizer: Sendable {
         )
     }
 
-    /// Server-relative folder path usable for Jellyfin folder organization, or nil when the track has
-    /// no genuine path (legacy lowercased/synthesized paths) or sits directly in the library root.
-    public static func jellyfinFolderPath(for track: Track) -> String? {
-        guard track.isJellyfinItem, let rel = track.relativePath, !rel.isEmpty else { return nil }
-        // Legacy syncs stored lowercased (or metadata-synthesized) paths; those can't name folders.
-        guard rel != rel.lowercased() else { return nil }
-        let folders = rel.split(separator: "/", omittingEmptySubsequences: true)
-        guard folders.count >= 2 else { return nil }
-        return rel
-    }
-
-    /// Jellyfin: artist/album/title/track/disc from the server folder path (AUTO layout);
-    /// falls back to the server metadata snapshot when no usable path exists.
-    private static func organizeJellyfin(track: Track, override: TrackMetadataOverride?) -> Track {
+    /// Media-server tracks mirror the server's own metadata verbatim (the snapshot taken at sync);
+    /// only the user's manual edits are layered on top. No folder-path parsing.
+    private static func organizeServer(track: Track, override: TrackMetadataOverride?) -> Track {
         let server = track.tagSnapshot
         var baseTitle = server?.title ?? track.title
         var baseArtist = server?.artist ?? track.artist
@@ -136,17 +125,6 @@ nonisolated public enum LibraryOrganizer: Sendable {
         var baseYear = server?.year ?? track.year
         var baseTrackNumber = server?.trackNumber ?? track.trackNumber
         var baseDiscNumber = server?.discNumber ?? track.discNumber
-
-        if let folderPath = jellyfinFolderPath(for: track) {
-            let parsed = FolderPathMetadataParser.parse(relativePath: folderPath, layout: .auto)
-            baseTitle = parsed.title
-            baseArtist = parsed.artist
-            baseAlbum = parsed.album
-            baseAlbumArtist = parsed.albumArtist
-            baseYear = parsed.year ?? baseYear
-            baseTrackNumber = parsed.trackNumber ?? baseTrackNumber
-            baseDiscNumber = parsed.discNumber ?? baseDiscNumber
-        }
 
         if let ov = override {
             if let t = ov.title, !t.isEmpty { baseTitle = t }

@@ -51,7 +51,16 @@ nonisolated enum ServerChangeDiff {
         [t.title, t.artist, t.album, t.albumArtist ?? "", t.genre ?? "", String(t.year ?? 0),
          String(t.trackNumber ?? 0), String(t.discNumber ?? 0), String(Int(t.duration.rounded())),
          t.relativePath ?? "", t.artworkKey ?? "", t.serverCoverArtId ?? "", t.url.absoluteString,
-         t.fileInfo?.fileExtension ?? "", String(t.fileInfo?.fileSizeBytes ?? 0)].joined(separator: "\u{1F}")
+         t.fileInfo?.fileExtension ?? "", String(t.fileInfo?.fileSizeBytes ?? 0), credits(t.serverCredits)].joined(separator: "\u{1F}")
+    }
+
+    /// Credits are part of the signature so credit changes (and the first credits-aware sync) upsert the track.
+    private static func credits(_ c: ServerCredits?) -> String {
+        guard let c else { return "-" }
+        return [c.albumArtists.joined(separator: "\u{1E}"), c.artists.joined(separator: "\u{1E}"),
+                c.artistsAreEntities ? "1" : "0", String(c.bitDepth ?? 0), c.imageVersion ?? "",
+                (c.albumArtistIDs ?? []).joined(separator: "\u{1E}"), (c.artistIDs ?? []).joined(separator: "\u{1E}"),
+                String(c.version ?? 1)].joined(separator: "\u{1D}")
     }
 }
 

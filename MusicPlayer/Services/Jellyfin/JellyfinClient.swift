@@ -12,6 +12,14 @@ public enum JellyfinClientError: LocalizedError, Sendable, Equatable {
     case networkError(String)
     case invalidResponse
     case localNetworkDenied
+    /// The address could not be reached or is not a supported server (shown on the URL field).
+    case unreachable(String)
+    /// Jellyfin answered 401 to AuthenticateByName (wrong credentials, disabled user or remote access denied).
+    case signInRejected
+    /// Stored token/credentials were rejected after sign-in (revoked or expired).
+    case reauthRequired
+    /// The attempt was cancelled by the user or the system; never shown.
+    case cancelled
 
     public var errorDescription: String? {
         switch self {
@@ -19,12 +27,37 @@ public enum JellyfinClientError: LocalizedError, Sendable, Equatable {
             return "INVALID SERVER ADDRESS"
         case .authenticationFailed(let reason):
             return reason.uppercased()
-        case .networkError(let reason):
+        case .networkError(let reason), .unreachable(let reason):
             return reason.uppercased()
         case .invalidResponse:
             return "UNEXPECTED SERVER RESPONSE"
         case .localNetworkDenied:
-            return "LOCAL NETWORK ACCESS IS OFF"
+            return "LOCAL NETWORK ACCESS DENIED"
+        case .signInRejected:
+            return "SIGN-IN REJECTED: CHECK USERNAME/PASSWORD"
+        case .reauthRequired:
+            return "SIGN IN AGAIN: THE SERVER NO LONGER ACCEPTS THIS LOGIN"
+        case .cancelled:
+            return nil
+        }
+    }
+
+    /// Secondary line for errors whose cause the server does not disclose.
+    public var hint: String? {
+        switch self {
+        case .signInRejected: return "OR THE ACCOUNT IS DISABLED / REMOTE ACCESS IS NOT ALLOWED FOR THIS USER"
+        default: return nil
+        }
+    }
+
+    public enum Field: Sendable { case url, credentials }
+
+    /// Sign-in form field the error belongs to.
+    public var field: Field? {
+        switch self {
+        case .invalidURL, .unreachable: return .url
+        case .authenticationFailed, .signInRejected: return .credentials
+        default: return nil
         }
     }
 }
@@ -34,20 +67,23 @@ public enum JellyfinClientError: LocalizedError, Sendable, Equatable {
 public final class JellyfinClient: Sendable {
     nonisolated public static let shared = JellyfinClient()
 
-    /// Dedicated session with waitsForConnectivity enabled so requests don't fail while the Local Network prompt is presented.
-    public static let dedicatedSession: URLSession = {
+    /// Interactive session (sign-in, ping, logout, delete): fails fast instead of waiting for connectivity.
+    /// waitsForConnectivity would suspend the request timeout until a route exists, leaving only the
+    /// resource timeout, so an unroutable host (VPN off, LAN address away from home) hung sign-in for minutes.
+    nonisolated public static let dedicatedSession: URLSession = {
         let config = URLSessionConfiguration.default
-        config.waitsForConnectivity = true
-        config.timeoutIntervalForRequest = 60
-        config.timeoutIntervalForResource = 300
+        config.waitsForConnectivity = false
+        config.timeoutIntervalForRequest = 10
+        config.timeoutIntervalForResource = 20
         return URLSession(configuration: config)
     }()
 
-    /// Dedicated session for library syncing with waitsForConnectivity disabled and tighter request timeouts to avoid VPN stalls.
-    public static let syncSession: URLSession = {
+    /// Library sync/API session: no connectivity waiting; a stalled transfer fails after 30 s without data.
+    /// The resource cap still allows large paged JSON responses on slow links.
+    nonisolated public static let syncSession: URLSession = {
         let config = URLSessionConfiguration.default
         config.waitsForConnectivity = false
-        config.timeoutIntervalForRequest = 45
+        config.timeoutIntervalForRequest = 30
         config.timeoutIntervalForResource = 300
         return URLSession(configuration: config)
     }()
@@ -78,7 +114,7 @@ public final class JellyfinClient: Sendable {
 
     // MARK: - URL Normalization & Local Host Detection
 
-    public static func normalizeServerURL(_ input: String) -> URL? {
+    nonisolated public static func normalizeServerURL(_ input: String) -> URL? {
         var str = input.trimmingCharacters(in: .whitespacesAndNewlines)
         while str.hasSuffix("/") {
             str.removeLast()
@@ -102,7 +138,7 @@ public final class JellyfinClient: Sendable {
         return components.url
     }
 
-    public static func isTailscaleOrVPNHost(_ host: String) -> Bool {
+    nonisolated public static func isTailscaleOrVPNHost(_ host: String) -> Bool {
         let lower = host.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         if lower.hasSuffix(".ts.net") || lower.hasSuffix(".tailscale.net") {
             return true
@@ -119,7 +155,7 @@ public final class JellyfinClient: Sendable {
         return false
     }
 
-    public static func isLocalHost(_ host: String) -> Bool {
+    nonisolated public static func isLocalHost(_ host: String) -> Bool {
         let lower = host.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         // Tailscale and VPN overlay networks do not require iOS local network permission
         if isTailscaleOrVPNHost(lower) {
@@ -214,9 +250,10 @@ public final class JellyfinClient: Sendable {
             }
             #endif
 
-            // Safety fallback timeout: reduced to 2.5 seconds so remote/VPN hostnames never freeze execution
+            // Safety fallback: give the first-run Local Network prompt time to be answered (the caller's
+            // sign-in deadline still bounds the whole attempt); an unreachable host just proceeds to HTTP.
             Task {
-                try? await Task.sleep(nanoseconds: 2_500_000_000)
+                try? await Task.sleep(nanoseconds: 6_000_000_000)
                 resumeOnce(with: .success(()))
             }
 
@@ -226,50 +263,71 @@ public final class JellyfinClient: Sendable {
 
     // MARK: - Error Mapping
 
-    public static func mapNetworkError(_ error: Error) -> JellyfinClientError {
+    nonisolated public static func mapNetworkError(_ error: Error) -> JellyfinClientError {
         if let clientErr = error as? JellyfinClientError {
             return clientErr
         }
+        if error is CancellationError { return .cancelled }
+        if error is ServerDeadline.Exceeded { return .unreachable("SERVER DID NOT RESPOND (TIMED OUT)") }
         if let httpErr = error as? ServerHTTPError {
             switch httpErr {
             case .status(let code): return mapHTTPStatusError(code)
             case .invalidResponse: return .invalidResponse
+            case .serverStarting: return .networkError("SERVER IS STARTING UP, TRY AGAIN SHORTLY")
             }
+        }
+        if error is DecodingError {
+            return .unreachable("NOT A SUPPORTED SERVER (CHECK ADDRESS/PATH)")
         }
 
         if let urlErr = error as? URLError {
+            let host = urlErr.failingURL?.host ?? ""
+            let vpnHint = isTailscaleOrVPNHost(host) ? " - IS TAILSCALE/VPN CONNECTED?" : ""
             switch urlErr.code {
+            case .cancelled:
+                return .cancelled
             case .timedOut:
-                return .networkError("SERVER DIDN'T RESPOND")
-            case .cannotConnectToHost:
-                return .networkError("SERVER REFUSED THE CONNECTION, CHECK THE ADDRESS AND PORT")
+                return .unreachable("SERVER DID NOT RESPOND (TIMED OUT)" + vpnHint)
+            case .cannotConnectToHost, .networkConnectionLost:
+                return .unreachable("CANNOT REACH SERVER (CHECK ADDRESS, PORT AND THAT IT IS RUNNING)" + vpnHint)
             case .cannotFindHost, .dnsLookupFailed:
-                return .networkError("ADDRESS NOT FOUND")
-            case .notConnectedToInternet, .networkConnectionLost:
-                return .networkError("NO NETWORK")
-            case .secureConnectionFailed,
-                 .serverCertificateHasBadDate,
+                if host.lowercased().hasSuffix(".plex.direct") {
+                    return .unreachable("ROUTER IS BLOCKING PLEX SECURE CONNECTIONS (DNS REBINDING)")
+                }
+                return .unreachable("SERVER NOT FOUND (CHECK ADDRESS)" + vpnHint)
+            case .notConnectedToInternet, .dataNotAllowed, .internationalRoamingOff:
+                return .networkError("NO INTERNET CONNECTION")
+            case .serverCertificateHasBadDate,
                  .serverCertificateUntrusted,
                  .serverCertificateHasUnknownRoot,
-                 .serverCertificateNotYetValid,
-                 .clientCertificateRejected,
-                 .clientCertificateRequired:
-                return .networkError("CERTIFICATE ERROR - USE A VALID CERTIFICATE (E.G. LET'S ENCRYPT) OR HTTP")
+                 .serverCertificateNotYetValid:
+                return .unreachable("CERTIFICATE NOT TRUSTED - USE A VALID CERTIFICATE (E.G. LET'S ENCRYPT) OR HTTP ON YOUR LAN")
+            case .secureConnectionFailed, .clientCertificateRejected, .clientCertificateRequired:
+                return .unreachable("SECURE CONNECTION FAILED")
+            case .appTransportSecurityRequiresSecureConnection:
+                return .unreachable("INSECURE CONNECTION BLOCKED")
+            case .badURL, .unsupportedURL:
+                return .invalidURL
+            case .badServerResponse, .cannotParseResponse, .cannotDecodeContentData, .cannotDecodeRawData:
+                return .unreachable("NOT A SUPPORTED SERVER (CHECK ADDRESS/PATH)")
             default:
-                return .networkError(urlErr.localizedDescription.uppercased())
+                return .networkError("CONNECTION FAILED (\(urlErr.code.rawValue))")
             }
         }
 
-        return .networkError(error.localizedDescription.uppercased())
+        return .networkError("CONNECTION FAILED")
     }
 
-    public static func mapHTTPStatusError(_ statusCode: Int) -> JellyfinClientError {
-        if statusCode == 401 {
-            return .authenticationFailed("HTTP 401: WRONG USERNAME OR PASSWORD")
-        } else if statusCode == 404 {
-            return .networkError("HTTP 404: WRONG ADDRESS")
-        } else {
-            return .networkError("HTTP STATUS \(statusCode)")
+    /// Maps a non-2xx status from an authenticated call. 401/498 mean the stored login is no longer valid.
+    nonisolated public static func mapHTTPStatusError(_ statusCode: Int) -> JellyfinClientError {
+        switch statusCode {
+        case 401, 498: return .reauthRequired
+        case 403: return .authenticationFailed("ACCESS DENIED BY SERVER")
+        case 404: return .unreachable("NOT A SUPPORTED SERVER (CHECK ADDRESS/PATH)")
+        case 429: return .networkError("SERVER BUSY, TRY AGAIN SHORTLY")
+        case 502, 503, 504: return .networkError("SERVER UNAVAILABLE (PROXY ERROR \(statusCode))")
+        case 500...599: return .networkError("SERVER ERROR \(statusCode)")
+        default: return .networkError("UNEXPECTED SERVER RESPONSE (HTTP \(statusCode))")
         }
     }
 
@@ -283,6 +341,7 @@ public final class JellyfinClient: Sendable {
         request.timeoutInterval = 10
 
         do {
+            ServerRequestLog.log(request, caller: "jellyfinClient")
             let (data, response) = try await session.data(for: request)
             guard let http = response as? HTTPURLResponse else {
                 throw JellyfinClientError.invalidResponse
@@ -304,6 +363,18 @@ public final class JellyfinClient: Sendable {
 
     // MARK: - Authenticate
 
+    /// Oldest Jellyfin release whose API this client relies on.
+    nonisolated static let minimumVersion = [10, 8]
+
+    nonisolated static func meetsMinimumVersion(_ version: String) -> Bool {
+        let parts = version.split(separator: ".").map { Int($0.prefix { $0.isNumber }) ?? 0 }
+        for (i, required) in minimumVersion.enumerated() {
+            let have = i < parts.count ? parts[i] : 0
+            if have != required { return have > required }
+        }
+        return true
+    }
+
     public func authenticate(
         serverURL: URL,
         username: String,
@@ -323,12 +394,22 @@ public final class JellyfinClient: Sendable {
         probeRequest.timeoutInterval = 10
 
         do {
-            let (_, probeResponse) = try await session.data(for: probeRequest)
+            ServerRequestLog.log(probeRequest, caller: "jellyfinClient")
+            let (probeData, probeResponse) = try await session.data(for: probeRequest)
             guard let http = probeResponse as? HTTPURLResponse else {
                 throw JellyfinClientError.invalidResponse
             }
+            if http.statusCode == 503 && http.value(forHTTPHeaderField: "Message") != nil {
+                throw ServerHTTPError.serverStarting
+            }
             guard (200...299).contains(http.statusCode) else {
                 throw Self.mapHTTPStatusError(http.statusCode)
+            }
+            guard let info = try? JSONSerialization.jsonObject(with: probeData) as? [String: Any], info["Id"] is String else {
+                throw JellyfinClientError.unreachable("NOT A JELLYFIN SERVER (CHECK ADDRESS/PATH)")
+            }
+            if let version = info["Version"] as? String, !Self.meetsMinimumVersion(version) {
+                throw JellyfinClientError.networkError("SERVER TOO OLD (JELLYFIN \(Self.minimumVersion.map(String.init).joined(separator: ".")) OR NEWER REQUIRED)")
             }
         } catch {
             throw Self.mapNetworkError(error)
@@ -347,35 +428,23 @@ public final class JellyfinClient: Sendable {
         ]
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
-        var authData: Data?
-        var authResponse: URLResponse?
-        var lastError: Error?
-
-        for attempt in 0..<2 {
-            do {
-                let (data, response) = try await session.data(for: request)
-                authData = data
-                authResponse = response
-                break
-            } catch let urlErr as URLError where urlErr.code == .timedOut {
-                lastError = urlErr
-                if attempt == 0 {
-                    try? await Task.sleep(nanoseconds: 500_000_000)
-                    continue
-                }
-            } catch {
-                lastError = error
-                break
-            }
+        // Single attempt: the reachability probe above just succeeded, and retrying a timed-out
+        // sign-in only doubles the wait. The caller bounds the whole attempt with a deadline.
+        let data: Data
+        let http: HTTPURLResponse
+        do {
+            ServerRequestLog.log(request, caller: "jellyfinClient")
+            let (d, response) = try await session.data(for: request)
+            guard let h = response as? HTTPURLResponse else { throw JellyfinClientError.invalidResponse }
+            data = d
+            http = h
+        } catch {
+            throw Self.mapNetworkError(error)
         }
 
-        guard let data = authData, let http = authResponse as? HTTPURLResponse else {
-            if let err = lastError {
-                throw Self.mapNetworkError(err)
-            }
-            throw JellyfinClientError.networkError("SERVER DIDN'T RESPOND")
-        }
-
+        // Jellyfin 10.6+ answers 401 for wrong credentials, disabled users, remote access denied and
+        // parental schedules alike, so the message covers all of them.
+        if http.statusCode == 401 { throw JellyfinClientError.signInRejected }
         guard (200...299).contains(http.statusCode) else {
             throw Self.mapHTTPStatusError(http.statusCode)
         }
@@ -412,6 +481,7 @@ public final class JellyfinClient: Sendable {
         request.setValue(authHeader(token: token), forHTTPHeaderField: "Authorization")
         request.timeoutInterval = 5
 
+        ServerRequestLog.log(request, caller: "jellyfinClient")
         _ = try? await session.data(for: request)
         ServerCredentialStore.deleteCredentials(for: link)
     }
@@ -431,6 +501,7 @@ public final class JellyfinClient: Sendable {
         request.timeoutInterval = 15
 
         do {
+            ServerRequestLog.log(request, caller: "jellyfinClient")
             let (_, response) = try await session.data(for: request)
             guard let http = response as? HTTPURLResponse else {
                 throw JellyfinClientError.invalidResponse

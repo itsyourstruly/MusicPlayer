@@ -1,86 +1,60 @@
 import SwiftUI
 
-/// Searchable sheet displaying organized equalizer presets across Sound Signatures and Headphones.
+/// Sheet listing user-saved equalizer presets: SAVE stores the current EQ; long-press a preset to RENAME or DELETE.
 public struct EqualizerPresetsSheetView: View {
     @Bindable var equalizerManager: EqualizerManager
     @Environment(\.dismiss) private var dismiss
     @Environment(\.appTheme) private var appTheme
-    @State private var selectedSection: EqualizerPresetSection = .soundSignatures
-    @State private var searchQuery: String = ""
+    @State private var renameTarget: EqualizerPreset? = nil
+    @State private var renameText: String = ""
 
     public init(equalizerManager: EqualizerManager) {
         self.equalizerManager = equalizerManager
     }
 
-    /// Presets matching current search query
-    private var filteredPresets: [EqualizerPreset] {
-        let clean = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if clean.isEmpty {
-            switch selectedSection {
-            case .soundSignatures:
-                return EqualizerPreset.soundSignaturesPresets
-            case .headphones:
-                return EqualizerPreset.headphonesPresets
-            }
-        }
-        return EqualizerPreset.builtInPresets.filter {
-            $0.name.lowercased().contains(clean) ||
-            $0.group.lowercased().contains(clean) ||
-            $0.description.lowercased().contains(clean)
-        }
-    }
-
-    /// Groups within the filtered results
-    private var groupedPresets: [(group: String, presets: [EqualizerPreset])] {
-        var groups: [String: [EqualizerPreset]] = [:]
-        var groupOrder: [String] = []
-
-        for preset in filteredPresets {
-            if groups[preset.group] == nil {
-                groupOrder.append(preset.group)
-                groups[preset.group] = []
-            }
-            groups[preset.group]?.append(preset)
-        }
-
-        return groupOrder.compactMap { groupName in
-            guard let items = groups[groupName], !items.isEmpty else { return nil }
-            return (group: groupName, presets: items)
-        }
-    }
-
     public var body: some View {
         NavigationStack {
-            VStack(spacing: 0) {
-                // Section Picker (when not searching)
-                if searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    Picker("Section", selection: $selectedSection) {
-                        ForEach(EqualizerPresetSection.allCases) { section in
-                            Text(section.rawValue).tag(section)
-                        }
+            List {
+                Section {
+                    Button {
+                        HapticFeedback.notificationSuccess()
+                        equalizerManager.saveCurrentAsPreset()
+                    } label: {
+                        Text("SAVE")
+                            .font(.system(size: 14, weight: .bold, design: .monospaced))
+                            .foregroundStyle(appTheme.accentColor)
+                            .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    .pickerStyle(.segmented)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 8)
                 }
 
-                List {
-                    ForEach(groupedPresets, id: \.group) { section in
-                        Section(header: Text(section.group.uppercased())
-                            .font(.system(size: 11, weight: .bold, design: .monospaced))
-                            .foregroundStyle(appTheme.accentColor)
-                        ) {
-                            ForEach(section.presets) { preset in
-                                presetRow(preset)
-                            }
+                Section {
+                    if equalizerManager.userPresets.isEmpty {
+                        Text("NO SAVED PRESETS")
+                            .font(.system(size: 12, weight: .bold, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                    } else {
+                        ForEach(equalizerManager.userPresets) { preset in
+                            presetRow(preset)
                         }
                     }
                 }
-                .listStyle(.insetGrouped)
             }
+            .listStyle(.insetGrouped)
             .navigationTitle("PRESETS")
             .navigationBarTitleDisplayMode(.inline)
-            .searchable(text: $searchQuery, prompt: "Search models, brands, signatures...")
+            .alert("RENAME", isPresented: Binding(
+                get: { renameTarget != nil },
+                set: { if !$0 { renameTarget = nil } }
+            )) {
+                TextField("NAME", text: $renameText)
+                Button("CANCEL", role: .cancel) { renameTarget = nil }
+                Button("SAVE") {
+                    if let target = renameTarget {
+                        equalizerManager.renamePreset(id: target.id, to: renameText)
+                    }
+                    renameTarget = nil
+                }
+            }
         }
         .presentationDetents([.medium, .large])
     }
@@ -98,7 +72,7 @@ public struct EqualizerPresetsSheetView: View {
             VStack(alignment: .leading, spacing: 6) {
                 HStack(alignment: .center) {
                     Text(preset.name)
-                        .font(.system(size: 14, weight: .semibold))
+                        .font(.system(size: 14, weight: .bold, design: .monospaced))
                         .foregroundStyle(isApplied ? appTheme.accentColor : Color.primary)
                         .lineLimit(2)
 
@@ -119,18 +93,23 @@ public struct EqualizerPresetsSheetView: View {
                     }
                 }
 
-                Text(preset.description)
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-
-                // Mini EQ 10-Band Frequency Response Line Graph Preview
                 miniLineGraphView(gains: preset.gains, isApplied: isApplied)
                     .padding(.top, 4)
             }
             .padding(.vertical, 4)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .contextMenu {
+            Button("RENAME") {
+                renameText = preset.name
+                renameTarget = preset
+            }
+            Button("DELETE", role: .destructive) {
+                HapticFeedback.selectionChanged()
+                equalizerManager.deletePreset(id: preset.id)
+            }
+        }
     }
 
     /// Miniature 10-band interactive line graph preview illustrating exact frequency response curve

@@ -83,6 +83,12 @@ public struct TrackInfoSheetView: View {
 
                         trackActionsSection
                     }
+
+                    Divider()
+                        .overlay(appTheme.separatorColor.opacity(0.4))
+
+                    // MARK: - 6. Spectrogram (tap to render, in-memory only)
+                    SpectrogramSectionView(track: currentTrack)
                 }
                 .padding(.horizontal, 20)
                 .padding(.vertical, 20)
@@ -114,16 +120,18 @@ public struct TrackInfoSheetView: View {
                 Text("This track will be hidden from your library and will not appear in the app. The audio file itself will remain intact.")
             }
             .alert(
-                currentTrack.isJellyfinItem || currentTrack.metadataSource == .server ? "DELETE FROM JELLYFIN?" : "DELETE TRACK PERMANENTLY?",
+                deleteAlertTitle,
                 isPresented: $showingDeleteConfirmation
             ) {
                 Button("CANCEL", role: .cancel) {}
-                Button("DELETE", role: .destructive) {
+                Button(isServerTrack && !deletesOnServer ? "REMOVE" : "DELETE", role: .destructive) {
                     performDeleteTrack()
                 }
             } message: {
-                if currentTrack.isJellyfinItem || currentTrack.metadataSource == .server {
-                    Text("Are you sure you want to permanently delete \"\(currentTrack.title)\" from your Jellyfin server? This will delete the file on the server.")
+                if isServerTrack && deletesOnServer {
+                    Text("Are you sure you want to permanently delete \"\(currentTrack.title)\" from \(serverDescription)? This will delete the file on the server.")
+                } else if isServerTrack {
+                    Text("\"\(currentTrack.title)\" stays on \(serverDescription). It will be removed from this app's library, and its download on this phone will be deleted.")
                 } else {
                     Text("Are you sure you want to permanently delete \"\(currentTrack.title)\" from your device? This will delete the audio file itself and cannot be undone.")
                 }
@@ -319,10 +327,10 @@ public struct TrackInfoSheetView: View {
 
                 if currentTrack.isCloudItem {
                     infoRow(label: "STORAGE TYPE", value: currentTrack.isCloudDownloaded ? "ICLOUD (DOWNLOADED)" : "ICLOUD (ON-DEMAND)")
-                } else if currentTrack.isJellyfinItem {
-                    infoRow(label: "STORAGE TYPE", value: "JELLYFIN REMOTE")
+                } else if isServerTrack {
+                    infoRow(label: "STORAGE TYPE", value: serverStorageLabel)
                 } else {
-                    infoRow(label: "STORAGE TYPE", value: "LOCAL STORAGE")
+                    infoRow(label: "STORAGE TYPE", value: "ON THIS PHONE")
                 }
 
                 if let relPath = currentTrack.relativePath {
@@ -511,7 +519,7 @@ public struct TrackInfoSheetView: View {
             Button(action: {
                 showingDeleteConfirmation = true
             }) {
-                Text("DELETE TRACK")
+                Text(isServerTrack && !deletesOnServer ? "REMOVE FROM LIBRARY" : "DELETE TRACK")
                     .font(.system(size: 13, weight: .bold, design: .monospaced))
                     .foregroundStyle(Color.red)
             }
@@ -520,6 +528,42 @@ public struct TrackInfoSheetView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.top, 4)
+    }
+
+    // MARK: - Server Source
+
+    private var isServerTrack: Bool {
+        currentTrack.isJellyfinItem || currentTrack.metadataSource == .server
+    }
+
+    /// The song's own linked server (`folderID` = source ID); nil when that source is no longer linked.
+    private var serverLink: ServerSourceLink? {
+        guard isServerTrack, let folderID = currentTrack.folderID else { return nil }
+        return libraryStore?.settings.serverSources.first { $0.id == folderID }
+    }
+
+    /// Only Jellyfin servers delete the file; every other server keeps it and the song is only hidden here.
+    private var deletesOnServer: Bool {
+        serverLink?.kind == .jellyfin
+    }
+
+    /// Server name and type, e.g. "HOME (NAVIDROME)".
+    private var serverDescription: String {
+        guard let link = serverLink else { return "THE SERVER (NO LONGER LINKED)" }
+        let name = link.serverName.uppercased()
+        return name == link.displayLabel ? name : "\(name) (\(link.displayLabel))"
+    }
+
+    private var serverStorageLabel: String {
+        if JellyfinDownloadManager.shared.isDownloaded(trackId: currentTrack.id) {
+            return "DOWNLOADED FROM \(serverDescription)"
+        }
+        return serverDescription
+    }
+
+    private var deleteAlertTitle: String {
+        guard isServerTrack else { return "DELETE TRACK PERMANENTLY?" }
+        return deletesOnServer ? "DELETE FROM \(serverDescription)?" : "REMOVE FROM LIBRARY?"
     }
 
     private func performRemoveFromLibrary() {

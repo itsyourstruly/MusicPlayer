@@ -100,8 +100,7 @@ public struct OnlineTrackMetadata: Identifiable, Codable, Sendable, Hashable {
     /// Indicates whether this online candidate belongs to a standalone single/EP release rather than a full studio album.
     public var isSingle: Bool {
         // Lower
-        let lower = album.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-        if lower == "single" || lower.hasSuffix(" - single") || lower.hasSuffix(" (single)") || lower.hasSuffix(" [single]") || lower.hasSuffix(" - ep") || lower.hasSuffix(" (ep)") {
+        if DiscographyClassifier.hasSingleOrEPSuffix(album) {
             return true
         }
         if let count = totalTracks, count <= 2, count > 0 {
@@ -162,18 +161,22 @@ public struct MetadataDiff: Identifiable, Codable, Sendable, Hashable {
 
     /// Indicates if this record represents a single release.
     public var isSingleRelease: Bool {
-        if onlineMetadata.isSingle { return true }
-        let onlineAlbumLower = onlineMetadata.album.lowercased()
-        if onlineAlbumLower.hasSuffix(" - single") || onlineAlbumLower.hasSuffix(" (single)") || onlineAlbumLower.hasSuffix(" [single]") || onlineAlbumLower == "single" {
+        Self.isSingleRelease(online: onlineMetadata, localAlbum: localTrack.album, title: onlineMetadata.title)
+    }
+
+    /// Shared tag-writing rule (also used by LibraryStore). Only single-style names count here, never " - EP":
+    /// online or local album with a single suffix, an online release of 1–2 tracks, or an online album named after
+    /// `title` with at most 2 (or unknown) tracks.
+    public static func isSingleRelease(online: OnlineTrackMetadata, localAlbum: String, title: String) -> Bool {
+        if DiscographyClassifier.hasSingleSuffix(online.album) || DiscographyClassifier.hasSingleSuffix(localAlbum) {
             return true
         }
-        let localAlbumLower = localTrack.album.lowercased()
-        if localAlbumLower.hasSuffix(" - single") || localAlbumLower.hasSuffix(" (single)") || localAlbumLower == "single" {
+        if let count = online.totalTracks, count > 0, count <= 2 {
             return true
         }
-        let cleanOnlineAlbum = DeluxeAlbumDetector.cleanToStandardAlbumName(onlineMetadata.album).lowercased()
-        let cleanOnlineTitle = DeluxeAlbumDetector.cleanToStandardAlbumName(onlineMetadata.title).lowercased()
-        if !cleanOnlineTitle.isEmpty && cleanOnlineAlbum == cleanOnlineTitle && (onlineMetadata.totalTracks == nil || onlineMetadata.totalTracks! <= 2) {
+        let cleanOnlineAlbum = DeluxeAlbumDetector.cleanToStandardAlbumName(online.album).lowercased()
+        let cleanTitle = DeluxeAlbumDetector.cleanToStandardAlbumName(title).lowercased()
+        if !cleanTitle.isEmpty && cleanOnlineAlbum == cleanTitle && (online.totalTracks == nil || online.totalTracks! <= 2) {
             return true
         }
         return false

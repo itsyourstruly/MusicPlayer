@@ -42,11 +42,16 @@ public struct PlaylistDetailView: View {
         libraryStore.playlists.first(where: { $0.id == playlistID })
     }
 
-    private var playlistTracks: [Track] {
-        // Ensure preconditions are met before proceeding
-        guard let pl = currentPlaylist else { return [] }
-        // Raw
-        let raw = libraryStore.tracks(for: pl)
+    /// One displayed row: the track plus its index in the playback queue (the full sorted playlist),
+    /// so tapping a row while search is active still starts the right song with the full queue.
+    fileprivate struct PlaylistRow: Identifiable {
+        let track: Track
+        let queueIndex: Int
+        var id: UUID { track.id }
+    }
+
+    /// Applies the view-only sort. `.custom` (default) costs nothing; other sorts only run while chosen.
+    private func sortedTracks(_ raw: [Track]) -> [Track] {
         switch selectedSortCriteria {
         case .custom:
             return raw
@@ -57,11 +62,10 @@ public struct PlaylistDetailView: View {
         case .album:
             return raw.sorted { $0.album.localizedCaseInsensitiveCompare($1.album) == .orderedAscending }
         case .favorite:
+            let counts = libraryStore.playCounts
             return raw.sorted {
-                // P 1
-                let p1 = libraryStore.playCount(for: $0.id)
-                // P 2
-                let p2 = libraryStore.playCount(for: $1.id)
+                let p1 = counts[$0.id] ?? 0
+                let p2 = counts[$1.id] ?? 0
                 if p1 != p2 { return p1 > p2 }
                 return $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending
             }
@@ -82,14 +86,13 @@ public struct PlaylistDetailView: View {
         }
     }
 
-    private var displayedTracks: [Track] {
-        // Clean query
-        let cleanQuery = FuzzyMatcher.normalize(searchQuery)
-        // Ensure preconditions are met before proceeding
-        guard !cleanQuery.isEmpty else { return playlistTracks }
-        // Scored
-        let scored: [(Track, Int)] = playlistTracks.compactMap { track in
-            // Score
+    /// Search filter over the queue, keeping each row's queue index.
+    private static func displayRows(for queue: [Track], query: String) -> [PlaylistRow] {
+        let cleanQuery = FuzzyMatcher.normalize(query)
+        guard !cleanQuery.isEmpty else {
+            return queue.enumerated().map { PlaylistRow(track: $0.element, queueIndex: $0.offset) }
+        }
+        let scored: [(PlaylistRow, Int)] = queue.enumerated().compactMap { offset, track in
             let score = FuzzyMatcher.scoreTrack(
                 normalizedTitle: track.normalizedTitle,
                 normalizedArtist: track.normalizedArtist,
@@ -97,7 +100,7 @@ public struct PlaylistDetailView: View {
                 searchTokens: track.searchTokens,
                 cleanQuery: cleanQuery
             )
-            return score > 0 ? (track, score) : nil
+            return score > 0 ? (PlaylistRow(track: track, queueIndex: offset), score) : nil
         }
         return scored.sorted { $0.1 > $1.1 }.map { $0.0 }
     }
@@ -105,6 +108,11 @@ public struct PlaylistDetailView: View {
     // Main view layout structure
     public var body: some View {
         if let playlist = currentPlaylist {
+            // Resolved once per render (O(playlist) via the store's ID index), like AlbumDetailView.
+            // Player state is NOT read here; it is read by `PlaylistPlaybackStateReader` below, so
+            // play/pause/track changes only re-render the rows, not this whole screen.
+            let queue = sortedTracks(libraryStore.tracks(for: playlist))
+            let rows = Self.displayRows(for: queue, query: searchQuery)
             VStack(spacing: 0) {
                 // Smooth Top Search Bar (Decoupled from ScrollView, zero layout jitter)
                 if isSearching {
@@ -140,105 +148,35 @@ public struct PlaylistDetailView: View {
                 ScrollView(.vertical, showsIndicators: false) {
                     VStack(alignment: .leading, spacing: 20) {
                         // Album-style Header with interactive cover & title
-                        headerView(for: playlist)
+                        headerView(for: playlist, tracks: queue)
 
                         // Transport Actions with Edit Mode Pencil Button on the far right
                         HStack(spacing: 12) {
                             Button(action: {
-                                if let first = playlistTracks.first {
-                                    playerService.play(track: first, inQueue: playlistTracks)
+                                if let first = queue.first {
+                                    playerService.play(track: first, inQueue: queue, startIndex: 0)
                                 }
                             }) {
                                 Text("PLAY")
                             }
                             .buttonStyle(TypographicButtonStyle(variant: .primary, size: .regular))
-                            .disabled(playlistTracks.isEmpty)
+                            .disabled(queue.isEmpty)
 
                             Button(action: {
                                 // Shuffled
-                                var shuffled = playlistTracks
-                                shuffled.shuffle()
+                                let shuffled = queue.shuffled()
                                 if let first = shuffled.first {
-                                    playerService.play(track: first, inQueue: shuffled)
+                                    playerService.play(track: first, inQueue: shuffled, startIndex: 0)
                                 }
                             }) {
                                 Text("SHUFFLE")
                             }
                             .buttonStyle(TypographicButtonStyle(variant: .secondary, size: .regular))
-                            .disabled(playlistTracks.isEmpty)
+                            .disabled(queue.isEmpty)
 
                             Spacer()
 
-                            let summary = JellyfinDownloadManager.shared.playlistSummary(for: playlistTracks)
-                            let isJellyfinPlaylist = summary.total > 0
-                            let isAllDownloaded = summary.isAllDownloaded
-                            let isAnyDownloading = summary.isAnyDownloading
-
-                            if isJellyfinPlaylist {
-                                let jellyfinTracks = playlistTracks.filter { $0.isJellyfinItem || $0.metadataSource == .server }
-                                let downloadedCount = summary.downloaded
-                                Button {
-                                    HapticFeedback.selectionChanged()
-                                    if isAllDownloaded {
-                                        for track in jellyfinTracks {
-                                            JellyfinDownloadManager.shared.deleteDownload(trackId: track.id)
-                                        }
-                                    } else if isAnyDownloading {
-                                        for track in jellyfinTracks {
-                                            JellyfinDownloadManager.shared.cancelDownload(trackId: track.id)
-                                        }
-                                    } else {
-                                        JellyfinDownloadManager.shared.download(tracks: jellyfinTracks)
-                                    }
-                                } label: {
-                                    HStack(spacing: 5) {
-                                        if isAllDownloaded {
-                                            Image(systemName: "arrow.down.circle.fill")
-                                                .font(.system(size: 16))
-                                                .foregroundStyle(appTheme.accentColor)
-                                        } else if isAnyDownloading {
-                                            ProgressView()
-                                                .controlSize(.small)
-                                                .tint(appTheme.accentColor)
-                                        } else {
-                                            Image(systemName: "arrow.down.circle")
-                                                .font(.system(size: 16))
-                                                .foregroundStyle(Color.primary)
-                                        }
-                                    }
-                                    .frame(width: 38, height: 38)
-                                    .contentShape(Rectangle())
-                                }
-                                .buttonStyle(.plain)
-                                .contextMenu {
-                                    if isAllDownloaded {
-                                        Button(role: .destructive) {
-                                            HapticFeedback.selectionChanged()
-                                            for track in jellyfinTracks {
-                                                JellyfinDownloadManager.shared.deleteDownload(trackId: track.id)
-                                            }
-                                        } label: {
-                                            Text("DELETE PLAYLIST DOWNLOADS")
-                                        }
-                                    } else if isAnyDownloading {
-                                        Button {
-                                            HapticFeedback.selectionChanged()
-                                            for track in jellyfinTracks {
-                                                JellyfinDownloadManager.shared.cancelDownload(trackId: track.id)
-                                            }
-                                        } label: {
-                                            Text("CANCEL DOWNLOADS")
-                                        }
-                                    } else {
-                                        Button {
-                                            HapticFeedback.selectionChanged()
-                                            JellyfinDownloadManager.shared.download(tracks: jellyfinTracks)
-                                        } label: {
-                                            Text("DOWNLOAD PLAYLIST (\(jellyfinTracks.count - downloadedCount))")
-                                        }
-                                    }
-                                }
-                            }
+                            PlaylistDownloadButton(tracks: queue, accentColor: appTheme.accentColor)
 
                             // Pencil icon button with no background to toggle edit mode
                             Button(action: {
@@ -367,14 +305,12 @@ public struct PlaylistDetailView: View {
                                 .transition(.opacity.combined(with: .move(edge: .top)))
                             }
 
-                            let currentDisplayedTracks = displayedTracks
-
-                            Text("TRACKLIST (\(currentDisplayedTracks.count))")
+                            Text("TRACKLIST (\(rows.count))")
                                 .font(.system(size: 12, weight: .bold, design: .monospaced))
                                 .foregroundStyle(.secondary)
                                 .padding(.horizontal, 2)
 
-                            if currentDisplayedTracks.isEmpty {
+                            if rows.isEmpty {
                                 EmptyStateView(
                                     title: searchQuery.isEmpty ? "PLAYLIST IS EMPTY" : "NO MATCHING TRACKS",
                                     message: searchQuery.isEmpty
@@ -383,24 +319,21 @@ public struct PlaylistDetailView: View {
                                 )
                                 .padding(.top, 16)
                             } else {
-                                let currentTrackID = playerService.currentTrack?.id
-                                let isCurrentPlaying = playerService.playbackStatus.isPlaying
-                                let nextTrackID = playerService.queueBadges.nextTrackID
-                                let playNextSet = playerService.queueBadges.playNextTrackIDs
                                 let isTapToPlayNext = libraryStore.settings.tapToPlayNext
 
-                                LazyVStack(spacing: 4) {
-                                    ForEach(Array(currentDisplayedTracks.enumerated()), id: \.element.id) { index, track in
-                                        playlistTrackRowView(
-                                            track: track,
-                                            index: index,
-                                            currentTrackID: currentTrackID,
-                                            isCurrentPlaying: isCurrentPlaying,
-                                            nextTrackID: nextTrackID,
-                                            playNextSet: playNextSet,
-                                            isTapToPlayNext: isTapToPlayNext,
-                                            playlist: playlist
-                                        )
+                                PlaylistPlaybackStateReader(playerService: playerService) { state in
+                                    LazyVStack(spacing: 4) {
+                                        ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
+                                            playlistTrackRowView(
+                                                row: row,
+                                                index: index,
+                                                rows: rows,
+                                                queue: queue,
+                                                state: state,
+                                                isTapToPlayNext: isTapToPlayNext,
+                                                playlist: playlist
+                                            )
+                                        }
                                     }
                                 }
                             }
@@ -471,7 +404,7 @@ public struct PlaylistDetailView: View {
     }
 
     // Handle drag changed
-    private func handleDragChanged(for track: Track, at currentIndex: Int, translationY: CGFloat) {
+    private func handleDragChanged(for track: Track, at currentIndex: Int, in rows: [PlaylistRow], translationY: CGFloat) {
         if draggingTrackID != track.id {
             draggingTrackID = track.id
             accumulatedDragY = 0
@@ -485,9 +418,9 @@ public struct PlaylistDetailView: View {
 
         if delta > stepThreshold {
             // Dragging down
-            if currentIndex < displayedTracks.count - 1 {
+            if currentIndex < rows.count - 1 {
                 // Target track
-                let targetTrack = displayedTracks[currentIndex + 1]
+                let targetTrack = rows[currentIndex + 1].track
                 accumulatedDragY += 46.0
                 HapticFeedback.lightImpact()
                 withAnimation(.spring(response: 0.24, dampingFraction: 0.82)) {
@@ -498,7 +431,7 @@ public struct PlaylistDetailView: View {
             // Dragging up
             if currentIndex > 0 {
                 // Target track
-                let targetTrack = displayedTracks[currentIndex - 1]
+                let targetTrack = rows[currentIndex - 1].track
                 accumulatedDragY -= 46.0
                 HapticFeedback.lightImpact()
                 withAnimation(.spring(response: 0.24, dampingFraction: 0.82)) {
@@ -541,7 +474,7 @@ public struct PlaylistDetailView: View {
     }
 
     // Header view
-    private func headerView(for playlist: Playlist) -> some View {
+    private func headerView(for playlist: Playlist, tracks: [Track]) -> some View {
         HStack(alignment: .top, spacing: 16) {
             Button(action: { showingEditSheet = true }) {
                 ZStack(alignment: .bottomTrailing) {
@@ -588,8 +521,17 @@ public struct PlaylistDetailView: View {
                         .font(.system(size: 12, design: .monospaced))
                         .foregroundStyle(.secondary)
 
+                    // Songs whose source is removed, offline or not yet synced stay in the playlist
+                    // but are not playable; say so instead of silently hiding them.
+                    let unavailable = libraryStore.unavailableTrackCount(for: playlist)
+                    if unavailable > 0 {
+                        Text("\(unavailable) UNAVAILABLE")
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundStyle(.tertiary)
+                    }
+
                     // Total dur
-                    let totalDur = playlistTracks.reduce(0) { $0 + $1.duration }
+                    let totalDur = tracks.reduce(0) { $0 + $1.duration }
                     Text(TimeFormatting.formatSummaryDuration(seconds: totalDur))
                         .font(.system(size: 12, weight: .semibold, design: .monospaced))
                         .foregroundStyle(Color.primary)
@@ -603,15 +545,15 @@ public struct PlaylistDetailView: View {
     // Playlist track row view helper
     @ViewBuilder
     private func playlistTrackRowView(
-        track: Track,
+        row: PlaylistRow,
         index: Int,
-        currentTrackID: UUID?,
-        isCurrentPlaying: Bool,
-        nextTrackID: UUID?,
-        playNextSet: Set<UUID>,
+        rows: [PlaylistRow],
+        queue: [Track],
+        state: PlaylistRowPlaybackState,
         isTapToPlayNext: Bool,
         playlist: Playlist
     ) -> some View {
+        let track = row.track
         HStack(spacing: 8) {
             if isEditMode {
                 Button(action: {
@@ -631,15 +573,15 @@ public struct PlaylistDetailView: View {
             TrackRowView(
                 track: track,
                 indexNumber: index + 1,
-                isCurrentTrack: track.id == currentTrackID,
-                isPlaying: isCurrentPlaying && track.id == currentTrackID,
-                isNextTrack: track.id == nextTrackID,
-                isInPlayNext: playNextSet.contains(track.id),
+                isCurrentTrack: track.id == state.currentTrackID,
+                isPlaying: state.isPlaying && track.id == state.currentTrackID,
+                isNextTrack: track.id == state.nextTrackID,
+                isInPlayNext: state.playNextTrackIDs.contains(track.id),
                 isTapToPlayNextEnabled: isTapToPlayNext,
                 isSwipeDisabled: isEditMode,
                 onPlay: {
-                    let originalIndex = playlistTracks.firstIndex(where: { $0.id == track.id }) ?? index
-                    playerService.play(track: track, inQueue: playlistTracks, startIndex: originalIndex)
+                    // Same call as AlbumDetailView: full queue in playlist (or chosen sort) order + exact index.
+                    playerService.play(track: track, inQueue: queue, startIndex: row.queueIndex)
                 },
                 onPlayNext: {
                     playerService.insertPlayNextFront(track: track)
@@ -683,7 +625,7 @@ public struct PlaylistDetailView: View {
                     .gesture(
                         DragGesture(coordinateSpace: .global)
                             .onChanged { gesture in
-                                handleDragChanged(for: track, at: index, translationY: gesture.translation.height)
+                                handleDragChanged(for: track, at: index, in: rows, translationY: gesture.translation.height)
                             }
                             .onEnded { _ in
                                 handleDragEnded()
@@ -770,6 +712,112 @@ public struct PlaylistDetailView: View {
     // Edit playlist sheet
     private func editPlaylistSheet(for playlist: Playlist) -> some View {
         EditPlaylistModalView(playlist: playlist, libraryStore: libraryStore)
+    }
+}
+
+/// Player values the playlist rows need. Read in its own small view so playback changes
+/// (play/pause, next track, Play Next badges) re-render only the rows, not the playlist screen.
+struct PlaylistRowPlaybackState {
+    let currentTrackID: UUID?
+    let isPlaying: Bool
+    let nextTrackID: UUID?
+    let playNextTrackIDs: Set<UUID>
+}
+
+/// Scopes `@Observable` player reads to this view's body.
+private struct PlaylistPlaybackStateReader<Content: View>: View {
+    let playerService: AudioPlayerService
+    @ViewBuilder let content: (PlaylistRowPlaybackState) -> Content
+
+    var body: some View {
+        content(
+            PlaylistRowPlaybackState(
+                currentTrackID: playerService.currentTrack?.id,
+                isPlaying: playerService.playbackStatus.isPlaying,
+                nextTrackID: playerService.queueBadges.nextTrackID,
+                playNextTrackIDs: playerService.queueBadges.playNextTrackIDs
+            )
+        )
+    }
+}
+
+/// Download control for server songs in a (possibly mixed-source) playlist. Each song downloads from
+/// its own server (`download(tracks:)` routes by `folderID`). Download-state changes re-render only this button.
+private struct PlaylistDownloadButton: View {
+    let tracks: [Track]
+    let accentColor: Color
+
+    var body: some View {
+        let summary = JellyfinDownloadManager.shared.playlistSummary(for: tracks)
+        let isJellyfinPlaylist = summary.total > 0
+        let isAllDownloaded = summary.isAllDownloaded
+        let isAnyDownloading = summary.isAnyDownloading
+
+        if isJellyfinPlaylist {
+            let jellyfinTracks = tracks.filter { $0.isJellyfinItem || $0.metadataSource == .server }
+            let downloadedCount = summary.downloaded
+            Button {
+                HapticFeedback.selectionChanged()
+                if isAllDownloaded {
+                    for track in jellyfinTracks {
+                        JellyfinDownloadManager.shared.deleteDownload(trackId: track.id)
+                    }
+                } else if isAnyDownloading {
+                    for track in jellyfinTracks {
+                        JellyfinDownloadManager.shared.cancelDownload(trackId: track.id)
+                    }
+                } else {
+                    JellyfinDownloadManager.shared.download(tracks: jellyfinTracks)
+                }
+            } label: {
+                HStack(spacing: 5) {
+                    if isAllDownloaded {
+                        Image(systemName: "arrow.down.circle.fill")
+                            .font(.system(size: 16))
+                            .foregroundStyle(accentColor)
+                    } else if isAnyDownloading {
+                        ProgressView()
+                            .controlSize(.small)
+                            .tint(accentColor)
+                    } else {
+                        Image(systemName: "arrow.down.circle")
+                            .font(.system(size: 16))
+                            .foregroundStyle(Color.primary)
+                    }
+                }
+                .frame(width: 38, height: 38)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .contextMenu {
+                if isAllDownloaded {
+                    Button(role: .destructive) {
+                        HapticFeedback.selectionChanged()
+                        for track in jellyfinTracks {
+                            JellyfinDownloadManager.shared.deleteDownload(trackId: track.id)
+                        }
+                    } label: {
+                        Text("DELETE PLAYLIST DOWNLOADS")
+                    }
+                } else if isAnyDownloading {
+                    Button {
+                        HapticFeedback.selectionChanged()
+                        for track in jellyfinTracks {
+                            JellyfinDownloadManager.shared.cancelDownload(trackId: track.id)
+                        }
+                    } label: {
+                        Text("CANCEL DOWNLOADS")
+                    }
+                } else {
+                    Button {
+                        HapticFeedback.selectionChanged()
+                        JellyfinDownloadManager.shared.download(tracks: jellyfinTracks)
+                    } label: {
+                        Text("DOWNLOAD PLAYLIST (\(jellyfinTracks.count - downloadedCount))")
+                    }
+                }
+            }
+        }
     }
 }
 

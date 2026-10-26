@@ -119,6 +119,18 @@ public enum SettingOptionCatalog {
         description: "Embeds enriched tags directly into your audio files on disk. If files are stored in iCloud, metadata is kept within the app."
     )
 
+    public static let autoDownloadOnPlay = SettingOptionDetail(
+        id: "autoDownloadOnPlay",
+        title: "AUTO-DOWNLOAD ON PLAY",
+        description: "Saves server tracks for offline playback when they start playing."
+    )
+
+    public static let downloadOverCellular = SettingOptionDetail(
+        id: "downloadOverCellular",
+        title: "DOWNLOAD OVER CELLULAR",
+        description: "When off, downloads wait for Wi-Fi. Streaming is not affected."
+    )
+
     public static let linkFolder = SettingOptionDetail(
         id: "linkFolder",
         title: "LINK FOLDER / CHANGE FOLDER",

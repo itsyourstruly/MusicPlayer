@@ -328,6 +328,9 @@ public struct AppSettings: Codable, Sendable {
     public var autoDownloadOnPlay: Bool
     // Allows Jellyfin track downloads over cellular network
     public var downloadOnCellular: Bool
+    // DOWNLOAD OVER CELLULAR (Settings > Sources): server downloads may use cellular. Default off.
+    // Separate from the legacy `downloadOnCellular` key, which older installs persisted as true.
+    public var downloadOverCellular: Bool
     // Persistently hidden/removed Jellyfin item IDs excluded from library sync
     public var removedJellyfinItemIDs: Set<String>
 
@@ -375,6 +378,7 @@ public struct AppSettings: Codable, Sendable {
         downloadNextSongOnWiFi: Bool = true,
         autoDownloadOnPlay: Bool = false,
         downloadOnCellular: Bool = true,
+        downloadOverCellular: Bool = false,
         removedJellyfinItemIDs: Set<String> = []
     ) {
         self.appTheme = appTheme
@@ -413,6 +417,7 @@ public struct AppSettings: Codable, Sendable {
         self.downloadNextSongOnWiFi = downloadNextSongOnWiFi
         self.autoDownloadOnPlay = autoDownloadOnPlay
         self.downloadOnCellular = downloadOnCellular
+        self.downloadOverCellular = downloadOverCellular
         self.removedJellyfinItemIDs = removedJellyfinItemIDs
     }
 
@@ -484,6 +489,7 @@ public struct AppSettings: Codable, Sendable {
         case downloadNextSongOnWiFi
         case autoDownloadOnPlay
         case downloadOnCellular
+        case downloadOverCellular
         case removedJellyfinItemIDs
     }
 
@@ -558,6 +564,7 @@ public struct AppSettings: Codable, Sendable {
         self.downloadNextSongOnWiFi = (try? container.decodeIfPresent(Bool.self, forKey: .downloadNextSongOnWiFi)) ?? true
         self.autoDownloadOnPlay = (try? container.decodeIfPresent(Bool.self, forKey: .autoDownloadOnPlay)) ?? false
         self.downloadOnCellular = (try? container.decodeIfPresent(Bool.self, forKey: .downloadOnCellular)) ?? true
+        self.downloadOverCellular = (try? container.decodeIfPresent(Bool.self, forKey: .downloadOverCellular)) ?? false
         self.removedJellyfinItemIDs = (try? container.decodeIfPresent(Set<String>.self, forKey: .removedJellyfinItemIDs)) ?? []
     }
 
@@ -601,6 +608,7 @@ public struct AppSettings: Codable, Sendable {
         try container.encode(downloadNextSongOnWiFi, forKey: .downloadNextSongOnWiFi)
         try container.encode(autoDownloadOnPlay, forKey: .autoDownloadOnPlay)
         try container.encode(downloadOnCellular, forKey: .downloadOnCellular)
+        try container.encode(downloadOverCellular, forKey: .downloadOverCellular)
         try container.encode(removedJellyfinItemIDs, forKey: .removedJellyfinItemIDs)
     }
 }

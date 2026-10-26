@@ -23,7 +23,8 @@ public struct AlbumArtworkView: View {
     public var isArtworkRounded: Bool? = nil
 
     @State private var loadedImage: Image?
-    @State private var isLoading: Bool = false
+    /// Rendered side length in points (measured), so thumbnails decode at the size actually displayed.
+    @State private var renderedSide: CGFloat = 0
 
     // Initialize with configured properties
     public init(
@@ -51,7 +52,7 @@ public struct AlbumArtworkView: View {
                 _loadedImage = State(initialValue: Image(nsImage: cached))
                 #endif
             } else if (isOriginalResolution || targetDimension >= 1200),
-                      let thumb = ArtworkCacheService.shared.cachedImage(key: key, maxDimension: 128) ?? ArtworkCacheService.shared.cachedImage(key: key, maxDimension: 350) {
+                      let thumb = ArtworkCacheService.shared.cachedImage(key: key, maxDimension: 160) {
                 #if canImport(UIKit)
                 _loadedImage = State(initialValue: Image(uiImage: thumb))
                 #elseif canImport(AppKit)
@@ -94,7 +95,12 @@ public struct AlbumArtworkView: View {
         }
         .clipShape(RoundedRectangle(cornerRadius: effectiveCornerRadius, style: .continuous))
         .contentShape(RoundedRectangle(cornerRadius: effectiveCornerRadius, style: .continuous))
-        .task(id: "\(artworkKey ?? "")_\(isOriginalResolution ? "orig" : "\(Int(targetDimension))")") {
+        .onGeometryChange(for: CGFloat.self) { proxy in
+            min(proxy.size.width, proxy.size.height)
+        } action: { side in
+            renderedSide = side
+        }
+        .task(id: loadIdentity) {
             await loadArtwork()
         }
     }
@@ -152,6 +158,20 @@ public struct AlbumArtworkView: View {
         .aspectRatio(1.0, contentMode: .fill)
     }
 
+    /// Pixel size to decode: the measured on-screen size × display scale (falls back to `targetDimension`
+    /// until layout reports a size), rounded up to the cache's size buckets.
+    private var requestedPixels: CGFloat {
+        if isOriginalResolution { return targetDimension }
+        let points = renderedSide > 0 ? renderedSide : targetDimension
+        return points * displayScale
+    }
+
+    /// The load restarts only when the artwork (or the original/thumbnail tier) changes, never when layout
+    /// reports a size: the bucket is chosen inside the task once the size is known.
+    private var loadIdentity: String {
+        "\(artworkKey ?? "")_\(isOriginalResolution ? "orig" : "thumb")"
+    }
+
     // Load artwork
     private func loadArtwork() async {
         guard let key = artworkKey, !key.isEmpty else {
@@ -159,11 +179,19 @@ public struct AlbumArtworkView: View {
             return
         }
 
-        let dimensionToRequest = isOriginalResolution ? targetDimension : max(targetDimension, targetDimension * displayScale)
+        // Pick the bucket after layout: wait (a few frames at most) for the measured size instead of decoding at a
+        // guessed size; the size change itself does not restart this task.
+        var framesWaited = 0
+        while renderedSide == 0 && !isOriginalResolution && framesWaited < 6 {
+            try? await Task.sleep(for: .milliseconds(16))
+            guard !Task.isCancelled else { return }
+            framesWaited += 1
+        }
+
+        let dimensionToRequest = requestedPixels
 
         // Fast synchronous memory cache check for requested dimension
-        if let cached = ArtworkCacheService.shared.cachedImage(key: key, maxDimension: dimensionToRequest, isOriginal: isOriginalResolution) ??
-                         ArtworkCacheService.shared.cachedImage(key: key, maxDimension: targetDimension, isOriginal: isOriginalResolution) {
+        if let cached = ArtworkCacheService.shared.cachedImage(key: key, maxDimension: dimensionToRequest, isOriginal: isOriginalResolution) {
             #if canImport(UIKit)
             self.loadedImage = Image(uiImage: cached)
             #elseif canImport(AppKit)
@@ -174,7 +202,7 @@ public struct AlbumArtworkView: View {
 
         // If full resolution is requested and no image is shown yet, display thumbnail as interim state
         if (isOriginalResolution || targetDimension >= 1200) && loadedImage == nil {
-            if let thumb = ArtworkCacheService.shared.cachedImage(key: key, maxDimension: 128) ?? ArtworkCacheService.shared.cachedImage(key: key, maxDimension: 350) {
+            if let thumb = ArtworkCacheService.shared.cachedImage(key: key, maxDimension: 160) {
                 #if canImport(UIKit)
                 self.loadedImage = Image(uiImage: thumb)
                 #elseif canImport(AppKit)

@@ -57,6 +57,7 @@ public final class JellyfinPlaybackReporter: @unchecked Sendable {
         request.httpBody = try? JSONSerialization.data(withJSONObject: body)
 
         Task {
+            ServerRequestLog.log(request, caller: "jellyfinPlaybackReport")
             _ = try? await session.data(for: request)
         }
     }
@@ -90,6 +91,7 @@ public final class JellyfinPlaybackReporter: @unchecked Sendable {
         request.httpBody = try? JSONSerialization.data(withJSONObject: body)
 
         Task {
+            ServerRequestLog.log(request, caller: "jellyfinPlaybackReport")
             _ = try? await session.data(for: request)
         }
     }
@@ -129,6 +131,7 @@ public final class JellyfinPlaybackReporter: @unchecked Sendable {
         currentServerLink = nil
 
         Task {
+            ServerRequestLog.log(request, caller: "jellyfinPlaybackReport")
             _ = try? await session.data(for: request)
         }
     }

@@ -645,6 +645,9 @@ public struct AudioScannerService: Sendable {
             modificationDate: modificationDate
         )
 
+        // Release-type tags (plan §3.7) go to the classifier's local tag store.
+        LocalReleaseTagStore.shared.record(trackID: trackID, info: meta.releaseTypeInfo)
+
         let tagSnap = TagSnapshot(
             title: finalTitle,
             artist: finalArtist,
@@ -833,8 +836,37 @@ public struct AudioScannerService: Sendable {
         }
     }
 
+    /// Lyrics for a track: on-disk copy (local file or downloaded server file) first, then the server's
+    /// lyrics API for server tracks. A server track's `track.url` is an identity value and is never fetched.
+    /// Views go through `LyricsCache.shared.lyrics(for:)`, which runs this at most once per song.
+    public static func extractLyrics(for track: Track) async -> String? {
+        if let downloaded = await MainActor.run(body: { JellyfinDownloadManager.shared.localFileURL(for: track.id) }),
+           FileManager.default.fileExists(atPath: downloaded.path),
+           let lyrics = await extractLyrics(from: downloaded) {
+            return lyrics
+        }
+        if track.url.isFileURL {
+            return await extractLyrics(from: track.url)
+        }
+        guard track.isJellyfinItem || track.metadataSource == .server,
+              let provider = await MainActor.run(body: { AudioPlayerService.shared?.lyricsProvider(for: track) }) else {
+            return nil
+        }
+        return await provider.fetchLyrics(for: track)
+    }
+
     /// Deeply inspects an audio file and its sidecars to extract embedded or external lyrics.
+    /// Non-file URLs are never opened: for a server track's identity URL the lookup goes through
+    /// `extractLyrics(for:)` (server lyrics API), otherwise nil.
     public static func extractLyrics(from url: URL) async -> String? {
+        guard url.isFileURL else {
+            let track = await MainActor.run(body: { () -> Track? in
+                guard let current = AudioPlayerService.shared?.currentTrack, current.url == url else { return nil }
+                return current
+            })
+            guard let track else { return nil }
+            return await extractLyrics(for: track)
+        }
         // 1. High-speed binary tag reader first
         if let meta = FastAudioMetadataReader.readMetadata(for: url),
            let lyr = meta.lyrics?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -892,5 +924,38 @@ public extension AVMetadataItem {
             return num.stringValue
         }
         return nil
+    }
+}
+
+// MARK: - Lyrics Cache
+
+/// One lyrics lookup per song for this app session, shared by every player view.
+/// Misses are cached too, and concurrent requests for the same song share one lookup.
+/// Nothing here prefetches: a lookup only runs when the lyrics view asks for it.
+actor LyricsCache {
+    static let shared = LyricsCache()
+
+    /// `nil` value = looked up, no lyrics.
+    private var results: [UUID: String?] = [:]
+    private var inFlight: [UUID: Task<String?, Never>] = [:]
+
+    /// `.none` = never looked up; `.some(nil)` = looked up, no lyrics.
+    func cachedResult(for trackID: UUID) -> String?? {
+        results[trackID]
+    }
+
+    func lyrics(for track: Track) async -> String? {
+        if let cached = results[track.id] { return cached }
+        if let running = inFlight[track.id] { return await running.value }
+        // Detached so file reads and the server request run off the main actor and finish
+        // (and get cached) even if the view that asked goes away.
+        let task = Task.detached(priority: .userInitiated) {
+            await AudioScannerService.extractLyrics(for: track)
+        }
+        inFlight[track.id] = task
+        let value = await task.value
+        inFlight[track.id] = nil
+        results[track.id] = .some(value)
+        return value
     }
 }

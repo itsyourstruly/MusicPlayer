@@ -30,6 +30,17 @@ nonisolated public struct ParsedAudioMetadata: Sendable {
     public var bitRate: Double = 0
     public var formatDescription: String = ""
     public var lyrics: String?
+    // Release-type tags (MusicBrainz RELEASETYPE / MUSICBRAINZ_ALBUMTYPE values; may hold several)
+    public var releaseTypeTags: [String] = []
+    // ALBUMVERSION tag
+    public var albumVersionTag: String?
+    // Compilation flag (Vorbis COMPILATION, ID3 TCMP, MP4 cpil)
+    public var compilationTag: Bool?
+
+    /// Classifier input built from the release-type tags, or nil when the file carries none.
+    public var releaseTypeInfo: ReleaseTypeInfo? {
+        ReleaseTypeInfo.from(rawTypes: releaseTypeTags, isCompilation: compilationTag, version: albumVersionTag, source: "localTag")
+    }
 
     // Initialize with configured properties
     public init() {}
@@ -289,8 +300,13 @@ nonisolated public struct FastAudioMetadataReader: Sendable {
             if meta.artworkData == nil {
                 meta.artworkData = extractImageData(from: payload)
             }
+        case "TCMP", "TCP": // iTunes compilation flag
+            if let s = decodeID3String(payload)?.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: "\0"))) {
+                meta.compilationTag = (s == "1")
+            }
         case "TXXX", "TXX": // User-defined text frame (e.g. ALBUM, ARTIST, YEAR, LYRICS)
             if let (desc, val) = decodeTXXXFrame(payload) {
+                if captureReleaseTag(key: desc, value: val, meta: &meta) { break }
                 let descUpper = desc.uppercased()
                 if descUpper.contains("LYRIC") || descUpper.contains("UNSYNCED") || descUpper.contains("SYNCED") || descUpper.contains("WORDS") {
                     if meta.lyrics == nil { meta.lyrics = val }
@@ -414,6 +430,28 @@ nonisolated public struct FastAudioMetadataReader: Sendable {
             }
         }
         return nil
+    }
+
+    /// Captures release-type tags by normalized key (uppercased, spaces/underscores/slashes removed). Returns true when consumed,
+    /// so these keys are never misread as the album name by the generic "ALBUM"-contains fallbacks.
+    static func captureReleaseTag(key: String, value: String, meta: inout ParsedAudioMetadata) -> Bool {
+        let k = String(key.uppercased().unicodeScalars.filter { $0 != " " && $0 != "_" && $0 != "/" && $0 != "-" }.map(Character.init))
+        let v = value.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: "\0")))
+        switch k {
+        case "RELEASETYPE", "MUSICBRAINZALBUMTYPE":
+            if !v.isEmpty { meta.releaseTypeTags.append(v) }
+            return true
+        case "RELEASESTATUS", "MUSICBRAINZALBUMSTATUS":
+            return true
+        case "ALBUMVERSION":
+            if meta.albumVersionTag == nil, !v.isEmpty { meta.albumVersionTag = v }
+            return true
+        case "COMPILATION":
+            meta.compilationTag = (v == "1" || v.lowercased() == "true" || v.lowercased() == "yes")
+            return true
+        default:
+            return false
+        }
     }
 
     /// Decodes user-defined TXXX text frames (description + value).
@@ -692,6 +730,10 @@ nonisolated public struct FastAudioMetadataReader: Sendable {
                     let typeFlags = (Int(itemPayload[dataOffset+8]) << 24) | (Int(itemPayload[dataOffset+9]) << 16) | (Int(itemPayload[dataOffset+10]) << 8) | Int(itemPayload[dataOffset+11])
                     // Content
                     let content = itemPayload.subdata(in: (dataOffset + 16)..<(dataOffset + dSize))
+                    if itemType == "cpil" {
+                        meta.compilationTag = content.contains { $0 != 0 }
+                        break
+                    }
 
                     if typeFlags == 1 {
                         // UTF-8 Text
@@ -778,6 +820,7 @@ nonisolated public struct FastAudioMetadataReader: Sendable {
         }
 
         if let key = tagKey, let val = tagValue, !val.isEmpty {
+            if captureReleaseTag(key: key, value: val, meta: &meta) { return }
             if (key.contains("LYRIC") || key.contains("UNSYNCED") || key.contains("SYNCED") || key.contains("WORDS") || key == "TEXT") && meta.lyrics == nil {
                 meta.lyrics = val
             } else if (key.contains("ALBUM") || key == "ALBUMTITLE" || key == "ALBUM_TITLE") && meta.album == nil {
@@ -1092,6 +1135,7 @@ nonisolated public struct FastAudioMetadataReader: Sendable {
                             meta.artworkData = parseFLACPictureBlock(data: picBlock)
                         }
                     default:
+                        if captureReleaseTag(key: key, value: val, meta: &meta) { break }
                         if (key.contains("LYRIC") || key.contains("TEXT") || (val.count > 60 && (val.contains("\n") || val.contains("\r") || val.contains("[0")))) && meta.lyrics == nil {
                             meta.lyrics = val
                         } else if key.contains("ALBUM") && meta.album == nil {

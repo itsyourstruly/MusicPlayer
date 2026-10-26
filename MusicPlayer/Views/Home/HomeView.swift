@@ -159,6 +159,12 @@ public struct HomeView: View {
                                 }) {
                                     Text("ADD TO QUEUE")
                                 }
+                                Button(action: {
+                                    HapticFeedback.lightImpact()
+                                    libraryStore.togglePinAlbum(album)
+                                }) {
+                                    Text(libraryStore.isAlbumPinned(album) ? "UNPIN ALBUM" : "PIN ALBUM")
+                                }
                             }
                         }
                     }

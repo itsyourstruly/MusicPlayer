@@ -110,8 +110,10 @@ public final class DiscographyMatcher: Sendable {
                 alternates: albumAlternates
             )
 
-            let isInherentlyAlternate = matchedLocalAlbum?.isRemix == true || matchedLocalAlbum?.isLive == true
-            let isSingle = matchedLocalAlbum?.isSingle == true || group.isSingleOrEP
+            // Local albums are classified by DiscographyClassifier; the online release type is only used when there is no local album.
+            let localSection = matchedLocalAlbum?.releaseSection
+            let isInherentlyAlternate = localSection == .alternates
+            let isSingle = localSection.map { $0 == .singlesAndEPs } ?? group.isSingleOrEP
 
             if isInherentlyAlternate {
                 alternateAlbumMatches.append(group)

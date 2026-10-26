@@ -15,7 +15,6 @@ public struct AlbumDetailView: View {
     @State private var selectedTrackForInfo: Track? = nil
     @State private var selectedTrackForPlaylist: Track? = nil
     @State private var showingAlbumMetadataSheet: Bool = false
-    @State private var navigateToOnlineSearch: Bool = false
     @Environment(\.appTheme) private var appTheme
 
     // Initialize with configured properties
@@ -34,19 +33,11 @@ public struct AlbumDetailView: View {
             return direct
         }
         if let normMatch = libraryStore.album(normalizedArtist: album.normalizedArtist, normalizedTitle: album.normalizedTitle) {
-            return normMatch
+            return libraryStore.album(forID: normMatch.id) ?? normMatch
         }
         let validTracks = album.tracks.filter { libraryStore.tracksByID[$0.id] != nil }
         if validTracks.count != album.tracks.count {
-            return Album(
-                title: album.title,
-                artist: album.artist,
-                year: album.year,
-                genre: album.genre,
-                artworkKey: album.artworkKey,
-                tracks: validTracks,
-                groupKey: album.groupKey
-            )
+            return album.withTracks(validTracks)
         }
         return album
     }
@@ -177,6 +168,12 @@ public struct AlbumDetailView: View {
                                         Text("REMOVE ALBUM DOWNLOADS")
                                     }
                                 } else if isAnyDownloading {
+                                    if JellyfinDownloadManager.shared.isWaitingForWiFi {
+                                        Button {} label: {
+                                            Text("WAITING FOR WI-FI")
+                                        }
+                                        .disabled(true)
+                                    }
                                     Button {
                                         HapticFeedback.selectionChanged()
                                         for track in jellyfinTracks {
@@ -190,7 +187,7 @@ public struct AlbumDetailView: View {
                                         HapticFeedback.selectionChanged()
                                         JellyfinDownloadManager.shared.download(tracks: jellyfinTracks)
                                     } label: {
-                                        Text("DOWNLOAD ALBUM")
+                                        Text(summary.failed > 0 ? "DOWNLOAD FAILED, TAP TO RETRY" : "DOWNLOAD ALBUM")
                                     }
                                 }
 
@@ -206,16 +203,17 @@ public struct AlbumDetailView: View {
                             }
 
                             Button(action: {
-                                navigateToOnlineSearch = true
-                            }) {
-                                Text("SEARCH ONLINE")
-                            }
-
-                            Button(action: {
                                 HapticFeedback.notificationSuccess()
                                 libraryStore.toggleCollaborativeAlbum(activeAlbum)
                             }) {
                                 Text(libraryStore.isCollaborativeAlbum(activeAlbum) ? "REVERT COLLABORATIVE ALBUM" : "MAKE COLLABORATIVE ALBUM")
+                            }
+
+                            Button(action: {
+                                HapticFeedback.lightImpact()
+                                libraryStore.togglePinAlbum(activeAlbum)
+                            }) {
+                                Text(libraryStore.isAlbumPinned(activeAlbum) ? "UNPIN ALBUM" : "PIN ALBUM")
                             }
 
                             Divider()
@@ -407,14 +405,6 @@ public struct AlbumDetailView: View {
         }
         .navigationDestination(item: $selectedArtistForNavigation) { artist in
             ArtistDetailView(artist: artist, libraryStore: libraryStore, playerService: playerService)
-        }
-        .navigationDestination(isPresented: $navigateToOnlineSearch) {
-            GlobalSearchView(
-                libraryStore: libraryStore,
-                playerService: playerService,
-                initialQuery: "\(activeAlbum.artist) \(activeAlbum.title)",
-                initialOnlineMode: true
-            )
         }
         .enableInteractivePopGesture()
     }

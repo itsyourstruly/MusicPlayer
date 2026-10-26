@@ -202,9 +202,6 @@ public struct MacMainView: View {
                 onNavigateToSearch: {
                     selectedNavItem = .search
                 },
-                onNavigateToDiscovery: {
-                    selectedNavItem = .discovery
-                },
                 onOpenSettings: {
                     showingSettings = true
                 }
@@ -216,11 +213,6 @@ public struct MacMainView: View {
                     libraryStore: libraryStore,
                     playerService: playerService
                 )
-            }
-
-        case .discovery:
-            NavigationStack {
-                OnlineSearchDiscoveryView()
             }
 
         case .allTracks:

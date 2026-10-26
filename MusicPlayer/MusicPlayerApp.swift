@@ -14,6 +14,10 @@ struct MusicPlayerApp: App {
 
     init() {
         AppLogger.ui.info("LAC MusicPlayer application launched. Session logging active.")
+        #if DEBUG
+        // DEBUG-only classifier/normalizer/tokenizer self-check (logged via os.Logger; compiled out of Release).
+        Task.detached(priority: .utility) { SearchSelfCheck.run() }
+        #endif
     }
 
     // Body

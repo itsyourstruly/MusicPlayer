@@ -84,6 +84,8 @@ public struct FolderHierarchyScanner: Sendable {
 
         // 1. Read binary audio technical specs & embedded metadata baseline (<0.2ms)
         let binaryMeta = FastAudioMetadataReader.readMetadata(for: url, knownFileSize: fileSizeBytes > 0 ? fileSizeBytes : nil)
+        // Release-type tags (plan §3.7) go to the classifier's local tag store.
+        LocalReleaseTagStore.shared.record(trackID: trackID, info: binaryMeta?.releaseTypeInfo)
         var durationSeconds = binaryMeta?.duration ?? 0
         var avArtist: String? = nil
         var avAuthor: String? = nil

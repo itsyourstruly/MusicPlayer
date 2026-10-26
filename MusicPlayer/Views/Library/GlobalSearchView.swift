@@ -5,7 +5,7 @@ import UIKit
 
 // MARK: - Discography Category
 
-public enum DiscographyCategory: String, Sendable, Equatable {
+nonisolated public enum DiscographyCategory: String, Sendable, Equatable {
     case albums = "ALBUMS"
     case singles = "SINGLES"
     case alternates = "ALTERNATES"
@@ -14,7 +14,7 @@ public enum DiscographyCategory: String, Sendable, Equatable {
 
 // MARK: - Filter Enums & Tree Data Structures
 
-public enum SearchCategoryFilter: String, CaseIterable, Identifiable, Sendable {
+nonisolated public enum SearchCategoryFilter: String, CaseIterable, Identifiable, Sendable {
     case artists = "ARTISTS"
     case albums = "ALBUMS"
     case tracks = "TRACKS"
@@ -22,7 +22,29 @@ public enum SearchCategoryFilter: String, CaseIterable, Identifiable, Sendable {
     public var id: String { rawValue }
 }
 
-public struct GlobalSearchResults: Sendable, Equatable {
+/// Auto-expand decision from the token engine (plan §3.5). Nil means the legacy rule (first artist, first matched album).
+nonisolated public struct SearchExpansionHint: Sendable, Equatable {
+    /// Top-hit artist (placed first in `artistTreeNodes`).
+    public let artistID: String
+    /// Album (by `Album.id`) to expand inside that artist, if any: the D3 topmost album holding the match.
+    public let albumID: String?
+    /// Top hit is fuzzy-only and leads the runner-up by less than 0.10: expand nothing (TRACKS keeps its first 3).
+    public let suppress: Bool
+    /// Matched track inside `albumID` that gets the top-hit accent (track top hits only, §6b).
+    public let trackID: UUID?
+    /// D12: top hit is a song or album (matched-only results), not an exact artist name.
+    public let isSongOrAlbumHit: Bool
+
+    public init(artistID: String, albumID: String?, suppress: Bool, trackID: UUID? = nil, isSongOrAlbumHit: Bool = false) {
+        self.artistID = artistID
+        self.albumID = albumID
+        self.suppress = suppress
+        self.trackID = trackID
+        self.isSongOrAlbumHit = isSongOrAlbumHit
+    }
+}
+
+nonisolated public struct GlobalSearchResults: Sendable, Equatable {
     public var artistTreeNodes: [SearchTreeArtistNode]
     public var playlists: [Playlist]
     public var directMatchedAlbums: [(album: Album, artist: Artist)]
@@ -36,6 +58,15 @@ public struct GlobalSearchResults: Sendable, Equatable {
     public let matchedAlbums: [(album: Album, artist: Artist)]
     public let matchedTracks: [SearchTreeTrackNode]
 
+    /// Artist -> album grouping of matched tracks for the TRACKS category, built off-main by SearchEngine.
+    public let trackCategoryNodes: [SearchTreeArtistNode]
+    /// Matched tracks not already shown under the top artist node (precomputed, not derived in view body).
+    public let unrepresentedTracks: [SearchTreeTrackNode]
+    /// Normalized query that produced these results (part of equality so rows refresh across queries).
+    public let query: String
+    /// Token-engine auto-expand hint (nil for the legacy scanner).
+    public let expansionHint: SearchExpansionHint?
+
     public static let empty = GlobalSearchResults(
         artistTreeNodes: [],
         playlists: [],
@@ -47,8 +78,15 @@ public struct GlobalSearchResults: Sendable, Equatable {
         artistTreeNodes: [SearchTreeArtistNode],
         playlists: [Playlist],
         directMatchedAlbums: [(album: Album, artist: Artist)],
-        directMatchedTracks: [SearchTreeTrackNode]
+        directMatchedTracks: [SearchTreeTrackNode],
+        trackCategoryNodes: [SearchTreeArtistNode] = [],
+        query: String = "",
+        expansionHint: SearchExpansionHint? = nil,
+        unresolvedTracks: [SearchTreeTrackNode] = []
     ) {
+        self.expansionHint = expansionHint
+        self.trackCategoryNodes = trackCategoryNodes
+        self.query = query
         self.artistTreeNodes = artistTreeNodes
         self.playlists = playlists
         self.directMatchedAlbums = directMatchedAlbums
@@ -83,6 +121,9 @@ public struct GlobalSearchResults: Sendable, Equatable {
         self.matchedArtists = artistTreeNodes.filter { $0.isDirectlyMatched }
         self.matchedAlbums = directMatchedAlbums
         self.matchedTracks = directMatchedTracks
+
+        // D13(b): only songs that could not be resolved to a library artist/album (computed by the engine).
+        self.unrepresentedTracks = unresolvedTracks
     }
 
     public var hasResults: Bool {
@@ -94,6 +135,7 @@ public struct GlobalSearchResults: Sendable, Equatable {
     }
 
     public static func == (lhs: GlobalSearchResults, rhs: GlobalSearchResults) -> Bool {
+        lhs.query == rhs.query &&
         lhs.totalArtistsCount == rhs.totalArtistsCount &&
         lhs.totalAlbumsCount == rhs.totalAlbumsCount &&
         lhs.totalTracksCount == rhs.totalTracksCount &&
@@ -103,11 +145,14 @@ public struct GlobalSearchResults: Sendable, Equatable {
         lhs.artistTreeNodes == rhs.artistTreeNodes &&
         lhs.directMatchedTracks == rhs.directMatchedTracks &&
         lhs.directMatchedAlbums.map { $0.album.id } == rhs.directMatchedAlbums.map { $0.album.id } &&
-        lhs.playlists.map { $0.id } == rhs.playlists.map { $0.id }
+        lhs.playlists.map { $0.id } == rhs.playlists.map { $0.id } &&
+        lhs.playlists.map { $0.name } == rhs.playlists.map { $0.name } &&
+        lhs.trackCategoryNodes == rhs.trackCategoryNodes &&
+        lhs.expansionHint == rhs.expansionHint
     }
 }
 
-public struct SearchTreeArtistNode: Identifiable, Sendable, Equatable {
+nonisolated public struct SearchTreeArtistNode: Identifiable, Sendable, Equatable {
     public let id: String
     public let artist: Artist
     public var albums: [SearchTreeAlbumNode]
@@ -139,13 +184,15 @@ public struct SearchTreeArtistNode: Identifiable, Sendable, Equatable {
     public static func == (lhs: SearchTreeArtistNode, rhs: SearchTreeArtistNode) -> Bool {
         lhs.id == rhs.id &&
         lhs.artist.id == rhs.artist.id &&
-        lhs.albums.count == rhs.albums.count &&
+        lhs.artist.name == rhs.artist.name &&
+        lhs.artist.mostRecentArtworkKey == rhs.artist.mostRecentArtworkKey &&
         lhs.isDirectlyMatched == rhs.isDirectlyMatched &&
-        lhs.relevanceScore == rhs.relevanceScore
+        lhs.relevanceScore == rhs.relevanceScore &&
+        lhs.albums == rhs.albums
     }
 }
 
-public struct SearchTreeAlbumNode: Identifiable, Sendable, Equatable {
+nonisolated public struct SearchTreeAlbumNode: Identifiable, Sendable, Equatable {
     public let id: String
     public let album: Album
     public var tracks: [SearchTreeTrackNode]
@@ -156,14 +203,17 @@ public struct SearchTreeAlbumNode: Identifiable, Sendable, Equatable {
     public static func == (lhs: SearchTreeAlbumNode, rhs: SearchTreeAlbumNode) -> Bool {
         lhs.id == rhs.id &&
         lhs.album.id == rhs.album.id &&
-        lhs.tracks.count == rhs.tracks.count &&
+        lhs.album.title == rhs.album.title &&
+        lhs.album.artworkKey == rhs.album.artworkKey &&
+        lhs.album.tracks.count == rhs.album.tracks.count &&
         lhs.isDirectlyMatched == rhs.isDirectlyMatched &&
         lhs.relevanceScore == rhs.relevanceScore &&
-        lhs.category == rhs.category
+        lhs.category == rhs.category &&
+        lhs.tracks == rhs.tracks
     }
 }
 
-public struct SearchTreeTrackNode: Identifiable, Sendable, Equatable {
+nonisolated public struct SearchTreeTrackNode: Identifiable, Sendable, Equatable {
     public let id: String
     public let track: Track
     public var isDirectlyMatched: Bool
@@ -172,8 +222,672 @@ public struct SearchTreeTrackNode: Identifiable, Sendable, Equatable {
     public static func == (lhs: SearchTreeTrackNode, rhs: SearchTreeTrackNode) -> Bool {
         lhs.id == rhs.id &&
         lhs.track.id == rhs.track.id &&
+        lhs.track.title == rhs.track.title &&
+        lhs.track.duration == rhs.track.duration &&
+        lhs.track.trackNumber == rhs.track.trackNumber &&
         lhs.isDirectlyMatched == rhs.isDirectlyMatched &&
         lhs.relevanceScore == rhs.relevanceScore
+    }
+}
+
+// MARK: - Flat Search Result Rows
+
+/// One flat row of the library search results. The whole result tree (artist -> category -> album -> track,
+/// filtered lists, show-more, playlists) is flattened into a single array built off the main actor, so the
+/// results render with ONE ForEach inside ONE lazy container (no nested lazy stacks). Tree connector lines
+/// and the original stack spacing are reproduced per row via the gap/line fields.
+nonisolated public enum SearchResultRowKind: Sendable {
+    case controls(artists: Int, albums: Int, tracks: Int, filter: SearchCategoryFilter?)
+    case artistHeader(SearchTreeArtistNode)
+    case categoryHeader(String)
+    case albumHeader(SearchTreeAlbumNode, artistID: String)
+    case albumTrack(SearchTreeTrackNode, albumTracks: [Track], index: Int)
+    case looseTracksHeader(count: Int)
+    case looseTrack(SearchTreeTrackNode, index: Int)
+    case loadMore
+    case filteredArtist(SearchTreeArtistNode)
+    case filteredAlbum(album: Album, artist: Artist)
+    case playlistsHeader(count: Int, isCollapsed: Bool)
+    case playlistsGrid([Playlist])
+}
+
+nonisolated public struct SearchResultRow: Identifiable, Sendable, Equatable {
+    public let id: String
+    public let kind: SearchResultRowKind
+    /// Space above the row that lies outside every connector line (stack spacing / outer padding).
+    public var outerGap: CGFloat = 0
+    /// Space above the row covered only by the artist connector line.
+    public var artistLineGap: CGFloat = 0
+    /// Space above the row covered by both the artist and album connector lines.
+    public var albumLineGap: CGFloat = 0
+    public var artistLine: Bool = false
+    public var albumLine: Bool = false
+    /// TRACKS category rows resolve artist/album against the library on tap.
+    public var resolvesFromLibrary: Bool = false
+
+    public static func == (lhs: SearchResultRow, rhs: SearchResultRow) -> Bool {
+        guard lhs.id == rhs.id,
+              lhs.outerGap == rhs.outerGap,
+              lhs.artistLineGap == rhs.artistLineGap,
+              lhs.albumLineGap == rhs.albumLineGap,
+              lhs.artistLine == rhs.artistLine,
+              lhs.albumLine == rhs.albumLine,
+              lhs.resolvesFromLibrary == rhs.resolvesFromLibrary else { return false }
+        switch (lhs.kind, rhs.kind) {
+        case let (.controls(a1, b1, c1, f1), .controls(a2, b2, c2, f2)):
+            return a1 == a2 && b1 == b2 && c1 == c2 && f1 == f2
+        case let (.artistHeader(n1), .artistHeader(n2)):
+            return n1 == n2
+        case let (.categoryHeader(t1), .categoryHeader(t2)):
+            return t1 == t2
+        case let (.albumHeader(n1, a1), .albumHeader(n2, a2)):
+            return a1 == a2 && n1 == n2
+        case let (.albumTrack(n1, q1, i1), .albumTrack(n2, q2, i2)):
+            return i1 == i2 && q1.count == q2.count && n1 == n2
+        case let (.looseTracksHeader(c1), .looseTracksHeader(c2)):
+            return c1 == c2
+        case let (.looseTrack(n1, i1), .looseTrack(n2, i2)):
+            return i1 == i2 && n1 == n2
+        case (.loadMore, .loadMore):
+            return true
+        case let (.filteredArtist(n1), .filteredArtist(n2)):
+            return n1 == n2
+        case let (.filteredAlbum(al1, ar1), .filteredAlbum(al2, ar2)):
+            return al1.id == al2.id && al1.title == al2.title && al1.artist == al2.artist &&
+                al1.artworkKey == al2.artworkKey && al1.formattedYear == al2.formattedYear && ar1.name == ar2.name
+        case let (.playlistsHeader(c1, x1), .playlistsHeader(c2, x2)):
+            return c1 == c2 && x1 == x2
+        case let (.playlistsGrid(p1), .playlistsGrid(p2)):
+            return p1.count == p2.count && zip(p1, p2).allSatisfy {
+                $0.id == $1.id && $0.name == $1.name && $0.isPinned == $1.isPinned && $0.trackIDs.count == $1.trackIDs.count
+            }
+        default:
+            return false
+        }
+    }
+}
+
+nonisolated enum SearchResultRowBuilder {
+    struct Input: Sendable {
+        var results: GlobalSearchResults
+        var filter: SearchCategoryFilter?
+        var expandedArtistIDs: Set<String>
+        var expandedAlbumIDs: Set<String>
+        var trackExpandedArtistIDs: Set<String>
+        var trackExpandedAlbumIDs: Set<String>
+        var isPlaylistsCollapsed: Bool
+        var canLoadMore: Bool
+    }
+
+    /// Number of artist matches expanded by default in the TRACKS category.
+    static let defaultTrackCategoryExpansion = 3
+
+    static func build(_ input: Input) -> [SearchResultRow] {
+        var rows: [SearchResultRow] = []
+        var usedIDs = Set<String>()
+        func add(_ row: SearchResultRow) {
+            if usedIDs.insert(row.id).inserted {
+                rows.append(row)
+            } else {
+                var n = 2
+                while !usedIDs.insert("\(row.id)#\(n)").inserted { n += 1 }
+                var copy = SearchResultRow(id: "\(row.id)#\(n)", kind: row.kind)
+                copy.outerGap = row.outerGap
+                copy.artistLineGap = row.artistLineGap
+                copy.albumLineGap = row.albumLineGap
+                copy.artistLine = row.artistLine
+                copy.albumLine = row.albumLine
+                copy.resolvesFromLibrary = row.resolvesFromLibrary
+                rows.append(copy)
+            }
+        }
+
+        let results = input.results
+        add(SearchResultRow(
+            id: "controls",
+            kind: .controls(
+                artists: results.totalArtistsCount,
+                albums: results.totalAlbumsCount,
+                tracks: results.totalTracksCount,
+                filter: input.filter
+            )
+        ))
+
+        /// D12: the top-match album for the top-hit artist in a song/album search; nil for artist searches.
+        func topMatchAlbumID(_ node: SearchTreeArtistNode) -> String? {
+            guard let hint = results.expansionHint, hint.isSongOrAlbumHit, !hint.suppress,
+                  hint.artistID == node.artist.id, let albumID = hint.albumID else { return nil }
+            return node.albums.first { $0.album.id == albumID }?.id
+        }
+
+        func appendArtist(_ node: SearchTreeArtistNode, gap: CGFloat, isExpanded: Bool, expandedAlbums: Set<String>, prefix: String, resolves: Bool) {
+            var header = SearchResultRow(id: "\(prefix)artist-\(node.id)", kind: .artistHeader(node))
+            header.outerGap = gap
+            header.resolvesFromLibrary = resolves
+            add(header)
+            guard isExpanded, !node.albums.isEmpty else { return }
+
+            // D11: headers only when sections are mixed; order via SearchSectionLayout.topMatchSectionFirst.
+            let categories = SearchSectionLayout.layout([
+                ("ALBUMS", node.studioAlbumNodes),
+                ("SINGLES & EPS", node.singlesNodes),
+                ("ALTERNATES", node.alternatesNodes),
+                ("FEATURED ON", node.featuredAlbumNodes)
+            ], topAlbumID: topMatchAlbumID(node), id: { $0.id })
+            var isFirstCategory = true
+            for (title, albums) in categories {
+                var headerless = false
+                if let title {
+                    var cat = SearchResultRow(id: "\(prefix)cat-\(node.id)-\(title)", kind: .categoryHeader("\(title) (\(albums.count))"))
+                    cat.outerGap = isFirstCategory ? 6 : 0
+                    cat.artistLineGap = isFirstCategory ? 0 : 14
+                    cat.artistLine = true
+                    cat.resolvesFromLibrary = resolves
+                    add(cat)
+                } else {
+                    headerless = true
+                }
+                isFirstCategory = false
+
+                for (albumIndex, albumNode) in albums.enumerated() {
+                    var albumRow = SearchResultRow(id: "\(prefix)album-\(node.id)-\(albumNode.id)", kind: .albumHeader(albumNode, artistID: node.id))
+                    if headerless && albumIndex == 0 { albumRow.outerGap = 6 }
+                    albumRow.artistLineGap = 6
+                    albumRow.artistLine = true
+                    albumRow.resolvesFromLibrary = resolves
+                    add(albumRow)
+
+                    guard expandedAlbums.contains(albumNode.id), !albumNode.tracks.isEmpty else { continue }
+                    let albumTracks = albumNode.album.tracks
+                    for index in albumNode.tracks.indices {
+                        let trackNode = albumNode.tracks[index]
+                        // Queue position in the full album (the node may list only the matched tracks, D8).
+                        let queueIndex = albumTracks.firstIndex { $0.id == trackNode.track.id } ?? index
+                        var trackRow = SearchResultRow(
+                            id: "\(prefix)track-\(node.id)-\(albumNode.id)-\(trackNode.id)",
+                            kind: .albumTrack(trackNode, albumTracks: albumTracks, index: queueIndex)
+                        )
+                        trackRow.artistLineGap = index == 0 ? 2 : 0
+                        trackRow.albumLineGap = index == 0 ? 0 : 4
+                        trackRow.artistLine = true
+                        trackRow.albumLine = true
+                        trackRow.resolvesFromLibrary = resolves
+                        add(trackRow)
+                    }
+                }
+            }
+        }
+
+        func appendFilteredAlbums() {
+            for index in results.matchedAlbums.indices {
+                let pair = results.matchedAlbums[index]
+                var row = SearchResultRow(id: "falbum-\(pair.album.id)", kind: .filteredAlbum(album: pair.album, artist: pair.artist))
+                row.outerGap = index == 0 ? 16 : 8
+                add(row)
+            }
+        }
+
+        func appendTrackCategory() {
+            let nodes = results.trackCategoryNodes
+            for index in nodes.indices {
+                let node = nodes[index]
+                appendArtist(
+                    node,
+                    gap: index == 0 ? 16 : 14,
+                    isExpanded: input.trackExpandedArtistIDs.contains(node.id),
+                    expandedAlbums: input.trackExpandedAlbumIDs,
+                    prefix: "k-",
+                    resolves: true
+                )
+            }
+            if input.canLoadMore {
+                var more = SearchResultRow(id: "k-loadmore", kind: .loadMore)
+                more.outerGap = nodes.isEmpty ? 16 : 14
+                add(more)
+            }
+        }
+
+        switch input.filter {
+        case .artists:
+            let list = results.matchedArtists.isEmpty ? results.artistTreeNodes : results.matchedArtists
+            for index in list.indices {
+                var row = SearchResultRow(id: "fartist-\(list[index].id)", kind: .filteredArtist(list[index]))
+                row.outerGap = index == 0 ? 16 : 8
+                add(row)
+            }
+        case .albums:
+            appendFilteredAlbums()
+        case .tracks:
+            appendTrackCategory()
+        case nil:
+            if !results.artistTreeNodes.isEmpty {
+                for node in results.artistTreeNodes {
+                    appendArtist(
+                        node,
+                        gap: 16,
+                        isExpanded: input.expandedArtistIDs.contains(node.id),
+                        expandedAlbums: input.expandedAlbumIDs,
+                        prefix: "",
+                        resolves: false
+                    )
+                }
+                let loose = results.unrepresentedTracks
+                if !loose.isEmpty {
+                    var header = SearchResultRow(id: "loose-header", kind: .looseTracksHeader(count: loose.count))
+                    header.outerGap = 16
+                    add(header)
+                    for index in loose.indices {
+                        var row = SearchResultRow(id: "loose-\(loose[index].id)", kind: .looseTrack(loose[index], index: index))
+                        row.outerGap = 16
+                        add(row)
+                    }
+                    if input.canLoadMore {
+                        var more = SearchResultRow(id: "loose-loadmore", kind: .loadMore)
+                        more.outerGap = 16
+                        add(more)
+                    }
+                }
+                // Artist rows that show no albums (collapsed headers only) must never hide the album and song
+                // matches: list them directly underneath.
+                if !results.artistTreeNodes.contains(where: { !$0.albums.isEmpty }) {
+                    if !results.directMatchedAlbums.isEmpty {
+                        appendFilteredAlbums()
+                    }
+                    if !results.directMatchedTracks.isEmpty, loose.isEmpty {
+                        appendTrackCategory()
+                    }
+                }
+            } else {
+                if !results.directMatchedAlbums.isEmpty {
+                    appendFilteredAlbums()
+                }
+                if !results.directMatchedTracks.isEmpty {
+                    appendTrackCategory()
+                }
+            }
+
+            if !results.playlists.isEmpty {
+                var header = SearchResultRow(id: "playlists-header", kind: .playlistsHeader(count: results.playlists.count, isCollapsed: input.isPlaylistsCollapsed))
+                header.outerGap = 16
+                add(header)
+                if !input.isPlaylistsCollapsed {
+                    var grid = SearchResultRow(id: "playlists-grid", kind: .playlistsGrid(results.playlists))
+                    grid.outerGap = 10
+                    add(grid)
+                }
+            }
+        }
+        return rows
+    }
+}
+
+// MARK: - Search Section Layout (D11 + D12)
+
+/// D11: section headers in search results appear only when the matched albums span more than one section type.
+/// D12: when headers show for a song/album top hit, the section holding the top match moves to the top.
+nonisolated enum SearchSectionLayout {
+    /// D12 switch. `true` (default) = in a song/album search the section containing the top-match album goes first,
+    /// the rest follow in standard order. `false` = always standard order
+    /// ALBUMS → SINGLES & EPS → ALTERNATES → FEATURED ON. Exact artist-name searches always use standard order.
+    static let topMatchSectionFirst = true
+
+    /// `groups` are in standard section order, each already in ranked order. `topAlbumID` is the top-match album
+    /// (pass nil for artist searches). Returns (header title or nil, items); one non-empty section → one headerless group.
+    static func layout<T>(_ groups: [(String, [T])], topAlbumID: String?, id: (T) -> String,
+                          topMatchFirst: Bool = topMatchSectionFirst) -> [(String?, [T])] {
+        var nonEmpty = groups.filter { !$0.1.isEmpty }
+        if nonEmpty.count == 1 { return [(nil, nonEmpty[0].1)] }
+        if topMatchFirst, let topAlbumID,
+           let i = nonEmpty.firstIndex(where: { $0.1.contains { id($0) == topAlbumID } }), i > 0 {
+            nonEmpty.insert(nonEmpty.remove(at: i), at: 0)
+        }
+        return nonEmpty.map { (Optional($0.0), $0.1) }
+    }
+}
+
+// MARK: - Global Search Model
+
+/// Small dedicated search model: debounces typing, guards against stale queries, pages track results,
+/// and publishes results + default expansions + flattened rows in a single assignment per query.
+@Observable
+@MainActor
+final class GlobalSearchModel {
+    struct Presentation: Equatable {
+        var results: GlobalSearchResults = .empty
+        var expandedArtistIDs: Set<String> = []
+        var expandedAlbumIDs: Set<String> = []
+        var trackExpandedArtistIDs: Set<String> = []
+        var trackExpandedAlbumIDs: Set<String> = []
+        /// "artistID|albumID" of the album opened automatically for the current top hit (§6b).
+        var autoExpandedKey: String? = nil
+        var autoExpandedArtistID: String? = nil
+        var autoExpandedAlbumID: String? = nil
+    }
+
+    /// Main-tree expansion state that `nextExpansion` carries from one result set to the next (§6b).
+    nonisolated struct ExpansionState: Equatable, Sendable {
+        var expandedArtistIDs: Set<String> = []
+        var expandedAlbumIDs: Set<String> = []
+        var autoExpandedKey: String? = nil
+        var autoExpandedArtistID: String? = nil
+        var autoExpandedAlbumID: String? = nil
+    }
+
+    /// Albums/artists the user opened or closed by hand (written only by the toggle functions).
+    nonisolated struct UserExpansion: Equatable, Sendable {
+        var expandedArtistIDs: Set<String> = []
+        var expandedAlbumIDs: Set<String> = []
+        var collapsedAlbumIDs: Set<String> = []
+    }
+
+    /// §6b auto-expand rules (pure, so SearchSelfCheck can test them):
+    /// 1. never collapse an album the user opened; 2. change the auto album only when the hint key changes
+    /// (same key → nothing changes, so no flicker while typing); 3. never reopen an album the user collapsed;
+    /// 4. `suppress` → open nothing and keep the key. Nothing here scrolls (D7).
+    nonisolated static func nextExpansion(prev: ExpansionState, hint: SearchExpansionHint?, user: UserExpansion) -> ExpansionState {
+        var next = prev
+        if let hint, !hint.suppress {
+            let key = "\(hint.artistID)|\(hint.albumID ?? "")"
+            if key != prev.autoExpandedKey {
+                if let old = prev.autoExpandedAlbumID, !user.expandedAlbumIDs.contains(old) {
+                    next.expandedAlbumIDs.remove(old)
+                }
+                if let old = prev.autoExpandedArtistID, old != hint.artistID, !user.expandedArtistIDs.contains(old) {
+                    next.expandedArtistIDs.remove(old)
+                }
+                next.expandedArtistIDs.insert(hint.artistID)
+                next.autoExpandedArtistID = hint.artistID
+                if let albumID = hint.albumID, !user.collapsedAlbumIDs.contains(albumID) {
+                    next.expandedAlbumIDs.insert(albumID)
+                    next.autoExpandedAlbumID = albumID
+                } else {
+                    next.autoExpandedAlbumID = nil
+                }
+                next.autoExpandedKey = key
+            }
+        }
+        next.expandedAlbumIDs.formUnion(user.expandedAlbumIDs)
+        next.expandedArtistIDs.formUnion(user.expandedArtistIDs)
+        next.expandedAlbumIDs.subtract(user.collapsedAlbumIDs)
+        return next
+    }
+
+    static let pageSize = 80
+    static let maxTrackLimit = 400
+    static let debounce: Duration = .milliseconds(130)
+    static let expandAnimation = Animation.spring(response: 0.22, dampingFraction: 0.86)
+    static let filterAnimation = Animation.spring(response: 0.22, dampingFraction: 0.85)
+
+    private(set) var presentation = Presentation()
+    /// Flattened rows rendered by the results container (built off-main).
+    private(set) var rows: [SearchResultRow] = []
+    private(set) var activeCategoryFilter: SearchCategoryFilter? = nil
+    private(set) var isPlaylistsCollapsed = false
+    private(set) var isSearching = false
+    private(set) var trackLimit = GlobalSearchModel.pageSize
+
+    @ObservationIgnored private var searchTask: Task<Void, Never>?
+    @ObservationIgnored private var rowsTask: Task<Void, Never>?
+    @ObservationIgnored private var generation: UInt64 = 0
+    @ObservationIgnored private var rowsGeneration: UInt64 = 0
+    @ObservationIgnored private var currentQuery = ""
+    @ObservationIgnored private var userExpansion = UserExpansion()
+
+    var canLoadMore: Bool {
+        canLoadMore(for: presentation.results)
+    }
+
+    private func canLoadMore(for results: GlobalSearchResults) -> Bool {
+        trackLimit < Self.maxTrackLimit && results.directMatchedTracks.count >= trackLimit
+    }
+
+    func submit(_ rawQuery: String, debounced: Bool = true) {
+        let clean = rawQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !clean.isEmpty else {
+            clear()
+            return
+        }
+        if clean != currentQuery {
+            trackLimit = Self.pageSize
+        }
+        currentQuery = clean
+        run(query: clean, limit: trackLimit, debounced: debounced, preserveExpansion: false)
+    }
+
+    func loadMore() {
+        guard canLoadMore, !currentQuery.isEmpty else { return }
+        trackLimit = min(trackLimit + Self.pageSize, Self.maxTrackLimit)
+        run(query: currentQuery, limit: trackLimit, debounced: false, preserveExpansion: true)
+    }
+
+    func cancel() {
+        searchTask?.cancel()
+        searchTask = nil
+        generation &+= 1
+        if isSearching { isSearching = false }
+    }
+
+    func clear() {
+        cancel()
+        cancelRowBuild()
+        currentQuery = ""
+        trackLimit = Self.pageSize
+        userExpansion = UserExpansion()
+        if presentation != Presentation() || !rows.isEmpty {
+            withAnimation(.easeInOut(duration: 0.15)) {
+                presentation = Presentation()
+                rows = []
+            }
+        }
+    }
+
+    // MARK: Interaction (expansion, filters) — each change rebuilds rows off-main, then animates them in.
+
+    func toggleArtistExpansion(_ artistID: String) {
+        var next = presentation
+        if activeCategoryFilter == .tracks {
+            if next.trackExpandedArtistIDs.contains(artistID) {
+                next.trackExpandedArtistIDs.remove(artistID)
+            } else {
+                next.trackExpandedArtistIDs.insert(artistID)
+                if let node = next.results.trackCategoryNodes.first(where: { $0.id == artistID }) {
+                    next.trackExpandedAlbumIDs.formUnion(node.albums.map(\.id))
+                }
+            }
+        } else if next.expandedArtistIDs.contains(artistID) {
+            next.expandedArtistIDs.remove(artistID)
+            userExpansion.expandedArtistIDs.remove(artistID)
+        } else {
+            userExpansion.expandedArtistIDs.insert(artistID)
+            let results = next.results
+            if let index = results.artistTreeNodes.firstIndex(where: { $0.id == artistID }),
+               results.artistTreeNodes[index].albums.isEmpty,
+               let expanded = SearchEngine.shared.expandArtist(artistID: artistID, query: currentQuery) {
+                var updatedNodes = results.artistTreeNodes
+                updatedNodes[index] = expanded
+                next.results = GlobalSearchResults(
+                    artistTreeNodes: updatedNodes,
+                    playlists: results.playlists,
+                    directMatchedAlbums: results.directMatchedAlbums,
+                    directMatchedTracks: results.directMatchedTracks,
+                    trackCategoryNodes: results.trackCategoryNodes,
+                    query: results.query,
+                    expansionHint: results.expansionHint,
+                    unresolvedTracks: results.unrepresentedTracks
+                )
+            }
+            next.expandedArtistIDs.insert(artistID)
+        }
+        presentation = next
+        rebuildRows(animation: Self.expandAnimation)
+    }
+
+    func toggleAlbumExpansion(_ albumID: String, artistID: String) {
+        var next = presentation
+        if activeCategoryFilter == .tracks {
+            next.trackExpandedArtistIDs.insert(artistID)
+            if next.trackExpandedAlbumIDs.contains(albumID) {
+                next.trackExpandedAlbumIDs.remove(albumID)
+            } else {
+                next.trackExpandedAlbumIDs.insert(albumID)
+            }
+        } else {
+            next.expandedArtistIDs.insert(artistID)
+            if next.expandedAlbumIDs.contains(albumID) {
+                next.expandedAlbumIDs.remove(albumID)
+                userExpansion.expandedAlbumIDs.remove(albumID)
+                userExpansion.collapsedAlbumIDs.insert(albumID)
+            } else {
+                next.expandedAlbumIDs.insert(albumID)
+                userExpansion.expandedAlbumIDs.insert(albumID)
+                userExpansion.collapsedAlbumIDs.remove(albumID)
+            }
+        }
+        presentation = next
+        rebuildRows(animation: Self.expandAnimation)
+    }
+
+    func collapseAll() {
+        userExpansion.collapsedAlbumIDs.formUnion(presentation.expandedAlbumIDs)
+        userExpansion.expandedAlbumIDs.removeAll()
+        userExpansion.expandedArtistIDs.removeAll()
+        presentation.expandedArtistIDs.removeAll()
+        presentation.expandedAlbumIDs.removeAll()
+        rebuildRows(animation: Self.expandAnimation)
+    }
+
+    func toggleCategoryFilter(_ category: SearchCategoryFilter) {
+        activeCategoryFilter = (activeCategoryFilter == category) ? nil : category
+        rebuildRows(animation: Self.filterAnimation)
+    }
+
+    func togglePlaylistsCollapsed() {
+        isPlaylistsCollapsed.toggle()
+        rebuildRows(animation: Self.filterAnimation)
+    }
+
+    // MARK: Row building
+
+    private func rowInput(for presentation: Presentation, canLoadMore: Bool) -> SearchResultRowBuilder.Input {
+        SearchResultRowBuilder.Input(
+            results: presentation.results,
+            filter: activeCategoryFilter,
+            expandedArtistIDs: presentation.expandedArtistIDs,
+            expandedAlbumIDs: presentation.expandedAlbumIDs,
+            trackExpandedArtistIDs: presentation.trackExpandedArtistIDs,
+            trackExpandedAlbumIDs: presentation.trackExpandedAlbumIDs,
+            isPlaylistsCollapsed: isPlaylistsCollapsed,
+            canLoadMore: canLoadMore
+        )
+    }
+
+    private func cancelRowBuild() {
+        rowsTask?.cancel()
+        rowsTask = nil
+        rowsGeneration &+= 1
+    }
+
+    private func rebuildRows(animation: Animation?) {
+        cancelRowBuild()
+        let token = rowsGeneration
+        let input = rowInput(for: presentation, canLoadMore: canLoadMore)
+        rowsTask = Task { [weak self] in
+            let built = await Task.detached(priority: .userInitiated) {
+                SearchResultRowBuilder.build(input)
+            }.value
+            guard let self, !Task.isCancelled, token == self.rowsGeneration else { return }
+            if built != self.rows {
+                withAnimation(animation) {
+                    self.rows = built
+                }
+            }
+            self.rowsTask = nil
+        }
+    }
+
+    private func run(query: String, limit: Int, debounced: Bool, preserveExpansion: Bool) {
+        searchTask?.cancel()
+        generation &+= 1
+        let token = generation
+        if !isSearching { isSearching = true }
+
+        searchTask = Task { [weak self] in
+            if debounced {
+                try? await Task.sleep(for: Self.debounce)
+            }
+            guard !Task.isCancelled else { return }
+
+            let results = await SearchEngine.shared.search(
+                query: query,
+                maxTrackResults: limit,
+                maxAlbumResults: 40,
+                maxArtistResults: 40
+            )
+
+            // Stale-query guard: drop results superseded by newer input.
+            guard let self, !Task.isCancelled, token == self.generation, query == self.currentQuery else { return }
+            let next = self.makePresentation(results, preserveExpansion: preserveExpansion)
+            let input = self.rowInput(for: next, canLoadMore: self.canLoadMore(for: results))
+            let built = await Task.detached(priority: .userInitiated) {
+                SearchResultRowBuilder.build(input)
+            }.value
+            guard !Task.isCancelled, token == self.generation, query == self.currentQuery else { return }
+
+            // Publish results and their rows together; supersede any in-flight interaction rebuild.
+            self.cancelRowBuild()
+            if next != self.presentation {
+                self.presentation = next
+            }
+            if built != self.rows {
+                self.rows = built
+            }
+            self.isSearching = false
+            self.searchTask = nil
+        }
+    }
+
+    private func makePresentation(_ results: GlobalSearchResults, preserveExpansion: Bool) -> Presentation {
+        var next = Presentation(results: results)
+        if preserveExpansion {
+            next.expandedArtistIDs = presentation.expandedArtistIDs
+            next.expandedAlbumIDs = presentation.expandedAlbumIDs
+            next.trackExpandedArtistIDs = presentation.trackExpandedArtistIDs
+            next.trackExpandedAlbumIDs = presentation.trackExpandedAlbumIDs
+            next.autoExpandedKey = presentation.autoExpandedKey
+            next.autoExpandedArtistID = presentation.autoExpandedArtistID
+            next.autoExpandedAlbumID = presentation.autoExpandedAlbumID
+        } else if let hint = results.expansionHint {
+            // Token engine top-hit rule (§6b): carry the previous expansion and change only what the hint changes.
+            let prev = ExpansionState(
+                expandedArtistIDs: presentation.expandedArtistIDs,
+                expandedAlbumIDs: presentation.expandedAlbumIDs,
+                autoExpandedKey: presentation.autoExpandedKey,
+                autoExpandedArtistID: presentation.autoExpandedArtistID,
+                autoExpandedAlbumID: presentation.autoExpandedAlbumID
+            )
+            let state = Self.nextExpansion(prev: prev, hint: hint, user: userExpansion)
+            next.expandedArtistIDs = state.expandedArtistIDs
+            next.expandedAlbumIDs = state.expandedAlbumIDs
+            next.autoExpandedKey = state.autoExpandedKey
+            next.autoExpandedArtistID = state.autoExpandedArtistID
+            next.autoExpandedAlbumID = state.autoExpandedAlbumID
+        } else if let topArtistNode = results.artistTreeNodes.first {
+            next.expandedArtistIDs.insert(topArtistNode.id)
+            let matchedAlbum = topArtistNode.albums.first(where: { $0.isDirectlyMatched })
+                ?? topArtistNode.albums.first(where: { $0.tracks.contains(where: { $0.isDirectlyMatched }) })
+                ?? topArtistNode.albums.first
+            if let matchedAlbumID = matchedAlbum?.id {
+                next.expandedAlbumIDs.insert(matchedAlbumID)
+            }
+        }
+        // TRACKS category: only the first few matches start expanded (new ones from paging stay collapsed).
+        if !preserveExpansion {
+            for node in results.trackCategoryNodes.prefix(SearchResultRowBuilder.defaultTrackCategoryExpansion) {
+                next.trackExpandedArtistIDs.insert(node.id)
+                next.trackExpandedAlbumIDs.formUnion(node.albums.map(\.id))
+            }
+        }
+        return next
     }
 }
 
@@ -186,16 +900,12 @@ public struct GlobalSearchView: View {
     @Environment(\.appTheme) private var appTheme
 
     @State private var searchQuery: String = ""
-    @State private var results: GlobalSearchResults = .empty
-    @State private var isSearching: Bool = false
-    @State private var activeCategoryFilter: SearchCategoryFilter? = nil
+    @State private var searchModel = GlobalSearchModel()
     @State private var isSearchPresented: Bool = false
 
-    // Expansion sets for artists and independent multiple albums
-    @State private var expandedArtistIDs: Set<String> = []
-    @State private var expandedAlbumIDs: Set<String> = []
-    @State private var collapseTrigger: Int = 0
-    @State private var isPlaylistsCollapsed: Bool = false
+    // Results, expansion sets, filters and flattened rows live in GlobalSearchModel.
+    private var results: GlobalSearchResults { searchModel.presentation.results }
+    private var isSearching: Bool { searchModel.isSearching }
 
     // Selection states for navigation & sheets
     @State private var selectedArtistForNavigation: Artist? = nil
@@ -208,28 +918,15 @@ public struct GlobalSearchView: View {
     @State private var inFlightQuery: String? = nil
     @State private var pendingSearchQuery: String? = nil
 
-    // Online Search Mode State
-    @State private var isOnlineMode: Bool = false
-    @State private var onlineResults: OnlineSearchResults = OnlineSearchResults()
-    @State private var isOnlineSearching: Bool = false
-    @State private var previewManager = OnlineAudioPreviewManager.shared
-
-    private let onlineColumns = [
-        GridItem(.flexible(), spacing: 14),
-        GridItem(.flexible(), spacing: 14)
-    ]
-
     public init(
         libraryStore: LibraryStore,
         playerService: AudioPlayerService,
-        initialQuery: String? = nil,
-        initialOnlineMode: Bool = false
+        initialQuery: String? = nil
     ) {
         self.libraryStore = libraryStore
         self.playerService = playerService
         let query = initialQuery ?? libraryStore.globalSearchQuery
         self._searchQuery = State(initialValue: query)
-        self._isOnlineMode = State(initialValue: initialOnlineMode)
     }
 
     private var trimmedQuery: String {
@@ -247,11 +944,7 @@ public struct GlobalSearchView: View {
 
     public var body: some View {
         Group {
-            if isOnlineMode {
-                onlineContentView
-            } else {
-                libraryContentView
-            }
+            libraryContentView
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(libraryStore.settings.appTheme.backgroundColor.ignoresSafeArea())
@@ -268,13 +961,13 @@ public struct GlobalSearchView: View {
                     }
                 }
         )
-        .navigationTitle(isOnlineMode ? "SEARCH ONLINE" : "SEARCH LIBRARY")
+        .navigationTitle("SEARCH LIBRARY")
         .navigationBarTitleDisplayMode(.inline)
         .searchable(
             text: $searchQuery,
             isPresented: $isSearchPresented,
             placement: .navigationBarDrawer(displayMode: .always),
-            prompt: Text(isOnlineMode ? "SEARCH ONLINE CATALOG..." : "SEARCH TRACKS, ARTISTS, ALBUMS...")
+            prompt: Text("SEARCH TRACKS, ARTISTS, ALBUMS...")
         )
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
@@ -284,16 +977,6 @@ public struct GlobalSearchView: View {
                         .foregroundStyle(Color.primary)
                         .frame(width: 32, height: 32, alignment: .center)
                         .contentShape(Rectangle())
-                }
-            }
-            ToolbarItem(placement: .topBarTrailing) {
-                Button(action: {
-                    HapticFeedback.selectionChanged()
-                    isOnlineMode.toggle()
-                }) {
-                    Image(systemName: "globe")
-                        .font(.system(size: 17, weight: .semibold))
-                        .foregroundStyle(isOnlineMode ? Color.blue : Color.primary)
                 }
             }
         }
@@ -323,51 +1006,27 @@ public struct GlobalSearchView: View {
         .task(id: searchQuery) {
             let clean = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !clean.isEmpty else {
-                activeSearchTask?.cancel()
-                activeSearchTask = nil
-                inFlightQuery = nil
-                pendingSearchQuery = nil
-                withAnimation(.easeInOut(duration: 0.15)) {
-                    self.results = .empty
-                    self.expandedArtistIDs = []
-                    self.expandedAlbumIDs = []
-                    self.isSearching = false
-                    self.onlineResults = OnlineSearchResults()
-                    self.isOnlineSearching = false
-                }
+                clearAllSearchState()
                 return
             }
 
-            if isOnlineMode {
-                dispatchOnlineSearch(for: clean)
-                return
-            }
-
-            // 60-80 ms debounce
-            try? await Task.sleep(nanoseconds: 70_000_000)
-            guard !Task.isCancelled else { return }
-
-            startSearchRunner(query: clean)
+            // Debounce (130 ms), stale-query guard and single publish are handled by the search model.
+            searchModel.submit(clean)
         }
         .onDisappear {
-            previewManager.stop()
             isSearchPresented = false
             activeSearchTask?.cancel()
             activeSearchTask = nil
             inFlightQuery = nil
             pendingSearchQuery = nil
+            searchModel.cancel()
+            libraryStore.globalSearchQuery = searchQuery
             #if os(iOS)
             UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
             #endif
         }
-        .onChange(of: searchQuery) { _, newValue in
-            libraryStore.globalSearchQuery = newValue
-        }
-        .onChange(of: isOnlineMode) { _, _ in
-            let q = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !q.isEmpty {
-                dispatchSearch(for: q)
-            }
+        .onSubmit(of: .search) {
+            libraryStore.globalSearchQuery = searchQuery
         }
         .enableInteractivePopGesture()
     }
@@ -390,12 +1049,7 @@ public struct GlobalSearchView: View {
             .ignoresSafeArea(.keyboard, edges: .bottom)
         } else if results.hasResults {
             LibrarySearchResultsContainer(
-                results: results,
-                activeCategoryFilter: activeCategoryFilter,
-                expandedArtistIDs: expandedArtistIDs,
-                expandedAlbumIDs: expandedAlbumIDs,
-                collapseTrigger: collapseTrigger,
-                isPlaylistsCollapsed: isPlaylistsCollapsed,
+                rows: searchModel.rows,
                 libraryStore: libraryStore,
                 playerService: playerService,
                 onSelectArtist: { selectedArtistForNavigation = $0 },
@@ -404,58 +1058,25 @@ public struct GlobalSearchView: View {
                 onSelectTrackForPlaylist: { selectedTrackForPlaylist = $0 },
                 onToggleArtistExpansion: { artistID in
                     HapticFeedback.selectionChanged()
-                    if expandedArtistIDs.contains(artistID) {
-                        withAnimation(.spring(response: 0.22, dampingFraction: 0.86)) {
-                            expandedArtistIDs.remove(artistID)
-                        }
-                    } else {
-                        if let index = results.artistTreeNodes.firstIndex(where: { $0.id == artistID }),
-                           results.artistTreeNodes[index].albums.isEmpty {
-                            let cleanQuery = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
-                            if let expanded = SearchEngine.shared.expandArtist(artistID: artistID, query: cleanQuery) {
-                                var updatedNodes = results.artistTreeNodes
-                                updatedNodes[index] = expanded
-                                results = GlobalSearchResults(
-                                    artistTreeNodes: updatedNodes,
-                                    playlists: results.playlists,
-                                    directMatchedAlbums: results.directMatchedAlbums,
-                                    directMatchedTracks: results.directMatchedTracks
-                                )
-                            }
-                        }
-                        withAnimation(.spring(response: 0.22, dampingFraction: 0.86)) {
-                            expandedArtistIDs.insert(artistID)
-                        }
-                    }
+                    searchModel.toggleArtistExpansion(artistID)
                 },
                 onToggleAlbumExpansion: { albumID, artistID in
                     HapticFeedback.selectionChanged()
-                    withAnimation(.spring(response: 0.22, dampingFraction: 0.86)) {
-                        expandedArtistIDs.insert(artistID)
-                        if expandedAlbumIDs.contains(albumID) {
-                            expandedAlbumIDs.remove(albumID)
-                        } else {
-                            expandedAlbumIDs.insert(albumID)
-                        }
-                    }
+                    searchModel.toggleAlbumExpansion(albumID, artistID: artistID)
                 },
                 onCollapseAll: {
                     HapticFeedback.lightImpact()
-                    withAnimation(.spring(response: 0.22, dampingFraction: 0.86)) {
-                        expandedArtistIDs.removeAll()
-                        expandedAlbumIDs.removeAll()
-                        collapseTrigger += 1
-                    }
+                    searchModel.collapseAll()
                 },
                 onToggleCategoryFilter: { category in
-                    withAnimation(.spring(response: 0.22, dampingFraction: 0.85)) {
-                        activeCategoryFilter = (activeCategoryFilter == category) ? nil : category
-                    }
+                    searchModel.toggleCategoryFilter(category)
                 },
                 onTogglePlaylistsCollapse: {
-                    withAnimation(.spring(response: 0.22, dampingFraction: 0.85)) {
-                        isPlaylistsCollapsed.toggle()
-                    }
+                    searchModel.togglePlaylistsCollapsed()
+                },
+                onLoadMoreTracks: {
+                    HapticFeedback.selectionChanged()
+                    searchModel.loadMore()
                 }
             )
             .equatable()
@@ -480,238 +1101,6 @@ public struct GlobalSearchView: View {
             .scrollDismissesKeyboard(.interactively)
             .scrollBounceBehavior(.always)
             .ignoresSafeArea(.keyboard, edges: .bottom)
-        }
-    }
-
-    // MARK: - Online Mode View
-
-    private var onlineContentView: some View {
-        ScrollView(.vertical, showsIndicators: false) {
-            LazyVStack(alignment: .leading, spacing: 20) {
-                if isOnlineSearching && onlineResults.isEmpty {
-                    searchingIndicatorView
-                        .padding(.top, 24)
-                } else if !onlineResults.isEmpty {
-                    if isOnlineSearching {
-                        HStack {
-                            Spacer()
-                            ProgressView()
-                                .controlSize(.small)
-                            Spacer()
-                        }
-                        .padding(.vertical, 4)
-                    }
-                    if !onlineResults.artists.isEmpty {
-                        onlineArtistsSection
-                    }
-                    if !onlineResults.albums.isEmpty {
-                        onlineAlbumsSection
-                    }
-                    if !onlineResults.tracks.isEmpty {
-                        onlineTracksSection
-                    }
-                } else if trimmedQuery.count >= 2 && !isOnlineSearching {
-                    emptyOnlineResultsView
-                        .padding(.top, 40)
-                }
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
-            .padding(.bottom, 140)
-        }
-        .scrollDismissesKeyboard(.interactively)
-        .scrollBounceBehavior(.always)
-        .ignoresSafeArea(.keyboard, edges: .bottom)
-    }
-
-    private var onlineTracksSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("SONGS (\(onlineResults.tracks.count))")
-                .font(.system(size: 11, weight: .bold, design: .monospaced))
-                .foregroundStyle(.secondary)
-
-            LazyVStack(alignment: .leading, spacing: 6) {
-                ForEach(onlineResults.tracks) { item in
-                    NavigationLink(destination: OnlineTrackDetailView(track: item)) {
-                        HStack(spacing: 12) {
-                            ZStack(alignment: .center) {
-                                AsyncImage(url: item.artworkURL) { phase in
-                                    switch phase {
-                                    case .success(let image):
-                                        image.resizable().scaledToFill()
-                                    default:
-                                        RoundedRectangle(cornerRadius: 6).fill(Color.primary.opacity(0.08))
-                                    }
-                                }
-                                .frame(width: 42, height: 42)
-                                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-
-                                if item.previewURL != nil {
-                                    Button(action: {
-                                        previewManager.togglePreview(track: item)
-                                    }) {
-                                        Image(systemName: previewManager.currentTrackID == item.id && previewManager.isPlaying ? "pause.fill" : "play.fill")
-                                            .font(.system(size: 11, weight: .bold))
-                                            .foregroundStyle(Color.white)
-                                            .frame(width: 26, height: 26)
-                                            .background(Color.black.opacity(0.7))
-                                            .clipShape(Circle())
-                                    }
-                                    .buttonStyle(.plain)
-                                }
-                            }
-
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(item.title)
-                                    .font(.system(size: 14, weight: .semibold))
-                                    .foregroundStyle(previewManager.currentTrackID == item.id && previewManager.isPlaying ? appTheme.accentColor : Color.primary)
-                                    .lineLimit(1)
-
-                                HStack(spacing: 6) {
-                                    Text(item.artistName)
-                                        .font(.system(size: 12))
-                                        .foregroundStyle(.secondary)
-                                        .lineLimit(1)
-
-                                    if !item.albumTitle.isEmpty {
-                                        Text("·")
-                                            .font(.system(size: 10))
-                                            .foregroundStyle(.tertiary)
-
-                                        Text(item.albumTitle)
-                                            .font(.system(size: 12))
-                                            .foregroundStyle(.tertiary)
-                                            .lineLimit(1)
-                                    }
-                                }
-                            }
-
-                            Spacer()
-
-                            if item.previewURL != nil {
-                                Button(action: {
-                                    previewManager.togglePreview(track: item)
-                                }) {
-                                    Text(previewManager.currentTrackID == item.id && previewManager.isPlaying ? "PAUSE" : "PREVIEW")
-                                        .font(.system(size: 8.5, weight: .bold, design: .monospaced))
-                                        .padding(.horizontal, 6)
-                                        .padding(.vertical, 3.5)
-                                        .background(previewManager.currentTrackID == item.id && previewManager.isPlaying ? appTheme.accentColor : appTheme.accentColor.opacity(0.18))
-                                        .foregroundStyle(previewManager.currentTrackID == item.id && previewManager.isPlaying ? Color.appInvertedBackground : appTheme.accentColor)
-                                        .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
-                                }
-                                .buttonStyle(.plain)
-                            }
-
-                            Text(TimeFormatting.format(seconds: item.duration))
-                                .font(.system(size: 11, design: .monospaced))
-                                .foregroundStyle(.secondary)
-                        }
-                        .padding(.vertical, 4)
-                        .padding(.horizontal, 4)
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-        }
-    }
-
-    private var onlineAlbumsSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("ALBUMS (\(onlineResults.albums.count))")
-                .font(.system(size: 11, weight: .bold, design: .monospaced))
-                .foregroundStyle(.secondary)
-
-            LazyVGrid(columns: onlineColumns, spacing: 14) {
-                ForEach(onlineResults.albums) { item in
-                    NavigationLink(destination: OnlineAlbumDetailView(album: item)) {
-                        VStack(alignment: .leading, spacing: 6) {
-                            AsyncImage(url: item.artworkURL) { phase in
-                                switch phase {
-                                case .success(let image):
-                                    image.resizable().scaledToFill()
-                                default:
-                                    RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.08))
-                                }
-                            }
-                            .aspectRatio(1.0, contentMode: .fit)
-                            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(item.title)
-                                    .font(.system(size: 13, weight: .bold))
-                                    .foregroundStyle(Color.primary)
-                                    .lineLimit(1)
-
-                                Text(item.artistName)
-                                    .font(.system(size: 11))
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(1)
-
-                                if let count = item.trackCount, count > 0 {
-                                    Text("\(count) TRACKS")
-                                        .font(.system(size: 9.5, design: .monospaced))
-                                        .foregroundStyle(.tertiary)
-                                }
-                            }
-                            .padding(.horizontal, 2)
-                        }
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-        }
-    }
-
-    private var onlineArtistsSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("ARTISTS (\(onlineResults.artists.count))")
-                .font(.system(size: 11, weight: .bold, design: .monospaced))
-                .foregroundStyle(.secondary)
-
-            LazyVStack(alignment: .leading, spacing: 8) {
-                ForEach(onlineResults.artists) { item in
-                    NavigationLink(destination: OnlineArtistDetailView(artist: item)) {
-                        HStack(spacing: 12) {
-                            AsyncImage(url: item.imageURL) { phase in
-                                switch phase {
-                                case .success(let image):
-                                    image.resizable().scaledToFill()
-                                default:
-                                    Circle().fill(Color.primary.opacity(0.08))
-                                }
-                            }
-                            .frame(width: 44, height: 44)
-                            .clipShape(Circle())
-
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(item.name)
-                                    .font(.system(size: 14, weight: .bold))
-                                    .foregroundStyle(Color.primary)
-                                    .lineLimit(1)
-
-                                if let genre = item.genre, !genre.isEmpty {
-                                    Text(genre)
-                                        .font(.system(size: 11, design: .monospaced))
-                                        .foregroundStyle(.secondary)
-                                        .lineLimit(1)
-                                }
-                            }
-
-                            Spacer()
-
-                            Image(systemName: "chevron.right")
-                                .font(.system(size: 11, weight: .semibold))
-                                .foregroundStyle(.tertiary)
-                        }
-                        .padding(.vertical, 4)
-                        .padding(.horizontal, 4)
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
         }
     }
 
@@ -746,7 +1135,7 @@ public struct GlobalSearchView: View {
                 }
 
                 LazyVStack(alignment: .leading, spacing: 4) {
-                    ForEach(Array(recentTracks.enumerated()), id: \.element.id) { index, track in
+                    ForEach(recentTracks) { track in
                         TrackRowView(
                             track: track,
                             isCurrentTrack: track.id == playerService.currentTrack?.id,
@@ -756,7 +1145,7 @@ public struct GlobalSearchView: View {
                             isTapToPlayNextEnabled: libraryStore.settings.tapToPlayNext,
                             onPlay: {
                                 libraryStore.recordSearchPlayedTrack(track)
-                                playerService.play(track: track, inQueue: recentTracks, startIndex: index)
+                                playerService.play(track: track, inQueue: recentTracks, startIndex: recentTracks.firstIndex(where: { $0.id == track.id }) ?? 0)
                             },
                             onPlayNext: {
                                 playerService.insertPlayNextFront(track: track)
@@ -805,18 +1194,6 @@ public struct GlobalSearchView: View {
         EmptyStateView(title: "EMPTY", message: "")
     }
 
-    private var emptyOnlineResultsView: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "globe.badge.chevron.backward")
-                .font(.system(size: 32))
-                .foregroundStyle(.tertiary)
-
-            Text("No online results found for \"\(trimmedQuery)\"")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(Color.primary)
-        }
-    }
-
     // MARK: - Playlist Picker Sheet
 
     private func playlistPickerSheet(for track: Track) -> some View {
@@ -859,156 +1236,28 @@ public struct GlobalSearchView: View {
 
     // MARK: - Serialized Search Pipeline
 
+    private func clearAllSearchState() {
+        // Cancel active in-flight tasks and reset pending queries
+        activeSearchTask?.cancel()
+        activeSearchTask = nil
+        inFlightQuery = nil
+        pendingSearchQuery = nil
+        searchModel.clear()
+    }
+
     private func dispatchSearch(for rawQuery: String) {
         let clean = rawQuery.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !clean.isEmpty else {
-            // Cancel active in-flight task and reset pending queries
-            activeSearchTask?.cancel()
-            activeSearchTask = nil
-            inFlightQuery = nil
-            pendingSearchQuery = nil
-            withAnimation(.easeInOut(duration: 0.15)) {
-                self.results = .empty
-                self.expandedArtistIDs = []
-                self.expandedAlbumIDs = []
-                self.isSearching = false
-                self.onlineResults = OnlineSearchResults()
-                self.isOnlineSearching = false
-            }
+            clearAllSearchState()
             return
         }
 
-        if isOnlineMode {
-            dispatchOnlineSearch(for: clean)
-            return
-        }
-
-        // Immediately cancel any in-flight search task so outdated queries abort cooperatively
+        // Cancel any in-flight runner and search the library immediately (no debounce for explicit dispatch)
         activeSearchTask?.cancel()
-        startSearchRunner(query: clean)
-    }
-
-    private func startSearchRunner(query: String) {
-        activeSearchTask?.cancel()
-        inFlightQuery = query
+        activeSearchTask = nil
+        inFlightQuery = nil
         pendingSearchQuery = nil
-        isSearching = true
-
-        activeSearchTask = Task { @MainActor in
-            defer {
-                if !Task.isCancelled {
-                    self.activeSearchTask = nil
-                    self.inFlightQuery = nil
-                    self.pendingSearchQuery = nil
-                    self.isSearching = false
-                }
-            }
-            var currentQuery = query
-
-            while !Task.isCancelled {
-                self.inFlightQuery = currentQuery
-
-                // Ultra-fast in-memory search pass (runs in ~0.5ms across 30k+ tracks)
-                let searchResults = await SearchEngine.shared.search(
-                    query: currentQuery,
-                    maxTrackResults: 80,
-                    maxAlbumResults: 40,
-                    maxArtistResults: 40
-                )
-
-                guard !Task.isCancelled else { break }
-
-                applySearchResults(searchResults, for: currentQuery)
-
-                // Check if user continued typing while search was running
-                let latestTrimmed = self.searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
-                if let pending = self.pendingSearchQuery, pending != currentQuery, !pending.isEmpty {
-                    self.pendingSearchQuery = nil
-                    currentQuery = pending
-                } else if latestTrimmed != currentQuery && !latestTrimmed.isEmpty {
-                    self.pendingSearchQuery = nil
-                    currentQuery = latestTrimmed
-                } else {
-                    break
-                }
-            }
-        }
-    }
-
-    private func applySearchResults(_ searchResults: GlobalSearchResults, for query: String) {
-        var newExpandedArtists: Set<String> = []
-        var newExpandedAlbums: Set<String> = []
-
-        if let topArtistNode = searchResults.artistTreeNodes.first {
-            newExpandedArtists.insert(topArtistNode.id)
-            let matchedAlbum = topArtistNode.albums.first(where: { $0.isDirectlyMatched })
-                ?? topArtistNode.albums.first(where: { $0.tracks.contains(where: { $0.isDirectlyMatched }) })
-                ?? topArtistNode.albums.first
-            if let matchedAlbumID = matchedAlbum?.id {
-                newExpandedAlbums.insert(matchedAlbumID)
-            }
-        }
-
-        self.results = searchResults
-        self.expandedArtistIDs = newExpandedArtists
-        self.expandedAlbumIDs = newExpandedAlbums
-    }
-
-    private func dispatchOnlineSearch(for clean: String) {
-        guard clean.count >= 2 else {
-            withAnimation(.easeInOut(duration: 0.15)) {
-                self.onlineResults = OnlineSearchResults()
-                self.isOnlineSearching = false
-                self.pendingSearchQuery = nil
-                self.inFlightQuery = nil
-            }
-            return
-        }
-
-        if activeSearchTask != nil && inFlightQuery != nil {
-            pendingSearchQuery = clean
-            return
-        }
-
-        startOnlineSearchRunner(query: clean)
-    }
-
-    private func startOnlineSearchRunner(query: String) {
-        activeSearchTask?.cancel()
-        inFlightQuery = query
-        pendingSearchQuery = nil
-        isOnlineSearching = true
-
-        activeSearchTask = Task { @MainActor in
-            var currentQuery = query
-
-            while !Task.isCancelled {
-                self.inFlightQuery = currentQuery
-
-                let results = await OnlineDiscoveryService.shared.search(query: currentQuery)
-
-                guard !Task.isCancelled else { break }
-
-                withAnimation(.easeInOut(duration: 0.18)) {
-                    self.onlineResults = results
-                }
-
-                let latestTrimmed = self.searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
-                if let pending = self.pendingSearchQuery, pending != currentQuery, pending.count >= 2 {
-                    self.pendingSearchQuery = nil
-                    currentQuery = pending
-                } else if latestTrimmed != currentQuery && latestTrimmed.count >= 2 {
-                    self.pendingSearchQuery = nil
-                    currentQuery = latestTrimmed
-                } else {
-                    self.inFlightQuery = nil
-                    self.pendingSearchQuery = nil
-                    self.isOnlineSearching = false
-                    break
-                }
-            }
-            self.activeSearchTask = nil
-        }
+        searchModel.submit(clean, debounced: false)
     }
 }
 
@@ -1017,7 +1266,8 @@ public struct GlobalSearchView: View {
 /// Tree track row with connector, playback indicator, and animated side swipe on context menu actions
 public struct SearchTreeTrackRowView: View {
     public let trackNode: SearchTreeTrackNode
-    public let allAlbumTracks: [Track]
+    /// Resolves the playback queue lazily (only when the user taps play).
+    public let queueTracks: () -> [Track]
     public let trackIndex: Int
     @Bindable var libraryStore: LibraryStore
     @Bindable var playerService: AudioPlayerService
@@ -1033,6 +1283,16 @@ public struct SearchTreeTrackRowView: View {
     private var track: Track { trackNode.track }
     private var isCurrent: Bool { playerService.currentTrack?.id == track.id }
     private var isPlaying: Bool { isCurrent && playerService.playbackStatus.isPlaying }
+
+    private func playFromQueue() {
+        let queue = queueTracks()
+        libraryStore.recordSearchPlayedTrack(track)
+        playerService.play(
+            track: track,
+            inQueue: queue,
+            startIndex: queue.firstIndex(where: { $0.id == track.id }) ?? trackIndex
+        )
+    }
 
     public var body: some View {
         ZStack {
@@ -1076,12 +1336,7 @@ public struct SearchTreeTrackRowView: View {
 
             // Foreground Track Content
             Button(action: {
-                libraryStore.recordSearchPlayedTrack(track)
-                playerService.play(
-                    track: track,
-                    inQueue: allAlbumTracks,
-                    startIndex: allAlbumTracks.firstIndex(where: { $0.id == track.id }) ?? trackIndex
-                )
+                playFromQueue()
             }) {
                 HStack(spacing: 8) {
                     if isPlaying {
@@ -1130,12 +1385,7 @@ public struct SearchTreeTrackRowView: View {
         }
         .contextMenu {
             Button(action: {
-                libraryStore.recordSearchPlayedTrack(track)
-                playerService.play(
-                    track: track,
-                    inQueue: allAlbumTracks,
-                    startIndex: allAlbumTracks.firstIndex(where: { $0.id == track.id }) ?? trackIndex
-                )
+                playFromQueue()
             }) {
                 Text("PLAY")
             }
@@ -1217,349 +1467,161 @@ public struct SearchTreeTrackRowView: View {
 
 // MARK: - Search Album Tree Node Row
 
-public struct SearchAlbumTreeNodeRow: View, Equatable {
+/// Album header row of the flat tree (its tracks are separate flat rows).
+public struct SearchAlbumTreeNodeRow: View {
     public let albumNode: SearchTreeAlbumNode
-    public let artistNode: SearchTreeArtistNode
-    public let isExpanded: Bool
     public let onToggleExpand: () -> Void
     @Bindable var libraryStore: LibraryStore
     @Bindable var playerService: AudioPlayerService
-    public let onSelectArtist: (Artist) -> Void
     public let onSelectAlbum: (Album) -> Void
-    public let onSelectTrackForPlaylist: (Track) -> Void
-    public let onSelectTrackForInfo: (Track) -> Void
-
-    public static func == (lhs: SearchAlbumTreeNodeRow, rhs: SearchAlbumTreeNodeRow) -> Bool {
-        lhs.albumNode.id == rhs.albumNode.id &&
-        lhs.albumNode.relevanceScore == rhs.albumNode.relevanceScore &&
-        lhs.isExpanded == rhs.isExpanded &&
-        lhs.playerService.currentTrack?.id == rhs.playerService.currentTrack?.id &&
-        lhs.playerService.playbackStatus.isPlaying == rhs.playerService.playbackStatus.isPlaying
-    }
 
     public var body: some View {
         let resolvedAlbumArt = albumNode.album.artworkKey ?? albumNode.album.tracks.first(where: { $0.artworkKey != nil })?.artworkKey
 
-        VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 8) {
-                Rectangle()
-                    .fill(Color.primary.opacity(0.18))
-                    .frame(width: 10, height: 1.5)
+        HStack(spacing: 8) {
+            Rectangle()
+                .fill(Color.primary.opacity(0.18))
+                .frame(width: 10, height: 1.5)
 
-                AlbumArtworkView(
-                    artworkKey: resolvedAlbumArt,
-                    title: albumNode.album.title,
-                    subtitle: albumNode.album.artist,
-                    cornerRadius: 6
-                )
-                .frame(width: 30, height: 30)
+            AlbumArtworkView(
+                artworkKey: resolvedAlbumArt,
+                title: albumNode.album.title,
+                subtitle: albumNode.album.artist,
+                cornerRadius: 6
+            )
+            .frame(width: 30, height: 30)
 
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(albumNode.album.title)
-                        .font(.system(size: 14, weight: .bold))
-                        .foregroundStyle(Color.primary)
-                        .lineLimit(1)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(albumNode.album.title)
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundStyle(Color.primary)
+                    .lineLimit(1)
 
-                    HStack(spacing: 6) {
-                        Text(albumNode.album.formattedYear)
-                            .font(.system(size: 10, design: .monospaced))
-                            .foregroundStyle(.tertiary)
+                HStack(spacing: 6) {
+                    Text(albumNode.album.formattedYear)
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(.tertiary)
 
-                        Text("·")
-                            .font(.system(size: 10))
-                            .foregroundStyle(.tertiary)
+                    Text("·")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.tertiary)
 
-                        Text("\(albumNode.tracks.count) \(albumNode.tracks.count == 1 ? "TRACK" : "TRACKS")")
-                            .font(.system(size: 10, design: .monospaced))
-                            .foregroundStyle(.secondary)
-                    }
+                    Text("\(albumNode.tracks.count) \(albumNode.tracks.count == 1 ? "TRACK" : "TRACKS")")
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(.secondary)
                 }
-
-                Spacer(minLength: 8)
-
-                Button(action: {
-                    onSelectAlbum(albumNode.album)
-                }) {
-                    Text("OPEN")
-                        .font(.system(size: 12, weight: .bold, design: .monospaced))
-                        .foregroundStyle(Color.primary)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 4)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
             }
-            .padding(.vertical, 4)
-            .contentShape(Rectangle())
-            .onTapGesture {
-                onToggleExpand()
-            }
-            .albumContextMenu(album: albumNode.album, libraryStore: libraryStore, playerService: playerService)
 
-            if isExpanded && !albumNode.tracks.isEmpty {
-                LazyVStack(alignment: .leading, spacing: 4) {
-                    ForEach(Array(albumNode.tracks.enumerated()), id: \.element.id) { index, trackNode in
-                        SearchTreeTrackRowView(
-                            trackNode: trackNode,
-                            allAlbumTracks: albumNode.album.tracks,
-                            trackIndex: index,
-                            libraryStore: libraryStore,
-                            playerService: playerService,
-                            onSelectArtist: onSelectArtist,
-                            onSelectAlbum: onSelectAlbum,
-                            onAddToPlaylist: onSelectTrackForPlaylist,
-                            onShowInfo: onSelectTrackForInfo
-                        )
-                    }
-                }
-                .padding(.leading, 26)
-                .overlay(alignment: .leading) {
-                    Rectangle()
-                        .fill(Color.primary.opacity(0.18))
-                        .frame(width: 1.5)
-                        .padding(.leading, 15)
-                }
-                .padding(.top, 2)
-                .transition(.opacity)
+            Spacer(minLength: 8)
+
+            Button(action: {
+                onSelectAlbum(albumNode.album)
+            }) {
+                Text("OPEN")
+                    .font(.system(size: 12, weight: .bold, design: .monospaced))
+                    .foregroundStyle(Color.primary)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 4)
+                    .contentShape(Rectangle())
             }
+            .buttonStyle(.plain)
         }
+        .padding(.vertical, 4)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            onToggleExpand()
+        }
+        .albumContextMenu(album: albumNode.album, libraryStore: libraryStore, playerService: playerService)
     }
 }
 
 // MARK: - Search Artist Tree Node Row
 
-public struct SearchArtistTreeNodeRow: View, Equatable {
+/// Artist header row of the flat tree (its categories/albums/tracks are separate flat rows).
+public struct SearchArtistTreeNodeRow: View {
     public let artistNode: SearchTreeArtistNode
-    public let isExpanded: Bool
-    public let expandedAlbumIDs: Set<String>
     @Bindable var libraryStore: LibraryStore
     @Bindable var playerService: AudioPlayerService
     public let onSelectArtist: (Artist) -> Void
-    public let onSelectAlbum: (Album) -> Void
-    public let onSelectTrackForPlaylist: (Track) -> Void
-    public let onSelectTrackForInfo: (Track) -> Void
     public let onToggleArtistExpansion: (String) -> Void
-    public let onToggleAlbumExpansion: (String, String) -> Void
-
-    public static func == (lhs: SearchArtistTreeNodeRow, rhs: SearchArtistTreeNodeRow) -> Bool {
-        lhs.artistNode.id == rhs.artistNode.id &&
-        lhs.artistNode.relevanceScore == rhs.artistNode.relevanceScore &&
-        lhs.isExpanded == rhs.isExpanded &&
-        lhs.expandedAlbumIDs == rhs.expandedAlbumIDs &&
-        lhs.playerService.currentTrack?.id == rhs.playerService.currentTrack?.id &&
-        lhs.playerService.playbackStatus.isPlaying == rhs.playerService.playbackStatus.isPlaying
-    }
 
     public var body: some View {
         let summary = artistNode.artist.discographySummary
 
-        VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 12) {
-                AlbumArtworkView(
-                    artworkKey: artistNode.artist.mostRecentArtworkKey ?? artistNode.albums.first?.album.artworkKey,
-                    title: artistNode.artist.name,
-                    subtitle: summary,
-                    cornerRadius: 8
-                )
-                .frame(width: 38, height: 38)
+        HStack(spacing: 12) {
+            AlbumArtworkView(
+                artworkKey: artistNode.artist.mostRecentArtworkKey ?? artistNode.albums.first?.album.artworkKey,
+                title: artistNode.artist.name,
+                subtitle: summary,
+                cornerRadius: 8
+            )
+            .frame(width: 38, height: 38)
 
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(artistNode.artist.name)
-                        .font(.system(size: 16, weight: .bold))
-                        .foregroundStyle(Color.primary)
-                        .lineLimit(1)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(artistNode.artist.name)
+                    .font(.system(size: 16, weight: .bold))
+                    .foregroundStyle(Color.primary)
+                    .lineLimit(1)
 
-                    Text(summary)
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
-
-                Spacer(minLength: 8)
-
-                Button(action: {
-                    onSelectArtist(artistNode.artist)
-                }) {
-                    Text("OPEN")
-                        .font(.system(size: 13, weight: .bold, design: .monospaced))
-                        .foregroundStyle(Color.primary)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 4)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-            }
-            .padding(.vertical, 6)
-            .contentShape(Rectangle())
-            .onTapGesture {
-                onToggleArtistExpansion(artistNode.id)
-            }
-            .contextMenu {
-                Button(action: {
-                    onSelectArtist(artistNode.artist)
-                }) {
-                    Text("VIEW ARTIST")
-                }
-
-                Button(action: {
-                    if let first = artistNode.artist.tracks.first {
-                        libraryStore.recordSearchPlayedTrack(first)
-                        playerService.play(track: first, inQueue: artistNode.artist.tracks)
-                    }
-                }) {
-                    Text("PLAY ARTIST")
-                }
-
-                Button(action: {
-                    var shuffled = artistNode.artist.tracks
-                    shuffled.shuffle()
-                    if let first = shuffled.first {
-                        libraryStore.recordSearchPlayedTrack(first)
-                        playerService.play(track: first, inQueue: shuffled)
-                    }
-                }) {
-                    Text("SHUFFLE ARTIST")
-                }
+                Text(summary)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
             }
 
-            if isExpanded && !artistNode.albums.isEmpty {
-                LazyVStack(alignment: .leading, spacing: 14) {
-                    let studioAlbums = artistNode.studioAlbumNodes
-                    let singles = artistNode.singlesNodes
-                    let alternates = artistNode.alternatesNodes
-                    let featured = artistNode.featuredAlbumNodes
+            Spacer(minLength: 8)
 
-                    if !studioAlbums.isEmpty {
-                        LazyVStack(alignment: .leading, spacing: 6) {
-                            Text("ALBUMS (\(studioAlbums.count))")
-                                .font(.system(size: 10, weight: .bold, design: .monospaced))
-                                .foregroundStyle(Color.secondary.opacity(0.65))
-                                .padding(.leading, 10)
+            Button(action: {
+                onSelectArtist(artistNode.artist)
+            }) {
+                Text("OPEN")
+                    .font(.system(size: 13, weight: .bold, design: .monospaced))
+                    .foregroundStyle(Color.primary)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 4)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.vertical, 6)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            onToggleArtistExpansion(artistNode.id)
+        }
+        .contextMenu {
+            Button(action: {
+                onSelectArtist(artistNode.artist)
+            }) {
+                Text("VIEW ARTIST")
+            }
 
-                            ForEach(studioAlbums) { albumNode in
-                                SearchAlbumTreeNodeRow(
-                                    albumNode: albumNode,
-                                    artistNode: artistNode,
-                                    isExpanded: expandedAlbumIDs.contains(albumNode.id),
-                                    onToggleExpand: {
-                                        onToggleAlbumExpansion(albumNode.id, artistNode.id)
-                                    },
-                                    libraryStore: libraryStore,
-                                    playerService: playerService,
-                                    onSelectArtist: onSelectArtist,
-                                    onSelectAlbum: onSelectAlbum,
-                                    onSelectTrackForPlaylist: onSelectTrackForPlaylist,
-                                    onSelectTrackForInfo: onSelectTrackForInfo
-                                )
-                                .equatable()
-                            }
-                        }
-                    }
-
-                    if !singles.isEmpty {
-                        LazyVStack(alignment: .leading, spacing: 6) {
-                            Text("SINGLES (\(singles.count))")
-                                .font(.system(size: 10, weight: .bold, design: .monospaced))
-                                .foregroundStyle(Color.secondary.opacity(0.65))
-                                .padding(.leading, 10)
-
-                            ForEach(singles) { albumNode in
-                                SearchAlbumTreeNodeRow(
-                                    albumNode: albumNode,
-                                    artistNode: artistNode,
-                                    isExpanded: expandedAlbumIDs.contains(albumNode.id),
-                                    onToggleExpand: {
-                                        onToggleAlbumExpansion(albumNode.id, artistNode.id)
-                                    },
-                                    libraryStore: libraryStore,
-                                    playerService: playerService,
-                                    onSelectArtist: onSelectArtist,
-                                    onSelectAlbum: onSelectAlbum,
-                                    onSelectTrackForPlaylist: onSelectTrackForPlaylist,
-                                    onSelectTrackForInfo: onSelectTrackForInfo
-                                )
-                                .equatable()
-                            }
-                        }
-                    }
-
-                    if !alternates.isEmpty {
-                        LazyVStack(alignment: .leading, spacing: 6) {
-                            Text("ALTERNATES (\(alternates.count))")
-                                .font(.system(size: 10, weight: .bold, design: .monospaced))
-                                .foregroundStyle(Color.secondary.opacity(0.65))
-                                .padding(.leading, 10)
-
-                            ForEach(alternates) { albumNode in
-                                SearchAlbumTreeNodeRow(
-                                    albumNode: albumNode,
-                                    artistNode: artistNode,
-                                    isExpanded: expandedAlbumIDs.contains(albumNode.id),
-                                    onToggleExpand: {
-                                        onToggleAlbumExpansion(albumNode.id, artistNode.id)
-                                    },
-                                    libraryStore: libraryStore,
-                                    playerService: playerService,
-                                    onSelectArtist: onSelectArtist,
-                                    onSelectAlbum: onSelectAlbum,
-                                    onSelectTrackForPlaylist: onSelectTrackForPlaylist,
-                                    onSelectTrackForInfo: onSelectTrackForInfo
-                                )
-                                .equatable()
-                            }
-                        }
-                    }
-
-                    if !featured.isEmpty {
-                        LazyVStack(alignment: .leading, spacing: 6) {
-                            Text("FEATURED ON (\(featured.count))")
-                                .font(.system(size: 10, weight: .bold, design: .monospaced))
-                                .foregroundStyle(Color.secondary.opacity(0.65))
-                                .padding(.leading, 10)
-
-                            ForEach(featured) { albumNode in
-                                SearchAlbumTreeNodeRow(
-                                    albumNode: albumNode,
-                                    artistNode: artistNode,
-                                    isExpanded: expandedAlbumIDs.contains(albumNode.id),
-                                    onToggleExpand: {
-                                        onToggleAlbumExpansion(albumNode.id, artistNode.id)
-                                    },
-                                    libraryStore: libraryStore,
-                                    playerService: playerService,
-                                    onSelectArtist: onSelectArtist,
-                                    onSelectAlbum: onSelectAlbum,
-                                    onSelectTrackForPlaylist: onSelectTrackForPlaylist,
-                                    onSelectTrackForInfo: onSelectTrackForInfo
-                                )
-                                .equatable()
-                            }
-                        }
-                    }
+            Button(action: {
+                if let first = artistNode.artist.tracks.first {
+                    libraryStore.recordSearchPlayedTrack(first)
+                    playerService.play(track: first, inQueue: artistNode.artist.tracks)
                 }
-                .padding(.leading, 24)
-                .overlay(alignment: .leading) {
-                    Rectangle()
-                        .fill(Color.primary.opacity(0.18))
-                        .frame(width: 1.5)
-                        .padding(.leading, 12)
+            }) {
+                Text("PLAY ARTIST")
+            }
+
+            Button(action: {
+                var shuffled = artistNode.artist.tracks
+                shuffled.shuffle()
+                if let first = shuffled.first {
+                    libraryStore.recordSearchPlayedTrack(first)
+                    playerService.play(track: first, inQueue: shuffled)
                 }
-                .padding(.top, 6)
-                .transition(.opacity)
+            }) {
+                Text("SHUFFLE ARTIST")
             }
         }
     }
 }
-
 // MARK: - Equatable Library Search Results Container
 
+/// Renders the flattened search rows with a single ForEach inside a single LazyVStack.
 public struct LibrarySearchResultsContainer: View, Equatable {
-    public let results: GlobalSearchResults
-    public let activeCategoryFilter: SearchCategoryFilter?
-    public let expandedArtistIDs: Set<String>
-    public let expandedAlbumIDs: Set<String>
-    public let collapseTrigger: Int
-    public let isPlaylistsCollapsed: Bool
+    public let rows: [SearchResultRow]
 
     @Bindable var libraryStore: LibraryStore
     @Bindable var playerService: AudioPlayerService
@@ -1573,92 +1635,33 @@ public struct LibrarySearchResultsContainer: View, Equatable {
     public let onCollapseAll: () -> Void
     public let onToggleCategoryFilter: (SearchCategoryFilter) -> Void
     public let onTogglePlaylistsCollapse: () -> Void
+    public let onLoadMoreTracks: () -> Void
 
     public static func == (lhs: LibrarySearchResultsContainer, rhs: LibrarySearchResultsContainer) -> Bool {
-        lhs.results == rhs.results &&
-        lhs.activeCategoryFilter == rhs.activeCategoryFilter &&
-        lhs.expandedArtistIDs == rhs.expandedArtistIDs &&
-        lhs.expandedAlbumIDs == rhs.expandedAlbumIDs &&
-        lhs.collapseTrigger == rhs.collapseTrigger &&
-        lhs.isPlaylistsCollapsed == rhs.isPlaylistsCollapsed &&
-        lhs.playerService.currentTrack?.id == rhs.playerService.currentTrack?.id &&
-        lhs.playerService.playbackStatus.isPlaying == rhs.playerService.playbackStatus.isPlaying
+        lhs.rows == rhs.rows
     }
 
     public var body: some View {
         ScrollView(.vertical, showsIndicators: false) {
-            LazyVStack(alignment: .leading, spacing: 16) {
-                // Tree Header Controls with interactive filter text
-                treeControlsBar
-
-                switch activeCategoryFilter {
-                case .artists:
-                    filteredArtistsList
-                case .albums:
-                    filteredAlbumsList
-                case .tracks:
-                    tracksCategoryTreeView
-                case nil:
-                    if !results.artistTreeNodes.isEmpty {
-                        // Tree Nodes (Artist -> Album -> Track)
-                        ForEach(Array(results.artistTreeNodes.enumerated()), id: \.element.id) { index, artistNode in
-                            SearchArtistTreeNodeRow(
-                                artistNode: artistNode,
-                                isExpanded: expandedArtistIDs.contains(artistNode.id),
-                                expandedAlbumIDs: expandedAlbumIDs,
-                                libraryStore: libraryStore,
-                                playerService: playerService,
-                                onSelectArtist: onSelectArtist,
-                                onSelectAlbum: onSelectAlbum,
-                                onSelectTrackForPlaylist: onSelectTrackForPlaylist,
-                                onSelectTrackForInfo: onSelectTrackForInfo,
-                                onToggleArtistExpansion: onToggleArtistExpansion,
-                                onToggleAlbumExpansion: onToggleAlbumExpansion
-                            )
-                            .equatable()
-                        }
-
-                        let topArtistTrackIDs = Set(results.artistTreeNodes.first?.albums.flatMap { $0.tracks.map { $0.track.id } } ?? [])
-                        let unrepresentedTracks = results.directMatchedTracks.filter { !topArtistTrackIDs.contains($0.track.id) }
-                        if !unrepresentedTracks.isEmpty {
-                            VStack(alignment: .leading, spacing: 6) {
-                                Text("TRACKS (\(unrepresentedTracks.count))")
-                                    .font(.system(size: 11, weight: .bold, design: .monospaced))
-                                    .foregroundStyle(.secondary)
-                                    .padding(.leading, 4)
-
-                                LazyVStack(alignment: .leading, spacing: 4) {
-                                    ForEach(Array(unrepresentedTracks.enumerated()), id: \.element.id) { index, trackNode in
-                                        SearchTreeTrackRowView(
-                                            trackNode: trackNode,
-                                            allAlbumTracks: libraryStore.findAlbum(title: trackNode.track.album, artist: trackNode.track.artist)?.tracks ?? [trackNode.track],
-                                            trackIndex: index,
-                                            libraryStore: libraryStore,
-                                            playerService: playerService,
-                                            onSelectArtist: onSelectArtist,
-                                            onSelectAlbum: onSelectAlbum,
-                                            onAddToPlaylist: onSelectTrackForPlaylist,
-                                            onShowInfo: onSelectTrackForInfo
-                                        )
-                                    }
-                                }
-                            }
-                            .padding(.top, 12)
-                        }
-                    } else {
-                        if !results.directMatchedAlbums.isEmpty {
-                            filteredAlbumsList
-                        }
-                        if !results.directMatchedTracks.isEmpty {
-                            tracksCategoryTreeView
-                        }
-                    }
-
-                    // Playlists Section (if matched)
-                    if !results.playlists.isEmpty {
-                        playlistsSection
-                            .padding(.top, 12)
-                    }
+            LazyVStack(alignment: .leading, spacing: 0) {
+                ForEach(rows) { row in
+                    SearchResultRowView(
+                        row: row,
+                        libraryStore: libraryStore,
+                        playerService: playerService,
+                        onSelectArtist: onSelectArtist,
+                        onSelectAlbum: onSelectAlbum,
+                        onSelectTrackForInfo: onSelectTrackForInfo,
+                        onSelectTrackForPlaylist: onSelectTrackForPlaylist,
+                        onToggleArtistExpansion: onToggleArtistExpansion,
+                        onToggleAlbumExpansion: onToggleAlbumExpansion,
+                        onCollapseAll: onCollapseAll,
+                        onToggleCategoryFilter: onToggleCategoryFilter,
+                        onTogglePlaylistsCollapse: onTogglePlaylistsCollapse,
+                        onLoadMoreTracks: onLoadMoreTracks
+                    )
+                    .equatable()
+                    .transition(.opacity)
                 }
             }
             .padding(.horizontal, 16)
@@ -1669,16 +1672,400 @@ public struct LibrarySearchResultsContainer: View, Equatable {
         .scrollBounceBehavior(.always)
         .ignoresSafeArea(.keyboard, edges: .bottom)
     }
+}
 
-    // MARK: - Tree Controls Bar
-    private var treeControlsBar: some View {
+// MARK: - Flat Search Row View
+
+public struct SearchResultRowView: View, Equatable {
+    public let row: SearchResultRow
+    @Bindable var libraryStore: LibraryStore
+    @Bindable var playerService: AudioPlayerService
+
+    public let onSelectArtist: (Artist) -> Void
+    public let onSelectAlbum: (Album) -> Void
+    public let onSelectTrackForInfo: (Track) -> Void
+    public let onSelectTrackForPlaylist: (Track) -> Void
+    public let onToggleArtistExpansion: (String) -> Void
+    public let onToggleAlbumExpansion: (String, String) -> Void
+    public let onCollapseAll: () -> Void
+    public let onToggleCategoryFilter: (SearchCategoryFilter) -> Void
+    public let onTogglePlaylistsCollapse: () -> Void
+    public let onLoadMoreTracks: () -> Void
+
+    public static func == (lhs: SearchResultRowView, rhs: SearchResultRowView) -> Bool {
+        lhs.row == rhs.row
+    }
+
+    /// TRACKS category rows resolve the tapped artist/album against the library (as before).
+    private var selectArtist: (Artist) -> Void {
+        guard row.resolvesFromLibrary else { return onSelectArtist }
+        let store = libraryStore
+        let select = onSelectArtist
+        return { artist in select(store.findArtist(name: artist.name) ?? artist) }
+    }
+
+    private var selectAlbum: (Album) -> Void {
+        guard row.resolvesFromLibrary else { return onSelectAlbum }
+        let store = libraryStore
+        let select = onSelectAlbum
+        return { album in select(store.findAlbum(title: album.title, artist: album.artist) ?? album) }
+    }
+
+    public var body: some View {
+        content
+            .padding(.top, row.albumLineGap)
+            .modifier(SearchConnectorLine(isActive: row.albumLine, indent: 26, lineOffset: 15))
+            .padding(.top, row.artistLineGap)
+            .modifier(SearchConnectorLine(isActive: row.artistLine, indent: 24, lineOffset: 12))
+            .padding(.top, row.outerGap)
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        switch row.kind {
+        case let .controls(artists, albums, tracks, filter):
+            SearchTreeControlsBar(
+                artistsCount: artists,
+                albumsCount: albums,
+                tracksCount: tracks,
+                activeCategoryFilter: filter,
+                onCollapseAll: onCollapseAll,
+                onToggleCategoryFilter: onToggleCategoryFilter
+            )
+        case let .artistHeader(node):
+            SearchArtistTreeNodeRow(
+                artistNode: node,
+                libraryStore: libraryStore,
+                playerService: playerService,
+                onSelectArtist: selectArtist,
+                onToggleArtistExpansion: onToggleArtistExpansion
+            )
+        case let .categoryHeader(title):
+            Text(title)
+                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                .foregroundStyle(Color.secondary.opacity(0.65))
+                .padding(.leading, 10)
+        case let .albumHeader(node, artistID):
+            SearchAlbumTreeNodeRow(
+                albumNode: node,
+                onToggleExpand: { onToggleAlbumExpansion(node.id, artistID) },
+                libraryStore: libraryStore,
+                playerService: playerService,
+                onSelectAlbum: selectAlbum
+            )
+        case let .albumTrack(trackNode, albumTracks, index):
+            SearchTreeTrackRowView(
+                trackNode: trackNode,
+                queueTracks: { albumTracks },
+                trackIndex: index,
+                libraryStore: libraryStore,
+                playerService: playerService,
+                onSelectArtist: selectArtist,
+                onSelectAlbum: selectAlbum,
+                onAddToPlaylist: onSelectTrackForPlaylist,
+                onShowInfo: onSelectTrackForInfo
+            )
+        case let .looseTracksHeader(count):
+            Text("TRACKS (\(count))")
+                .font(.system(size: 11, weight: .bold, design: .monospaced))
+                .foregroundStyle(.secondary)
+                .padding(.leading, 4)
+                .padding(.top, 12)
+                .padding(.bottom, -4)
+        case let .looseTrack(trackNode, index):
+            SearchTreeTrackRowView(
+                trackNode: trackNode,
+                queueTracks: { [libraryStore] in
+                    libraryStore.findAlbum(title: trackNode.track.album, artist: trackNode.track.artist)?.tracks ?? [trackNode.track]
+                },
+                trackIndex: index,
+                libraryStore: libraryStore,
+                playerService: playerService,
+                onSelectArtist: onSelectArtist,
+                onSelectAlbum: onSelectAlbum,
+                onAddToPlaylist: onSelectTrackForPlaylist,
+                onShowInfo: onSelectTrackForInfo
+            )
+            .padding(.vertical, -6)
+        case .loadMore:
+            Button(action: onLoadMoreTracks) {
+                Text("SHOW MORE TRACKS")
+                    .font(.system(size: 11, weight: .bold, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .padding(.vertical, 8)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+        case let .filteredArtist(node):
+            filteredArtistRow(node)
+        case let .filteredAlbum(album, artist):
+            filteredAlbumRow(album: album, artist: artist)
+        case let .playlistsHeader(count, isCollapsed):
+            Button(action: onTogglePlaylistsCollapse) {
+                HStack {
+                    Text("PLAYLISTS (\(count))")
+                        .font(.system(size: 11, weight: .bold, design: .monospaced))
+                        .foregroundStyle(.secondary)
+
+                    Spacer()
+
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(.secondary)
+                        .rotationEffect(.degrees(isCollapsed ? 0 : 90))
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .padding(.top, 12)
+        case let .playlistsGrid(playlists):
+            playlistsGrid(playlists)
+        }
+    }
+
+    private func filteredArtistRow(_ artistNode: SearchTreeArtistNode) -> some View {
+        let totalTracks = artistNode.albums.reduce(0) { $0 + $1.tracks.count }
+        let summary = "\(artistNode.albums.count) \(artistNode.albums.count == 1 ? "ALBUM" : "ALBUMS") · \(totalTracks) \(totalTracks == 1 ? "TRACK" : "TRACKS")"
+
+        return Button(action: {
+            onSelectArtist(artistNode.artist)
+        }) {
+            HStack(spacing: 12) {
+                AlbumArtworkView(
+                    artworkKey: artistNode.artist.mostRecentArtworkKey ?? artistNode.albums.first?.album.artworkKey,
+                    title: artistNode.artist.name,
+                    subtitle: summary,
+                    cornerRadius: 8
+                )
+                .frame(width: 38, height: 38)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(artistNode.artist.name)
+                        .font(.system(size: 15, weight: .bold))
+                        .foregroundStyle(Color.primary)
+                        .lineLimit(1)
+
+                    Text(summary)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+
+                Text("OPEN")
+                    .font(.system(size: 12, weight: .bold, design: .monospaced))
+                    .foregroundStyle(Color.primary)
+            }
+            .padding(.vertical, 6)
+            .padding(.horizontal, 6)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .contextMenu {
+            Button(action: {
+                onSelectArtist(artistNode.artist)
+            }) {
+                Text("VIEW ARTIST")
+            }
+        }
+    }
+
+    private func filteredAlbumRow(album: Album, artist: Artist) -> some View {
+        let resolvedAlbumArt = album.artworkKey ?? album.tracks.first(where: { $0.artworkKey != nil })?.artworkKey
+
+        return Button(action: {
+            onSelectAlbum(album)
+        }) {
+            HStack(spacing: 12) {
+                AlbumArtworkView(
+                    artworkKey: resolvedAlbumArt,
+                    title: album.title,
+                    subtitle: album.artist,
+                    cornerRadius: 6
+                )
+                .frame(width: 40, height: 40)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(album.title)
+                        .font(.system(size: 14, weight: .bold))
+                        .foregroundStyle(Color.primary)
+                        .lineLimit(1)
+
+                    HStack(spacing: 6) {
+                        Text(album.artist.isEmpty ? artist.name : album.artist)
+                            .font(.system(size: 12))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+
+                        Text("·")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.tertiary)
+
+                        Text(album.formattedYear)
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+
+                Spacer()
+
+                Text("OPEN")
+                    .font(.system(size: 12, weight: .bold, design: .monospaced))
+                    .foregroundStyle(Color.primary)
+            }
+            .padding(.vertical, 6)
+            .padding(.horizontal, 6)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .albumContextMenu(album: album, libraryStore: libraryStore, playerService: playerService)
+    }
+
+    /// Non-lazy adaptive grid (same geometry as GridItem(.adaptive(minimum: 155), spacing: 14)) so the
+    /// single outer LazyVStack stays the only lazy container.
+    private func playlistsGrid(_ playlists: [Playlist]) -> some View {
+        SearchAdaptiveGridLayout(minimum: 155, spacing: 14) {
+            ForEach(playlists) { playlist in
+                NavigationLink(destination: PlaylistDetailView(playlistID: playlist.id, libraryStore: libraryStore, playerService: playerService)) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        ZStack(alignment: .topTrailing) {
+                            AlbumArtworkView(
+                                artworkKey: libraryStore.artworkKey(for: playlist),
+                                title: playlist.name,
+                                subtitle: "Playlist",
+                                cornerRadius: 8
+                            )
+                            .aspectRatio(1.0, contentMode: .fit)
+
+                            if playlist.isPinned {
+                                Image(systemName: "pin.fill")
+                                    .font(.system(size: 9, weight: .bold))
+                                    .foregroundStyle(Color.white)
+                                    .padding(5)
+                                    .background(Color.black.opacity(0.65))
+                                    .clipShape(Circle())
+                                    .padding(6)
+                            }
+                        }
+
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(playlist.name)
+                                .font(.system(size: 13, weight: .bold))
+                                .foregroundStyle(Color.primary)
+                                .lineLimit(1)
+
+                            Text(playlist.formattedTrackCount)
+                                .font(.system(size: 10, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.horizontal, 2)
+                    }
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+}
+
+// MARK: - Tree Connector Line
+
+/// Indents a flat row and draws its segment of the vertical tree connector line, so consecutive rows
+/// form the same continuous line the nested tree used to draw.
+private struct SearchConnectorLine: ViewModifier {
+    let isActive: Bool
+    let indent: CGFloat
+    let lineOffset: CGFloat
+
+    func body(content: Content) -> some View {
+        if isActive {
+            content
+                .padding(.leading, indent)
+                .overlay(alignment: .leading) {
+                    Rectangle()
+                        .fill(Color.primary.opacity(0.18))
+                        .frame(width: 1.5)
+                        .padding(.leading, lineOffset)
+                }
+        } else {
+            content
+        }
+    }
+}
+
+// MARK: - Adaptive Grid Layout (non-lazy)
+
+private struct SearchAdaptiveGridLayout: Layout {
+    let minimum: CGFloat
+    let spacing: CGFloat
+
+    private func columns(for width: CGFloat) -> (count: Int, width: CGFloat) {
+        let count = max(1, Int((width + spacing) / (minimum + spacing)))
+        let columnWidth = max(0, (width - CGFloat(count - 1) * spacing) / CGFloat(count))
+        return (count, columnWidth)
+    }
+
+    private func rowHeights(_ subviews: Subviews, count: Int, columnWidth: CGFloat) -> [CGFloat] {
+        var heights: [CGFloat] = []
+        var index = 0
+        while index < subviews.count {
+            let end = min(index + count, subviews.count)
+            var height: CGFloat = 0
+            for i in index..<end {
+                height = max(height, subviews[i].sizeThatFits(ProposedViewSize(width: columnWidth, height: nil)).height)
+            }
+            heights.append(height)
+            index = end
+        }
+        return heights
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let width = proposal.width ?? (minimum * 2 + spacing)
+        let (count, columnWidth) = columns(for: width)
+        let heights = rowHeights(subviews, count: count, columnWidth: columnWidth)
+        let total = heights.reduce(0, +) + CGFloat(max(0, heights.count - 1)) * spacing
+        return CGSize(width: width, height: total)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let (count, columnWidth) = columns(for: bounds.width)
+        let heights = rowHeights(subviews, count: count, columnWidth: columnWidth)
+        var y = bounds.minY
+        for (rowIndex, height) in heights.enumerated() {
+            for column in 0..<count {
+                let index = rowIndex * count + column
+                guard index < subviews.count else { break }
+                let x = bounds.minX + CGFloat(column) * (columnWidth + spacing)
+                subviews[index].place(
+                    at: CGPoint(x: x + columnWidth / 2, y: y + height / 2),
+                    anchor: .center,
+                    proposal: ProposedViewSize(width: columnWidth, height: nil)
+                )
+            }
+            y += height + spacing
+        }
+    }
+}
+
+// MARK: - Tree Controls Bar
+
+private struct SearchTreeControlsBar: View {
+    let artistsCount: Int
+    let albumsCount: Int
+    let tracksCount: Int
+    let activeCategoryFilter: SearchCategoryFilter?
+    let onCollapseAll: () -> Void
+    let onToggleCategoryFilter: (SearchCategoryFilter) -> Void
+
+    var body: some View {
         HStack(alignment: .center) {
             HStack(spacing: 8) {
                 Button(action: {
                     HapticFeedback.selectionChanged()
                     onToggleCategoryFilter(.artists)
                 }) {
-                    Text("\(results.totalArtistsCount) ARTISTS")
+                    Text("\(artistsCount) ARTISTS")
                         .font(.system(size: 11, weight: .bold, design: .monospaced))
                         .foregroundStyle(activeCategoryFilter == .artists ? Color.white : Color.secondary)
                         .padding(.vertical, 2)
@@ -1694,7 +2081,7 @@ public struct LibrarySearchResultsContainer: View, Equatable {
                     HapticFeedback.selectionChanged()
                     onToggleCategoryFilter(.albums)
                 }) {
-                    Text("\(results.totalAlbumsCount) ALBUMS")
+                    Text("\(albumsCount) ALBUMS")
                         .font(.system(size: 11, weight: .bold, design: .monospaced))
                         .foregroundStyle(activeCategoryFilter == .albums ? Color.white : Color.secondary)
                         .padding(.vertical, 2)
@@ -1710,7 +2097,7 @@ public struct LibrarySearchResultsContainer: View, Equatable {
                     HapticFeedback.selectionChanged()
                     onToggleCategoryFilter(.tracks)
                 }) {
-                    Text("\(results.totalTracksCount) TRACKS")
+                    Text("\(tracksCount) TRACKS")
                         .font(.system(size: 11, weight: .bold, design: .monospaced))
                         .foregroundStyle(activeCategoryFilter == .tracks ? Color.white : Color.secondary)
                         .padding(.vertical, 2)
@@ -1743,260 +2130,5 @@ public struct LibrarySearchResultsContainer: View, Equatable {
             }
         }
         .padding(.vertical, 4)
-    }
-
-    // MARK: - Filtered Views
-    private var filteredArtistsList: some View {
-        let list = results.matchedArtists.isEmpty ? results.artistTreeNodes : results.matchedArtists
-        return LazyVStack(alignment: .leading, spacing: 8) {
-            ForEach(list) { artistNode in
-                let totalTracks = artistNode.albums.reduce(0) { $0 + $1.tracks.count }
-                let summary = "\(artistNode.albums.count) \(artistNode.albums.count == 1 ? "ALBUM" : "ALBUMS") · \(totalTracks) \(totalTracks == 1 ? "TRACK" : "TRACKS")"
-
-                Button(action: {
-                    onSelectArtist(artistNode.artist)
-                }) {
-                    HStack(spacing: 12) {
-                        AlbumArtworkView(
-                            artworkKey: artistNode.artist.mostRecentArtworkKey ?? artistNode.albums.first?.album.artworkKey,
-                            title: artistNode.artist.name,
-                            subtitle: summary,
-                            cornerRadius: 8
-                        )
-                        .frame(width: 38, height: 38)
-
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(artistNode.artist.name)
-                                .font(.system(size: 15, weight: .bold))
-                                .foregroundStyle(Color.primary)
-                                .lineLimit(1)
-
-                            Text(summary)
-                                .font(.system(size: 11, design: .monospaced))
-                                .foregroundStyle(.secondary)
-                        }
-
-                        Spacer()
-
-                        Text("OPEN")
-                            .font(.system(size: 12, weight: .bold, design: .monospaced))
-                            .foregroundStyle(Color.primary)
-                    }
-                    .padding(.vertical, 6)
-                    .padding(.horizontal, 6)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .contextMenu {
-                    Button(action: {
-                        onSelectArtist(artistNode.artist)
-                    }) {
-                        Text("VIEW ARTIST")
-                    }
-                }
-            }
-        }
-    }
-
-    private var filteredAlbumsList: some View {
-        let list = results.matchedAlbums
-
-        return LazyVStack(alignment: .leading, spacing: 8) {
-            ForEach(list, id: \.album.id) { pair in
-                let (album, artist) = pair
-                let resolvedAlbumArt = album.artworkKey ?? album.tracks.first(where: { $0.artworkKey != nil })?.artworkKey
-
-                Button(action: {
-                    onSelectAlbum(album)
-                }) {
-                    HStack(spacing: 12) {
-                        AlbumArtworkView(
-                            artworkKey: resolvedAlbumArt,
-                            title: album.title,
-                            subtitle: album.artist,
-                            cornerRadius: 6
-                        )
-                        .frame(width: 40, height: 40)
-
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(album.title)
-                                .font(.system(size: 14, weight: .bold))
-                                .foregroundStyle(Color.primary)
-                                .lineLimit(1)
-
-                            HStack(spacing: 6) {
-                                Text(album.artist.isEmpty ? artist.name : album.artist)
-                                    .font(.system(size: 12))
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(1)
-
-                                Text("·")
-                                    .font(.system(size: 10))
-                                    .foregroundStyle(.tertiary)
-
-                                Text(album.formattedYear)
-                                    .font(.system(size: 11, design: .monospaced))
-                                    .foregroundStyle(.tertiary)
-                            }
-                        }
-
-                        Spacer()
-
-                        Text("OPEN")
-                            .font(.system(size: 12, weight: .bold, design: .monospaced))
-                            .foregroundStyle(Color.primary)
-                    }
-                    .padding(.vertical, 6)
-                    .padding(.horizontal, 6)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .albumContextMenu(album: album, libraryStore: libraryStore, playerService: playerService)
-            }
-        }
-    }
-
-    private var tracksCategoryTreeView: some View {
-        var orderedArtistKeys: [String] = []
-        var artistKeyToArtist: [String: Artist] = [:]
-        var artistKeyToOrderedAlbumKeys: [String: [String]] = [:]
-        var albumKeyToAlbum: [String: Album] = [:]
-        var albumKeyToTracks: [String: [SearchTreeTrackNode]] = [:]
-
-        for trackNode in results.directMatchedTracks {
-            let track = trackNode.track
-            let artistName = track.artist.isEmpty ? "Unknown Artist" : track.artist
-            let artistKey = ArtistParser.canonicalArtistKey(artistName)
-            let albumTitle = track.album.isEmpty ? "Singles" : track.album
-            let albumKey = "\(artistKey)_\(albumTitle.lowercased())"
-
-            if artistKeyToArtist[artistKey] == nil {
-                let artistObj = libraryStore.findArtist(name: artistName) ?? Artist(name: artistName, albums: [])
-                artistKeyToArtist[artistKey] = artistObj
-                orderedArtistKeys.append(artistKey)
-                artistKeyToOrderedAlbumKeys[artistKey] = []
-            }
-
-            if albumKeyToAlbum[albumKey] == nil {
-                let albumObj = libraryStore.findAlbum(title: albumTitle, artist: artistName) ?? Album(title: albumTitle, artist: artistName, tracks: [track])
-                albumKeyToAlbum[albumKey] = albumObj
-                artistKeyToOrderedAlbumKeys[artistKey]?.append(albumKey)
-                albumKeyToTracks[albumKey] = []
-            }
-
-            albumKeyToTracks[albumKey]?.append(trackNode)
-        }
-
-        var matchingArtistNodes: [SearchTreeArtistNode] = []
-        for artistKey in orderedArtistKeys {
-            guard let artist = artistKeyToArtist[artistKey],
-                  let albumKeys = artistKeyToOrderedAlbumKeys[artistKey] else { continue }
-            var albumNodes: [SearchTreeAlbumNode] = []
-            for albKey in albumKeys {
-                guard let album = albumKeyToAlbum[albKey],
-                      let trks = albumKeyToTracks[albKey] else { continue }
-                albumNodes.append(SearchTreeAlbumNode(
-                    id: "synth_album_\(albKey)",
-                    album: album,
-                    tracks: trks,
-                    isDirectlyMatched: true,
-                    relevanceScore: trks.map { $0.relevanceScore }.max() ?? 50_000,
-                    category: album.isSingle ? .singles : .albums
-                ))
-            }
-            matchingArtistNodes.append(SearchTreeArtistNode(
-                id: "synth_artist_\(artistKey)",
-                artist: artist,
-                albums: albumNodes,
-                isDirectlyMatched: true,
-                relevanceScore: albumNodes.map { $0.relevanceScore }.max() ?? 50_000
-            ))
-        }
-
-        let allMatchingAlbumIDs = Set(matchingArtistNodes.flatMap { $0.albums.map { $0.id } })
-
-        return LazyVStack(alignment: .leading, spacing: 14) {
-            ForEach(matchingArtistNodes) { artistNode in
-                SearchArtistTreeNodeRow(
-                    artistNode: artistNode,
-                    isExpanded: true,
-                    expandedAlbumIDs: allMatchingAlbumIDs,
-                    libraryStore: libraryStore,
-                    playerService: playerService,
-                    onSelectArtist: onSelectArtist,
-                    onSelectAlbum: onSelectAlbum,
-                    onSelectTrackForPlaylist: onSelectTrackForPlaylist,
-                    onSelectTrackForInfo: onSelectTrackForInfo,
-                    onToggleArtistExpansion: onToggleArtistExpansion,
-                    onToggleAlbumExpansion: onToggleAlbumExpansion
-                )
-                .equatable()
-            }
-        }
-    }
-
-    private var playlistsSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Button(action: onTogglePlaylistsCollapse) {
-                HStack {
-                    Text("PLAYLISTS (\(results.playlists.count))")
-                        .font(.system(size: 11, weight: .bold, design: .monospaced))
-                        .foregroundStyle(.secondary)
-
-                    Spacer()
-
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 11, weight: .bold))
-                        .foregroundStyle(.secondary)
-                        .rotationEffect(.degrees(isPlaylistsCollapsed ? 0 : 90))
-                }
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-
-            if !isPlaylistsCollapsed {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 155), spacing: 14)], spacing: 14) {
-                    ForEach(results.playlists) { playlist in
-                        NavigationLink(destination: PlaylistDetailView(playlistID: playlist.id, libraryStore: libraryStore, playerService: playerService)) {
-                            VStack(alignment: .leading, spacing: 6) {
-                                ZStack(alignment: .topTrailing) {
-                                    AlbumArtworkView(
-                                        artworkKey: libraryStore.artworkKey(for: playlist),
-                                        title: playlist.name,
-                                        subtitle: "Playlist",
-                                        cornerRadius: 8
-                                    )
-                                    .aspectRatio(1.0, contentMode: .fit)
-
-                                    if playlist.isPinned {
-                                        Image(systemName: "pin.fill")
-                                            .font(.system(size: 9, weight: .bold))
-                                            .foregroundStyle(Color.white)
-                                            .padding(5)
-                                            .background(Color.black.opacity(0.65))
-                                            .clipShape(Circle())
-                                            .padding(6)
-                                    }
-                                }
-
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(playlist.name)
-                                        .font(.system(size: 13, weight: .bold))
-                                        .foregroundStyle(Color.primary)
-                                        .lineLimit(1)
-
-                                    Text(playlist.formattedTrackCount)
-                                        .font(.system(size: 10, design: .monospaced))
-                                        .foregroundStyle(.secondary)
-                                }
-                                .padding(.horizontal, 2)
-                            }
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-                .transition(.opacity)
-            }
-        }
     }
 }

@@ -45,7 +45,6 @@ public struct MacSidebarView: View {
                         sectionHeader("OVERVIEW")
                         sidebarRow(item: .home, title: "Home")
                         sidebarRow(item: .search, title: "Search")
-                        sidebarRow(item: .discovery, title: "Online Discovery")
                     }
 
                     // Section 2: Library

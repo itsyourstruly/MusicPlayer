@@ -125,6 +125,13 @@ public struct ContentView: View {
         .onChange(of: libraryStore.settings.downloadNextSongOnWiFi) { _, _ in
             playerService.downloadNextSongOnWiFi = true
         }
+        .onChange(of: libraryStore.settings.autoDownloadOnPlay) { _, isOn in
+            playerService.autoDownloadOnPlay = isOn
+        }
+        .onChange(of: libraryStore.settings.downloadOverCellular) { _, isOn in
+            playerService.downloadOnCellular = isOn
+            JellyfinDownloadManager.shared.allowsCellularAccess = isOn
+        }
         .preferredColorScheme(.dark)
         #else
         ZStack(alignment: .bottom) {
@@ -215,6 +222,13 @@ public struct ContentView: View {
         .onChange(of: libraryStore.settings.downloadNextSongOnWiFi) { _, _ in
             playerService.downloadNextSongOnWiFi = true
         }
+        .onChange(of: libraryStore.settings.autoDownloadOnPlay) { _, isOn in
+            playerService.autoDownloadOnPlay = isOn
+        }
+        .onChange(of: libraryStore.settings.downloadOverCellular) { _, isOn in
+            playerService.downloadOnCellular = isOn
+            JellyfinDownloadManager.shared.allowsCellularAccess = isOn
+        }
         .onChange(of: libraryStore.settings.serverSources) { _, servers in
             playerService.serverSources = servers
         }
@@ -222,10 +236,9 @@ public struct ContentView: View {
             playerService.refreshAudioSessionAndRoute()
         }
         .onChange(of: scenePhase) { _, newPhase in
+            // Returning to the foreground restores nothing over the network: server sync is manual (RESCAN).
             if newPhase == .background {
                 JellyfinDownloadManager.shared.flushIndex()
-            } else if newPhase == .active {
-                Task { await libraryStore.syncStaleServers() }
             }
         }
         .preferredColorScheme(.dark)
@@ -266,9 +279,9 @@ public struct ContentView: View {
         playerService.rememberPlaybackPositionMinMinutes = libraryStore.settings.rememberPlaybackPositionMinMinutes
         playerService.downloadNextSongOnWiFi = true
         playerService.serverSources = libraryStore.settings.serverSources
-        playerService.autoDownloadOnPlay = false
-        playerService.downloadOnCellular = true
-        JellyfinDownloadManager.shared.allowsCellularAccess = true
+        playerService.autoDownloadOnPlay = libraryStore.settings.autoDownloadOnPlay
+        playerService.downloadOnCellular = libraryStore.settings.downloadOverCellular
+        JellyfinDownloadManager.shared.allowsCellularAccess = libraryStore.settings.downloadOverCellular
 
         CloudDownloadCenter.shared.onTrackDownloaded = { [weak libraryStore] trackID, url in
             libraryStore?.upgradeTrackAfterDownload(trackID: trackID, fileURL: url)

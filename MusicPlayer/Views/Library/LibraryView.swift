@@ -112,11 +112,11 @@ public struct LibraryView: View {
         switch libraryStore.selectedCategory {
         case .artists:
             // Count
-            let count = libraryStore.artists.count
+            let count = libraryStore.activeArtists.count
             return "FIND \(count) \(count == 1 ? "ARTIST" : "ARTISTS")"
         case .albums:
             // Count
-            let count = libraryStore.albums.count
+            let count = libraryStore.activeAlbums.count
             return "FIND \(count) \(count == 1 ? "ALBUM" : "ALBUMS")"
         case .playlists:
             // Count
@@ -124,7 +124,7 @@ public struct LibraryView: View {
             return "FIND \(count) \(count == 1 ? "PLAYLIST" : "PLAYLISTS")"
         case .tracks:
             // Count
-            let count = libraryStore.tracks.count
+            let count = libraryStore.activeTracks.count
             return "FIND \(count) \(count == 1 ? "TRACK" : "TRACKS")"
         case .folders:
             let count = totalSourcesCount

@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 /// Plex Media Server adapter: plex.tv JWT account auth (auto-refresh, silent legacy fallback), connection
 /// selection (local → remote → relay with failover), section paging, direct play, universal transcode.
@@ -59,7 +60,7 @@ nonisolated public struct PlexProvider: MediaServerProvider {
         if connections.isEmpty { connections = [PlexConnection(uri: link.serverURL, local: false, relay: false)] }
         let token = serverToken
         let machineID = link.serverId
-        for tier in 0...2 {
+        for tier in 0...PlexConnection.maxTier {
             let candidates = connections.filter { $0.tier == tier }
             guard !candidates.isEmpty else { continue }
             let winner = await withTaskGroup(of: URL?.self) { group -> URL? in
@@ -83,7 +84,7 @@ nonisolated public struct PlexProvider: MediaServerProvider {
                 return
             }
         }
-        throw JellyfinClientError.networkError("PLEX SERVER IS UNREACHABLE")
+        throw JellyfinClientError.unreachable("PLEX SERVER UNREACHABLE (ALL CONNECTIONS FAILED)")
     }
 
     // MARK: Requests
@@ -126,7 +127,10 @@ nonisolated public struct PlexProvider: MediaServerProvider {
         }
     }
 
-    private struct Section { let key: String; let roots: [String]; let marker: String }
+    private struct Section: Sendable { let key: String; let roots: [String]; let marker: String }
+
+    /// Section list read by a sync, handed to the catalog fetch of the same sync (one `/library/sections` request).
+    private static let sectionHandoff = OSAllocatedUnfairLock<[UUID: [Section]]>(initialState: [:])
 
     private func sections() async throws -> [Section] {
         let mc = try await getJSON("/library/sections")
@@ -145,6 +149,7 @@ nonisolated public struct PlexProvider: MediaServerProvider {
         progressHandler: (@Sendable (Int, Int) -> Void)?
     ) async throws -> ServerChangeSet {
         let sections = try await sections()
+        Self.sectionHandoff.withLock { $0[link.id] = sections }
         let marker = sections.map(\.marker).joined(separator: "|")
         if !existingTracks.isEmpty, let lastSyncDate,
            Date().timeIntervalSince(lastSyncDate) < Self.fullSweepInterval,
@@ -182,9 +187,15 @@ nonisolated public struct PlexProvider: MediaServerProvider {
 
     private func fetchSectionTracks(_ key: String, existingCount: Int, already: Int,
                                     progressHandler: (@Sendable (Int, Int) -> Void)?) async throws -> [[String: Any]] {
+        try await fetchSectionItems(key, type: 10, existingCount: existingCount, already: already, progressHandler: progressHandler)
+    }
+
+    /// Pages `/library/sections/{key}/all` for one metadata type (8 artist, 9 album, 10 track).
+    private func fetchSectionItems(_ key: String, type: Int, existingCount: Int, already: Int,
+                                   progressHandler: (@Sendable (Int, Int) -> Void)?) async throws -> [[String: Any]] {
         func page(_ start: Int) async throws -> (items: [[String: Any]], total: Int?) {
             let mc = try await getJSON("/library/sections/\(key)/all", [
-                URLQueryItem(name: "type", value: "10"),
+                URLQueryItem(name: "type", value: String(type)),
                 URLQueryItem(name: "X-Plex-Container-Start", value: String(start)),
                 URLQueryItem(name: "X-Plex-Container-Size", value: String(Self.pageSize))
             ], extraHeaders: ["X-Plex-Container-Start": String(start), "X-Plex-Container-Size": String(Self.pageSize)])
@@ -252,6 +263,16 @@ nonisolated public struct PlexProvider: MediaServerProvider {
         let relativePath = ServerPathBuilder.relativePath(serverPath: file, roots: roots, albumArtist: albumArtist ?? artist,
                                                           album: album, disc: disc, track: trackNo, title: title, ext: ext)
         let added = (m["addedAt"] as? Double).map { Date(timeIntervalSince1970: $0) }
+        // Plex credits one album artist (grandparent, id = grandparentRatingKey) and a display-only track artist
+        // (originalTitle, no id), so featured credits keep the name fallback.
+        let credits = ServerCredits(
+            albumArtists: [albumArtist ?? artist],
+            artists: [artist],
+            artistsAreEntities: false,
+            bitDepth: nil,
+            imageVersion: thumb,
+            albumArtistIDs: [albumArtist == nil ? nil : (m["grandparentRatingKey"] as? String)]
+        )
         return Track(
             id: id,
             title: title,
@@ -275,8 +296,47 @@ nonisolated public struct PlexProvider: MediaServerProvider {
                                      year: year, trackNumber: trackNo, discNumber: disc),
             jellyfinItemId: ratingKey,
             jellyfinAlbumId: "\(sourcePrefix)_\(albumID)",
-            serverCoverArtId: thumb
+            serverCoverArtId: thumb,
+            serverCredits: credits
         )
+    }
+
+    // MARK: Catalog
+
+    /// Artist and album `titleSort` values for every music section.
+    public func fetchCatalog() async throws -> ServerCatalog {
+        var catalog = ServerCatalog()
+        let sourcePrefix = String(link.id.uuidString.prefix(8))
+        // Each section's artists (type 8) and albums (type 9) are walked once per sync.
+        let handedOff = Self.sectionHandoff.withLock { $0.removeValue(forKey: link.id) }
+        let musicSections: [Section]
+        if let handedOff {
+            musicSections = handedOff
+        } else {
+            musicSections = try await sections()
+        }
+        for section in musicSections {
+            for item in try await fetchSectionItems(section.key, type: 8, existingCount: 0, already: 0, progressHandler: nil) {
+                catalog.addArtist(name: item["title"] as? String, sortName: item["titleSort"] as? String)
+            }
+            for item in try await fetchSectionItems(section.key, type: 9, existingCount: 0, already: 0, progressHandler: nil) {
+                guard let ratingKey = item["ratingKey"] as? String else { continue }
+                catalog.addAlbum(key: "\(sourcePrefix)_\(ratingKey)", title: item["title"] as? String, sortName: item["titleSort"] as? String)
+                // Release type (plan §3.7): Plex album "Format" (Album/Single/EP) and "Subformat" (Live/Remix/Compilation/...) tag arrays.
+                // Read only when present in the album listing; no per-album fallback request is made.
+                let formatTags = Self.tagValues(item["Format"]) + Self.tagValues(item["Subformat"])
+                if !formatTags.isEmpty {
+                    catalog.addReleaseInfo(key: "\(sourcePrefix)_\(ratingKey)", releaseTypes: formatTags, isCompilation: nil, version: nil, source: "plex")
+                }
+            }
+        }
+        return catalog
+    }
+
+    /// `[{"tag": "..."}]` → ["..."].
+    private static func tagValues(_ value: Any?) -> [String] {
+        guard let array = value as? [[String: Any]] else { return [] }
+        return array.compactMap { ($0["tag"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
     }
 
     // MARK: Media
@@ -323,14 +383,11 @@ nonisolated public struct PlexProvider: MediaServerProvider {
         return transcodeRequest(for: track, container: "mp3", ext: "mp3")
     }
 
-    public func artworkRequests(imageId: String, fullResolution: Bool) -> [URLRequest] {
-        if fullResolution {
-            return [request(url(imageId), timeout: 12)].compactMap { $0 }
-        }
-        let q = [URLQueryItem(name: "url", value: imageId), URLQueryItem(name: "width", value: "800"),
-                 URLQueryItem(name: "height", value: "800"), URLQueryItem(name: "minSize", value: "1"),
-                 URLQueryItem(name: "upscale", value: "0")]
-        return [request(url("/photo/:/transcode", q), timeout: 10), request(url(imageId), timeout: 10)].compactMap { $0 }
+    public func artworkRequests(imageId: String, size: ArtworkFetchSize, version: String?) -> [URLRequest] {
+        // Plex stores one poster per item at its `thumb` path and publishes no fixed thumbnail sizes; any
+        // /photo/:/transcode size would be a new server-side resize. Both tiers fetch the stored thumb as-is
+        // and every smaller size is scaled on device.
+        [request(url(imageId), timeout: size.requestTimeout)].compactMap { $0 }
     }
 
     // MARK: Reporting

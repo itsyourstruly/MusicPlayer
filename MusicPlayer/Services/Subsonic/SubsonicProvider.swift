@@ -1,5 +1,6 @@
 import Foundation
 import CryptoKit
+import os
 
 // MARK: - Wire Models
 
@@ -9,12 +10,19 @@ nonisolated struct SubsonicAPIError: Error, Sendable {
     let message: String
 
     var clientError: JellyfinClientError {
+        // OpenSubsonic error codes: https://opensubsonic.netlify.app/docs/responses/error/
         switch code {
-        case 40, 44: return .authenticationFailed("WRONG USERNAME OR PASSWORD")
-        case 41, 42, 43: return .authenticationFailed("SERVER REJECTED THIS SIGN-IN METHOD")
-        case 50: return .authenticationFailed("USER IS NOT AUTHORIZED")
-        case 20, 30: return .networkError("SERVER API VERSION IS NOT SUPPORTED")
-        default: return .networkError(message.isEmpty ? "SERVER ERROR \(code)" : message)
+        case 40: return .authenticationFailed("WRONG USERNAME OR PASSWORD")
+        case 44: return .authenticationFailed("INVALID API KEY")
+        case 41: return .authenticationFailed("SERVER REJECTED TOKEN SIGN-IN (LDAP USER): USE HTTPS OR AN API KEY")
+        case 42, 43: return .authenticationFailed("SERVER REJECTED THIS SIGN-IN METHOD")
+        case 50: return .authenticationFailed("ACCESS DENIED BY SERVER")
+        case 20: return .networkError("APP TOO OLD FOR THIS SERVER")
+        case 30: return .networkError("SERVER TOO OLD (UPDATE SERVER)")
+        case 60: return .networkError("SUBSONIC LICENSE EXPIRED")
+        case 70: return .networkError("ITEM NOT FOUND ON SERVER")
+        case 10: return .networkError("SERVER REJECTED REQUEST (CODE 10)")
+        default: return .networkError(message.isEmpty ? "SERVER ERROR (CODE \(code))" : "SERVER ERROR (CODE \(code)): \(message.uppercased())")
         }
     }
 }
@@ -40,10 +48,17 @@ nonisolated struct SubsonicSong: Decodable, Sendable {
     let path: String?
     let created: String?
     let isVideo: Bool?
+    /// OpenSubsonic credits (artist entities with ids) and display strings.
+    let displayArtist: String?
+    let artistId: String?
+    let artists: [SubsonicArtistRef]?
+    let albumArtists: [SubsonicArtistRef]?
+    let bitDepth: Int?
 
     enum CodingKeys: String, CodingKey {
-        case id, title, album, artist, displayAlbumArtist, albumId, track, discNumber, year, genre, coverArt
+        case id, title, album, artist, artistId, displayAlbumArtist, albumId, track, discNumber, year, genre, coverArt
         case size, suffix, duration, bitRate, samplingRate, channelCount, path, created, isVideo
+        case displayArtist, artists, albumArtists, bitDepth
     }
 
     init(from decoder: Decoder) throws {
@@ -83,6 +98,31 @@ nonisolated struct SubsonicSong: Decodable, Sendable {
         path = str(.path)
         created = str(.created)
         isVideo = try? c.decodeIfPresent(Bool.self, forKey: .isVideo)
+        displayArtist = str(.displayArtist)
+        artistId = str(.artistId)
+        artists = (try? c.decodeIfPresent([SubsonicArtistRef].self, forKey: .artists))?.filter { $0.name != nil }
+        albumArtists = (try? c.decodeIfPresent([SubsonicArtistRef].self, forKey: .albumArtists))?.filter { $0.name != nil }
+        bitDepth = int(.bitDepth)
+    }
+}
+
+/// OpenSubsonic `ArtistID3` as embedded in a song's `artists[]` / `albumArtists[]` (only `id` and `name` are needed).
+nonisolated struct SubsonicArtistRef: Decodable, Sendable {
+    let id: String?
+    let name: String?
+
+    enum CodingKeys: String, CodingKey { case id, name }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        if let s = try? c.decodeIfPresent(String.self, forKey: .id) {
+            id = s
+        } else if let i = try? c.decodeIfPresent(Int64.self, forKey: .id) {
+            id = String(i)
+        } else {
+            id = nil
+        }
+        name = try? c.decodeIfPresent(String.self, forKey: .name)
     }
 }
 
@@ -110,9 +150,40 @@ nonisolated private struct SearchResultBody: Decodable {
 }
 
 nonisolated private struct AlbumListBody: Decodable {
-    struct Album: Decodable { let id: String }
+    struct Album: Decodable, Sendable {
+        let id: String
+        let name: String?
+        let sortName: String?
+        let releaseTypes: [String]?
+        let isCompilation: Bool?
+        let version: String?
+        /// The album's own cover art id (Navidrome `al-…`), served from the server's album artwork cache.
+        let coverArt: String?
+
+        enum CodingKeys: String, CodingKey { case id, name, sortName, releaseTypes, isCompilation, version, coverArt }
+
+        // Lenient: unexpected release-info shapes are ignored rather than failing the catalog.
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            id = try c.decode(String.self, forKey: .id)
+            name = try? c.decodeIfPresent(String.self, forKey: .name)
+            sortName = try? c.decodeIfPresent(String.self, forKey: .sortName)
+            let types = (try? c.decodeIfPresent([String].self, forKey: .releaseTypes)) ?? nil
+            releaseTypes = (types?.isEmpty ?? true) ? nil : types
+            isCompilation = (try? c.decodeIfPresent(Bool.self, forKey: .isCompilation)) ?? nil
+            version = (try? c.decodeIfPresent(String.self, forKey: .version)) ?? nil
+            coverArt = (try? c.decodeIfPresent(String.self, forKey: .coverArt)) ?? nil
+        }
+    }
     struct List: Decodable { let album: [Album]? }
     let albumList2: List?
+}
+
+nonisolated private struct ArtistsBody: Decodable {
+    struct Artist: Decodable { let name: String?; let sortName: String? }
+    struct Index: Decodable { let artist: [Artist]? }
+    struct Artists: Decodable { let index: [Index]? }
+    let artists: Artists?
 }
 
 nonisolated private struct AlbumBody: Decodable {
@@ -123,6 +194,14 @@ nonisolated private struct AlbumBody: Decodable {
 nonisolated private struct ExtensionsBody: Decodable {
     struct Ext: Decodable { let name: String }
     let openSubsonicExtensions: [Ext]?
+}
+
+/// OpenSubsonic `getLyricsBySongId` payload (songLyrics extension). `start` is milliseconds.
+nonisolated private struct LyricsListBody: Decodable {
+    struct Line: Decodable { let start: Int?; let value: String? }
+    struct Structured: Decodable { let lang: String?; let synced: Bool?; let offset: Int?; let line: [Line]? }
+    struct List: Decodable { let structuredLyrics: [Structured]? }
+    let lyricsList: List?
 }
 
 nonisolated private struct ScanStatusBody: Decodable {
@@ -142,6 +221,16 @@ nonisolated enum SubsonicClient {
         let serverVersion: String?
         let openSubsonic: Bool
         let supportsAPIKey: Bool
+        /// OpenSubsonic `songLyrics` extension, read from the same `getOpenSubsonicExtensions` reply; nil when unknown.
+        let supportsSongLyrics: Bool?
+    }
+
+    /// Probe results for this app session, keyed by server address, so detecting a server and signing in
+    /// to it ask `ping` / `getOpenSubsonicExtensions` once.
+    private static let probeCache = OSAllocatedUnfairLock<[String: ServerInfo]>(initialState: [:])
+
+    static func cachedProbe(for base: URL) -> ServerInfo? {
+        probeCache.withLock { $0[base.absoluteString.lowercased()] }
     }
 
     /// Auth parameters for the stored credentials. apiKey must not be combined with `u` (error 43).
@@ -187,7 +276,11 @@ nonisolated enum SubsonicClient {
         var req = URLRequest(url: url)
         req.timeoutInterval = timeout
         let (data, _) = try await ServerHTTPClient.data(for: req, session: session)
-        let status = try JSONDecoder().decode(SubsonicStatus.self, from: data).body
+        // Errors arrive as HTTP 200 with status "failed"; anything that is not a subsonic-response
+        // (reverse-proxy HTML, SPA index, wrong subpath) means the address is not a Subsonic API.
+        guard let status = try? JSONDecoder().decode(SubsonicStatus.self, from: data).body else {
+            throw JellyfinClientError.unreachable("NOT A SUBSONIC SERVER (CHECK ADDRESS/PATH)")
+        }
         if status.status != "ok" {
             throw SubsonicAPIError(code: status.error?.code ?? 0, message: status.error?.message ?? "")
         }
@@ -202,16 +295,27 @@ nonisolated enum SubsonicClient {
         guard let (data, _) = try? await session.data(for: req),
               let body = try? JSONDecoder().decode(SubsonicStatus.self, from: data).body else { return nil }
         var supportsAPIKey = false
+        var supportsSongLyrics: Bool? = body.openSubsonic == true ? nil : false
         if body.openSubsonic == true,
            let ext = try? await request(ExtensionsBody.self, base: base, endpoint: "getOpenSubsonicExtensions", auth: nil, timeout: timeout, session: session) {
             supportsAPIKey = ext.openSubsonicExtensions?.contains { $0.name == "apiKeyAuthentication" } ?? false
+            supportsSongLyrics = ext.openSubsonicExtensions?.contains { $0.name == "songLyrics" } ?? false
         }
-        return ServerInfo(type: body.type, serverVersion: body.serverVersion, openSubsonic: body.openSubsonic == true, supportsAPIKey: supportsAPIKey)
+        let info = ServerInfo(type: body.type, serverVersion: body.serverVersion, openSubsonic: body.openSubsonic == true,
+                              supportsAPIKey: supportsAPIKey, supportsSongLyrics: supportsSongLyrics)
+        probeCache.withLock { $0[base.absoluteString.lowercased()] = info }
+        return info
     }
 
     /// Signs in: apiKey when given, else token+salt, falling back to `enc:` password auth on error 41.
     static func authenticate(base: URL, userName: String, password: String, apiKey: String?) async throws -> (ServerSourceLink, ServerCredentials) {
-        let info = await probe(base: base)
+        // Reuses the detection probe from the sign-in sheet instead of asking the server again.
+        let info: ServerInfo?
+        if let cached = cachedProbe(for: base) {
+            info = cached
+        } else {
+            info = await probe(base: base)
+        }
         var creds: ServerCredentials
         if let apiKey, !apiKey.isEmpty {
             creds = ServerCredentials(apiKey: apiKey)
@@ -220,7 +324,9 @@ nonisolated enum SubsonicClient {
         }
         do {
             _ = try await request(SubsonicStatus.Body?.self, base: base, endpoint: "ping", auth: authItems(userName: userName, credentials: creds))
-        } catch let err as SubsonicAPIError where err.code == 41 && creds.apiKey == nil {
+        } catch let err as SubsonicAPIError where err.code == 41 && creds.apiKey == nil
+                    && base.scheme?.lowercased() == "https" {
+            // Legacy `enc:` auth sends a reversibly encoded password: only over HTTPS.
             creds.useLegacyPasswordAuth = true
             do {
                 _ = try await request(SubsonicStatus.Body?.self, base: base, endpoint: "ping", auth: authItems(userName: userName, credentials: creds))
@@ -253,7 +359,6 @@ nonisolated public struct SubsonicProvider: MediaServerProvider {
     public let link: ServerSourceLink
 
     private static let pageSize = 500
-    private static let pageConcurrency = 4
     private static let fullSweepInterval: TimeInterval = 24 * 3600
 
     public init(link: ServerSourceLink) {
@@ -277,6 +382,16 @@ nonisolated public struct SubsonicProvider: MediaServerProvider {
 
     private var scanMarkerKey: String { "subsonic_scan_marker_\(link.id.uuidString)" }
 
+    /// Fail-fast pre-sync check: an authenticated ping (8 s) verifies reachability and credentials together.
+    public func prepareSession() async throws {
+        do {
+            _ = try await SubsonicClient.request(SubsonicStatus.Body?.self, base: link.serverURL, endpoint: "ping",
+                                                 auth: try auth(), timeout: 8)
+        } catch let err as SubsonicAPIError {
+            throw (err.code == 40 || err.code == 44) ? JellyfinClientError.reauthRequired : err.clientError
+        }
+    }
+
     // MARK: Sync
 
     public func fetchTrackChanges(
@@ -287,6 +402,7 @@ nonisolated public struct SubsonicProvider: MediaServerProvider {
     ) async throws -> ServerChangeSet {
         // Cheap change check: skip enumeration when the server's last scan is unchanged and a full
         // sweep (deletion detection) ran within 24 h. Manual rescans clear the marker first.
+        Self.albumHandoff.clear(for: link.id)
         var marker: String?
         if let scan = try? await call(ScanStatusBody.self, "getScanStatus").scanStatus {
             marker = scan.lastScan ?? scan.count.map { "count:\($0)" }
@@ -299,8 +415,24 @@ nonisolated public struct SubsonicProvider: MediaServerProvider {
 
         statusHandler?("READING LIBRARY...")
         var songs = try await fetchAllSongsViaSearch(existingCount: existingTracks.count, progressHandler: progressHandler)
+        // Album entities (getAlbumList2) carry the album's own coverArt id; songs fall back to their own. Only the
+        // album walk needs them, so a failed listing does not fail a search-based sync.
+        let walked: [AlbumListBody.Album]?
         if songs.isEmpty {
-            songs = try await fetchAllSongsViaAlbums(statusHandler: statusHandler)
+            walked = try await fetchAlbumEntities()
+        } else {
+            walked = try? await fetchAlbumEntities()
+        }
+        // One getAlbumList2 walk per sync: fetchCatalog() reuses this list.
+        if let walked { Self.albumHandoff.set(walked, for: link.id) }
+        let albums = walked ?? []
+        try Task.checkCancellation()
+        if songs.isEmpty {
+            songs = try await fetchAllSongsViaAlbums(albumIDs: albums.map(\.id), statusHandler: statusHandler)
+        }
+        var albumCoverArt: [String: String] = [:]
+        for album in albums {
+            if let cover = album.coverArt, !cover.isEmpty { albumCoverArt[album.id] = cover }
         }
 
         let existingByID = Dictionary(existingTracks.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
@@ -315,7 +447,8 @@ nonisolated public struct SubsonicProvider: MediaServerProvider {
                 }
             }
             let id = TrackIdentity.serverTrackID(sourceID: link.id, kind: .subsonic, itemID: song.id)
-            mapped.append(mapSong(song, id: id, existing: existingByID[id]))
+            let albumCover = song.albumId.flatMap { albumCoverArt[$0] }
+            mapped.append(mapSong(song, id: id, existing: existingByID[id], albumCoverArt: albumCover))
         }
 
         let change = ServerChangeDiff.diff(existing: existingTracks, fresh: mapped)
@@ -329,43 +462,29 @@ nonisolated public struct SubsonicProvider: MediaServerProvider {
         var seenInSearch = Set<String>()
         var offset = 0
         var finished = false
+        // One page at a time, stopping at the first short page: no request past the end of the library.
         while !finished {
             try Task.checkCancellation()
-            let offsets = (0..<Self.pageConcurrency).map { offset + $0 * Self.pageSize }
-            let pages = try await withThrowingTaskGroup(of: (Int, [SubsonicSong]).self) { group in
-                for o in offsets {
-                    group.addTask {
-                        let body = try await call(SearchResultBody.self, "search3", [
-                            URLQueryItem(name: "query", value: ""),
-                            URLQueryItem(name: "artistCount", value: "0"),
-                            URLQueryItem(name: "albumCount", value: "0"),
-                            URLQueryItem(name: "songCount", value: String(Self.pageSize)),
-                            URLQueryItem(name: "songOffset", value: String(o))
-                        ])
-                        return (o, body.searchResult3?.song ?? [])
-                    }
-                }
-                var result: [(Int, [SubsonicSong])] = []
-                for try await page in group { result.append(page) }
-                return result.sorted { $0.0 < $1.0 }
+            let songs = try await call(SearchResultBody.self, "search3", [
+                URLQueryItem(name: "query", value: ""),
+                URLQueryItem(name: "artistCount", value: "0"),
+                URLQueryItem(name: "albumCount", value: "0"),
+                URLQueryItem(name: "songCount", value: String(Self.pageSize)),
+                URLQueryItem(name: "songOffset", value: String(offset))
+            ]).searchResult3?.song ?? []
+            for s in songs where seenInSearch.insert(s.id).inserted {
+                all.append(s)
             }
-            for (_, songs) in pages {
-                for s in songs {
-                    if seenInSearch.insert(s.id).inserted {
-                        all.append(s)
-                    }
-                }
-                if songs.count < Self.pageSize { finished = true; break }
-            }
-            offset += Self.pageSize * Self.pageConcurrency
+            if songs.count < Self.pageSize { finished = true }
+            offset += Self.pageSize
             progressHandler?(all.count, max(all.count, existingCount))
         }
         return all
     }
 
-    /// Fallback for servers whose search3 ignores the empty query: walk albums.
-    private func fetchAllSongsViaAlbums(statusHandler: (@Sendable (String) -> Void)?) async throws -> [SubsonicSong] {
-        var albumIDs: [String] = []
+    /// Every album entity (getAlbumList2, 500 per page), de-duplicated by id.
+    private func fetchAlbumEntities() async throws -> [AlbumListBody.Album] {
+        var albums: [AlbumListBody.Album] = []
         var seenAlbumIDs = Set<String>()
         var offset = 0
         while true {
@@ -376,14 +495,17 @@ nonisolated public struct SubsonicProvider: MediaServerProvider {
                 URLQueryItem(name: "offset", value: String(offset))
             ])
             let page = body.albumList2?.album ?? []
-            for alb in page {
-                if seenAlbumIDs.insert(alb.id).inserted {
-                    albumIDs.append(alb.id)
-                }
+            for alb in page where seenAlbumIDs.insert(alb.id).inserted {
+                albums.append(alb)
             }
             if page.count < 500 { break }
             offset += 500
         }
+        return albums
+    }
+
+    /// Fallback for servers whose search3 ignores the empty query: walk albums.
+    private func fetchAllSongsViaAlbums(albumIDs: [String], statusHandler: (@Sendable (String) -> Void)?) async throws -> [SubsonicSong] {
         var songs: [SubsonicSong] = []
         var index = 0
         while index < albumIDs.count {
@@ -404,11 +526,13 @@ nonisolated public struct SubsonicProvider: MediaServerProvider {
         return songs
     }
 
-    private func mapSong(_ song: SubsonicSong, id: UUID, existing: Track?) -> Track {
+    /// `albumCoverArt` is the album entity's coverArt id; every track of the album then shares one image id and
+    /// version (so first-wins and last-wins registration agree). Falls back to the song's own coverArt.
+    private func mapSong(_ song: SubsonicSong, id: UUID, existing: Track?, albumCoverArt: String?) -> Track {
         let title = song.title ?? "Unknown Title"
         let album = song.album ?? "Unknown Album"
         let albumArtist = song.displayAlbumArtist.flatMap { $0.isEmpty ? nil : $0 }
-        let artist = song.artist ?? albumArtist ?? "Unknown Artist"
+        let artist = song.displayArtist.flatMap { $0.isEmpty ? nil : $0 } ?? song.artist ?? albumArtist ?? "Unknown Artist"
         let pathExt = song.path.map { ($0 as NSString).pathExtension }
         let ext = (song.suffix ?? pathExt ?? "mp3").lowercased()
         let duration = Double(song.duration ?? 0)
@@ -428,10 +552,25 @@ nonisolated public struct SubsonicProvider: MediaServerProvider {
         )
         let sourcePrefix = String(link.id.uuidString.prefix(8))
         let albumKey = song.albumId ?? "\(albumArtist ?? artist)|\(album)"
-        let artworkKey = song.coverArt == nil ? nil : "ss_\(sourcePrefix)_\(albumKey)"
+        let coverArtId = albumCoverArt ?? song.coverArt
+        let artworkKey = coverArtId == nil ? nil : "ss_\(sourcePrefix)_\(albumKey)"
         let relativePath = ServerPathBuilder.relativePath(serverPath: song.path, albumArtist: albumArtist ?? artist,
                                                           album: album, disc: song.discNumber, track: song.track,
                                                           title: title, ext: ext)
+        // OpenSubsonic servers list album-artist / artist entities (ArtistID3 id + name); legacy servers only give
+        // display strings, which become a single credit (with the legacy `artistId` when present).
+        let entityArtists = song.artists ?? []
+        let albumArtistEntities = song.albumArtists ?? []
+        let legacyAlbumArtistID: String? = albumArtist == nil ? song.artistId : nil
+        let credits = ServerCredits(
+            albumArtists: albumArtistEntities.isEmpty ? [albumArtist ?? artist] : albumArtistEntities.compactMap(\.name),
+            artists: entityArtists.isEmpty ? [artist] : entityArtists.compactMap(\.name),
+            artistsAreEntities: !entityArtists.isEmpty,
+            bitDepth: song.bitDepth.flatMap { $0 > 0 ? $0 : nil },
+            imageVersion: coverArtId,
+            albumArtistIDs: albumArtistEntities.isEmpty ? [legacyAlbumArtistID] : albumArtistEntities.map(\.id),
+            artistIDs: entityArtists.isEmpty ? [song.artistId] : entityArtists.map(\.id)
+        )
         return Track(
             id: id,
             title: title,
@@ -456,8 +595,35 @@ nonisolated public struct SubsonicProvider: MediaServerProvider {
                                      year: song.year, trackNumber: song.track, discNumber: song.discNumber),
             jellyfinItemId: song.id,
             jellyfinAlbumId: "\(sourcePrefix)_\(albumKey)",
-            serverCoverArtId: song.coverArt
+            serverCoverArtId: coverArtId,
+            serverCredits: credits
         )
+    }
+
+    // MARK: Catalog
+
+    /// Artist and album sort names (OpenSubsonic `sortName`); servers without them yield an empty catalog.
+    public func fetchCatalog() async throws -> ServerCatalog {
+        var catalog = ServerCatalog()
+        let artists = try await call(ArtistsBody.self, "getArtists")
+        for index in artists.artists?.index ?? [] {
+            for artist in index.artist ?? [] {
+                catalog.addArtist(name: artist.name, sortName: artist.sortName)
+            }
+        }
+        let sourcePrefix = String(link.id.uuidString.prefix(8))
+        // The sync's own album walk when there was one; otherwise walk once here.
+        let albums: [AlbumListBody.Album]
+        if let handedOff = Self.albumHandoff.take(for: link.id) {
+            albums = handedOff
+        } else {
+            albums = try await fetchAlbumEntities()
+        }
+        for album in albums {
+            catalog.addAlbum(key: "\(sourcePrefix)_\(album.id)", title: album.name, sortName: album.sortName)
+            catalog.addReleaseInfo(key: "\(sourcePrefix)_\(album.id)", releaseTypes: album.releaseTypes, isCompilation: album.isCompilation, version: album.version, source: "subsonic")
+        }
+        return catalog
     }
 
     // MARK: Media
@@ -489,10 +655,64 @@ nonisolated public struct SubsonicProvider: MediaServerProvider {
                                           URLQueryItem(name: "maxBitRate", value: "320")], timeout: 300)
     }
 
-    public func artworkRequests(imageId: String, fullResolution: Bool) -> [URLRequest] {
+    public func artworkRequests(imageId: String, size: ArtworkFetchSize, version: String?) -> [URLRequest] {
         var params = [URLQueryItem(name: "id", value: imageId)]
-        if !fullResolution { params.append(URLQueryItem(name: "size", value: "800")) }
-        return [endpointRequest("getCoverArt", params, timeout: fullResolution ? 12 : 10)].compactMap { $0 }
+        if size == .thumbnail {
+            // Navidrome precaches every cover at its UI cover size (UICoverArtSize, default 300) with square=true,
+            // and its web UI lists request exactly that key, so this is served from the resize cache.
+            params += [URLQueryItem(name: "size", value: "300"), URLQueryItem(name: "square", value: "true")]
+        }
+        return [endpointRequest("getCoverArt", params, timeout: size.requestTimeout)].compactMap { $0 }
+    }
+
+    // MARK: Lyrics
+
+    /// Per-source cache of whether the server advertises the OpenSubsonic `songLyrics` extension.
+    private static let lyricsSupport = SubsonicExtensionSupportCache()
+    private static let albumHandoff = SubsonicAlbumHandoff()
+
+    /// Lyrics via OpenSubsonic `getLyricsBySongId` (signed). Falls back to nil when the server lacks the
+    /// songLyrics extension, has no lyrics, or the request fails.
+    public func fetchLyrics(for track: Track) async -> String? {
+        guard let itemID = track.jellyfinItemId, let auth = try? auth() else { return nil }
+        if await !supportsSongLyrics(auth: auth) { return nil }
+        guard let body = try? await SubsonicClient.request(
+            LyricsListBody.self, base: link.serverURL, endpoint: "getLyricsBySongId",
+            params: [URLQueryItem(name: "id", value: itemID)], auth: auth, timeout: 15) else { return nil }
+        let entries = body.lyricsList?.structuredLyrics ?? []
+        guard let pick = entries.first(where: { $0.synced == true }) ?? entries.first,
+              let lines = pick.line, !lines.isEmpty else { return nil }
+        let text: String
+        if pick.synced == true {
+            let offset = pick.offset ?? 0
+            text = lines.map { line in
+                let ms = max(0, (line.start ?? 0) - offset)
+                let cs = (ms % 1000) / 10
+                return String(format: "[%02d:%02d.%02d]", ms / 60000, (ms / 1000) % 60, cs) + (line.value ?? "")
+            }.joined(separator: "\n")
+        } else {
+            text = lines.compactMap(\.value).joined(separator: "\n")
+        }
+        return text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : text
+    }
+
+    private func supportsSongLyrics(auth: [URLQueryItem]) async -> Bool {
+        if let known = Self.lyricsSupport.value(for: link.id) { return known }
+        // Signed in this session: the sign-in probe already read the extension list.
+        if let probed = SubsonicClient.cachedProbe(for: link.serverURL)?.supportsSongLyrics {
+            Self.lyricsSupport.set(probed, for: link.id)
+            return probed
+        }
+        guard let ext = try? await SubsonicClient.request(
+            ExtensionsBody.self, base: link.serverURL, endpoint: "getOpenSubsonicExtensions",
+            auth: auth, timeout: 10) else {
+            // Cached for this session too, so a failing server is not asked again on every song.
+            Self.lyricsSupport.set(false, for: link.id)
+            return false
+        }
+        let supported = ext.openSubsonicExtensions?.contains { $0.name == "songLyrics" } ?? false
+        Self.lyricsSupport.set(supported, for: link.id)
+        return supported
     }
 
     // MARK: Reporting
@@ -516,4 +736,20 @@ nonisolated public struct SubsonicProvider: MediaServerProvider {
     public func signOut() async {
         UserDefaults.standard.removeObject(forKey: scanMarkerKey)
     }
+}
+
+/// Small lock-protected UUID -> Bool map (OpenSubsonic extension support per source).
+nonisolated final class SubsonicExtensionSupportCache: Sendable {
+    private let state = OSAllocatedUnfairLock<[UUID: Bool]>(initialState: [:])
+    func value(for id: UUID) -> Bool? { state.withLock { $0[id] } }
+    func set(_ value: Bool, for id: UUID) { state.withLock { $0[id] = value } }
+}
+
+/// Album list from a sync's getAlbumList2 walk, handed to the catalog fetch of the same sync.
+nonisolated private final class SubsonicAlbumHandoff: Sendable {
+    private let state = OSAllocatedUnfairLock<[UUID: [AlbumListBody.Album]]>(initialState: [:])
+    func set(_ albums: [AlbumListBody.Album], for id: UUID) { state.withLock { $0[id] = albums } }
+    func clear(for id: UUID) { _ = state.withLock { $0.removeValue(forKey: id) } }
+    /// Returns and forgets the list, so it is used once and not kept in memory.
+    func take(for id: UUID) -> [AlbumListBody.Album]? { state.withLock { $0.removeValue(forKey: id) } }
 }

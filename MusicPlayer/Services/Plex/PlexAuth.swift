@@ -208,9 +208,23 @@ nonisolated enum PlexAccountAuth {
         return list.compactMap { r in
             guard let provides = r["provides"] as? String, provides.split(separator: ",").contains("server"),
                   let id = r["clientIdentifier"] as? String else { return nil }
-            let conns = (r["connections"] as? [[String: Any]] ?? []).compactMap { c -> PlexConnection? in
+            let raw = r["connections"] as? [[String: Any]] ?? []
+            var conns = raw.compactMap { c -> PlexConnection? in
                 guard let uri = (c["uri"] as? String).flatMap(URL.init(string:)) else { return nil }
                 return PlexConnection(uri: uri, local: c["local"] as? Bool ?? false, relay: c["relay"] as? Bool ?? false)
+            }
+            // Routers with DNS rebinding protection refuse to resolve *.plex.direct to LAN addresses
+            // (https://support.plex.tv/articles/206225077-how-to-use-secure-server-connections/). Unless the
+            // server requires secure connections, add plain-http LAN-IP connections, tried only after https local fails.
+            if (r["httpsRequired"] as? Bool) != true {
+                let existing = Set(conns.map(\.uri))
+                for c in raw where (c["local"] as? Bool) == true && (c["relay"] as? Bool) != true {
+                    guard let address = c["address"] as? String, !address.isEmpty, !address.contains(":"),
+                          let port = c["port"] as? Int,
+                          let uri = URL(string: "http://\(address):\(port)"), !existing.contains(uri),
+                          !conns.contains(where: { $0.uri == uri }) else { continue }
+                    conns.append(PlexConnection(uri: uri, local: true, relay: false, lanHTTPFallback: true))
+                }
             }
             return Server(id: id, name: r["name"] as? String ?? "Plex", accessToken: r["accessToken"] as? String ?? token,
                           owned: r["owned"] as? Bool ?? false, connections: conns)
@@ -235,9 +249,16 @@ nonisolated struct PlexConnection: Codable, Sendable, Hashable {
     let uri: URL
     let local: Bool
     let relay: Bool
+    /// Plain-http LAN-IP connection derived for DNS-rebinding-blocked networks (optional for stored lists).
+    var lanHTTPFallback: Bool? = nil
 
-    /// Preference: local, then remote direct, then relay.
-    var tier: Int { relay ? 2 : (local ? 0 : 1) }
+    /// Preference: local secure, then local plain-http fallback, then remote direct, then relay.
+    var tier: Int {
+        if relay { return 3 }
+        if local { return lanHTTPFallback == true ? 1 : 0 }
+        return 2
+    }
+    static let maxTier = 3
 
     static func ordered(_ list: [PlexConnection]) -> [PlexConnection] {
         list.enumerated().sorted { ($0.element.tier, $0.offset) < ($1.element.tier, $1.offset) }.map(\.element)

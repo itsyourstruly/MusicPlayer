@@ -429,9 +429,13 @@ public struct TrackRowView: View {
 
             if track.canReadLocalBytes && track.metadataSource != .server {
                 let isUbiquitous = (try? track.url.resourceValues(forKeys: [.isUbiquitousItemKey]))?.isUbiquitousItem == true
-                let isPlayingOrNext = isCurrentTrack || isNextTrack || (AudioPlayerService.shared?.currentTrack?.id == track.id) || (AudioPlayerService.shared?.nextTrack?.id == track.id)
+                // Current/next state comes in as values so rows don't observe the player during render.
+                let isPlayingOrNext = isCurrentTrack || isNextTrack
                 if isUbiquitous && !isPlayingOrNext {
                     Button(role: .destructive) {
+                        // Re-check live player state at tap time (callers that omit the flags stay safe).
+                        let player = AudioPlayerService.shared
+                        guard player?.currentTrack?.id != track.id, player?.nextTrack?.id != track.id else { return }
                         try? FileManager.default.evictUbiquitousItem(at: track.url)
                     } label: {
                         Text("REMOVE DOWNLOAD")
@@ -448,11 +452,24 @@ public struct TrackRowView: View {
                 } else {
                     let state = JellyfinDownloadManager.shared.downloadStates[track.id, default: .notDownloaded]
                     if state.isDownloading {
+                        if JellyfinDownloadManager.shared.isWaitingForWiFi {
+                            Button {} label: {
+                                Text("WAITING FOR WI-FI")
+                            }
+                            .disabled(true)
+                        }
                         Button {
                             HapticFeedback.selectionChanged()
                             JellyfinDownloadManager.shared.cancelDownload(trackId: track.id)
                         } label: {
                             Text("CANCEL DOWNLOAD")
+                        }
+                    } else if state.isFailed {
+                        Button {
+                            HapticFeedback.selectionChanged()
+                            JellyfinDownloadManager.shared.download(track: track)
+                        } label: {
+                            Text("DOWNLOAD FAILED, TAP TO RETRY")
                         }
                     } else {
                         Button {

@@ -25,7 +25,7 @@ public enum TrackIdentity: Sendable {
     /// Deterministic, globally unique ID for a server item, namespaced by source ID and server kind.
     /// For Jellyfin this is byte-for-byte the legacy formula ("jf" + linkUUID + itemID), so migrated
     /// libraries keep identical track IDs (downloads, playlists and play counts stay attached).
-    public static func serverTrackID(sourceID: UUID, kind: ServerKind, itemID: String) -> UUID {
+    nonisolated public static func serverTrackID(sourceID: UUID, kind: ServerKind, itemID: String) -> UUID {
         return UUID.deterministic(from: kind.identityPrefix + sourceID.uuidString + itemID)
     }
 

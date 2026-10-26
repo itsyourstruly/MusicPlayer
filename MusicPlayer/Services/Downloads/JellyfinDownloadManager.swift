@@ -1,6 +1,8 @@
 import Foundation
 import SwiftUI
 import Observation
+import Network
+import os
 
 // MARK: - DownloadedTrackRecord
 
@@ -59,6 +61,26 @@ public enum JellyfinDownloadState: Equatable, Sendable {
         default: return false
         }
     }
+
+    public var isFailed: Bool {
+        if case .failed = self { return true }
+        return false
+    }
+}
+
+/// Why a download could not be queued or was rejected after it finished.
+public enum DownloadFailureReason: LocalizedError, Sendable {
+    case serverNotFound
+    case httpStatus(Int)
+    case notAudio
+
+    public var errorDescription: String? {
+        switch self {
+        case .serverNotFound: return "SERVER FOR THIS SONG IS NOT LINKED ANYMORE"
+        case .httpStatus(let code): return "SERVER RETURNED STATUS \(code)"
+        case .notAudio: return "SERVER DID NOT SEND AN AUDIO FILE"
+        }
+    }
 }
 
 // MARK: - Download Item State & Summaries
@@ -81,15 +103,18 @@ public struct DownloadSummary: Sendable, Equatable {
     public let downloaded: Int
     public let total: Int
     public let isAnyDownloading: Bool
+    /// Tracks whose last download attempt failed (shown as DOWNLOAD FAILED, TAP TO RETRY).
+    public let failed: Int
 
     public var isAllDownloaded: Bool {
         total > 0 && downloaded == total
     }
 
-    public init(downloaded: Int = 0, total: Int = 0, isAnyDownloading: Bool = false) {
+    public init(downloaded: Int = 0, total: Int = 0, isAnyDownloading: Bool = false, failed: Int = 0) {
         self.downloaded = downloaded
         self.total = total
         self.isAnyDownloading = isAnyDownloading
+        self.failed = failed
     }
 }
 
@@ -142,18 +167,18 @@ public final class JellyfinDownloadManager: NSObject, @unchecked Sendable {
     public private(set) var totalDownloadedBytes: Int64 = 0
     public private(set) var albumSummaries: [String: DownloadSummary] = [:]
 
-    public var allowsCellularAccess: Bool = true {
+    /// DOWNLOAD OVER CELLULAR. Enforced on the download session (`allowsCellularAccess`); when off, the queue
+    /// also holds while the only route is cellular and resumes on Wi-Fi/wired. Changing it moves in-flight
+    /// tasks onto a new session (cancel with resume data, requeue at the front). Streaming never uses this session.
+    public var allowsCellularAccess: Bool = false {
         didSet {
             guard oldValue != allowsCellularAccess else { return }
-            let config = URLSessionConfiguration.default
-            config.waitsForConnectivity = true
-            config.timeoutIntervalForResource = 300
-            config.allowsCellularAccess = allowsCellularAccess
-            let queue = OperationQueue()
-            queue.maxConcurrentOperationCount = 4
-            self.session = URLSession(configuration: config, delegate: self, delegateQueue: queue)
+            rebuildSessionRequeueingActiveTasks()
         }
     }
+
+    /// True while downloads are held because cellular is the only route and DOWNLOAD OVER CELLULAR is off.
+    public private(set) var isWaitingForWiFi: Bool = false
 
     // MARK: - Private State
 
@@ -171,6 +196,106 @@ public final class JellyfinDownloadManager: NSObject, @unchecked Sendable {
     private let maxConcurrentDownloads = 3
 
     @ObservationIgnored private var session: URLSession!
+    @ObservationIgnored private var resumeDataByTrack: [UUID: Data] = [:]
+    @ObservationIgnored private var isCellularOnlyPath = false
+    @ObservationIgnored private let pathMonitor = NWPathMonitor()
+
+    /// Identifies the current session so delegate callbacks from a replaced session (whose task IDs can
+    /// collide with the new session's) are ignored.
+    private nonisolated static let currentSessionTag = OSAllocatedUnfairLock<String>(initialState: "")
+
+    private func makeSession() -> URLSession {
+        let config = URLSessionConfiguration.default
+        config.waitsForConnectivity = true
+        config.timeoutIntervalForResource = 300
+        config.allowsCellularAccess = allowsCellularAccess
+        let queue = OperationQueue()
+        queue.maxConcurrentOperationCount = 4
+        let newSession = URLSession(configuration: config, delegate: self, delegateQueue: queue)
+        let tag = UUID().uuidString
+        newSession.sessionDescription = tag
+        Self.currentSessionTag.withLock { $0 = tag }
+        return newSession
+    }
+
+    fileprivate nonisolated static func isCurrent(_ session: URLSession) -> Bool {
+        let tag = session.sessionDescription
+        return currentSessionTag.withLock { $0 == tag }
+    }
+
+    private var isBlockedByCellularPolicy: Bool { !allowsCellularAccess && isCellularOnlyPath }
+
+    private func updateWaitingState() {
+        let waiting = isBlockedByCellularPolicy && (!downloadQueue.isEmpty || !activeTasks.isEmpty)
+        if isWaitingForWiFi != waiting { isWaitingForWiFi = waiting }
+    }
+
+    /// Cancels every in-flight task with resume data, requeues it at the front, and starts a new session
+    /// under the current policy. The old session finishes its cancellations and is invalidated.
+    private func rebuildSessionRequeueingActiveTasks() {
+        let oldSession = session
+        let inFlight = activeTasks
+        var requeue: [(track: Track, server: ServerSourceLink)] = []
+        for (trackID, task) in inFlight {
+            let taskID = task.taskIdentifier
+            if let track = taskToTrack[taskID], let server = taskToServer[taskID] {
+                requeue.append((track, server))
+                task.cancel(byProducingResumeData: { data in
+                    guard let data else { return }
+                    Task { @MainActor in
+                        let manager = JellyfinDownloadManager.shared
+                        // Keep it only if the track is still waiting to start.
+                        if manager.activeTasks[trackID] == nil, manager.downloadQueue.contains(where: { $0.track.id == trackID }) {
+                            manager.resumeDataByTrack[trackID] = data
+                        }
+                    }
+                })
+            } else {
+                task.cancel()
+            }
+            taskToTrackID.removeValue(forKey: taskID)
+            taskToTrack.removeValue(forKey: taskID)
+            taskToServer.removeValue(forKey: taskID)
+            DownloadProgressThrottler.shared.remove(taskID: taskID)
+            downloadStates[trackID] = .queued
+            perTrackStates[trackID]?.state = .queued
+        }
+        activeTasks.removeAll()
+        downloadQueue.insert(contentsOf: requeue, at: 0)
+        session = makeSession()
+        oldSession?.finishTasksAndInvalidate()
+        invalidateSummaries()
+        processNextInQueue()
+    }
+
+    private func startPathMonitor() {
+        pathMonitor.pathUpdateHandler = { path in
+            let cellularOnly = path.status == .satisfied
+                && path.usesInterfaceType(.cellular)
+                && !path.usesInterfaceType(.wifi)
+                && !path.usesInterfaceType(.wiredEthernet)
+            Task { @MainActor in
+                let manager = JellyfinDownloadManager.shared
+                guard manager.isCellularOnlyPath != cellularOnly else { return }
+                manager.isCellularOnlyPath = cellularOnly
+                manager.processNextInQueue()
+            }
+        }
+        pathMonitor.start(queue: DispatchQueue(label: "JellyfinDownloadManager.path"))
+    }
+
+    /// A failure caused by the cellular policy, or by losing Wi-Fi while cellular is disallowed: requeue, don't fail.
+    private func shouldRequeueForCellularPolicy(_ error: Error?) -> Bool {
+        guard !allowsCellularAccess, let err = error as? URLError else { return false }
+        if err.networkUnavailableReason == .cellular { return true }
+        guard isCellularOnlyPath else { return false }
+        switch err.code {
+        case .networkConnectionLost, .notConnectedToInternet, .timedOut, .dataNotAllowed, .internationalRoamingOff:
+            return true
+        default:
+            return false
+        }
+    }
 
     // MARK: - Init
 
@@ -188,13 +313,8 @@ public final class JellyfinDownloadManager: NSObject, @unchecked Sendable {
         try? fileManager.createDirectory(at: downloadsDirectoryURL, withIntermediateDirectories: true)
 
         // Session setup
-        let config = URLSessionConfiguration.default
-        config.waitsForConnectivity = true
-        config.timeoutIntervalForResource = 300
-        config.allowsCellularAccess = allowsCellularAccess
-        let queue = OperationQueue()
-        queue.maxConcurrentOperationCount = 4
-        self.session = URLSession(configuration: config, delegate: self, delegateQueue: queue)
+        self.session = makeSession()
+        startPathMonitor()
 
         loadIndex()
     }
@@ -381,6 +501,11 @@ public final class JellyfinDownloadManager: NSObject, @unchecked Sendable {
         return downloadsDirectoryURL.appendingPathComponent(record.localFileName)
     }
 
+    /// IDs of all downloaded server tracks (in-memory index snapshot).
+    public var downloadedTrackIDs: Set<UUID> {
+        Set(downloadRecords.keys)
+    }
+
     /// Fast in-memory check for downloaded status. Never performs disk I/O in view bodies.
     public func isDownloaded(trackId: UUID) -> Bool {
         downloadRecords[trackId] != nil
@@ -432,7 +557,8 @@ public final class JellyfinDownloadManager: NSObject, @unchecked Sendable {
         }
         let downloadedCount = jellyfinTracks.filter { downloadRecords[$0.id] != nil }.count
         let anyDownloading = jellyfinTracks.contains { downloadStates[$0.id]?.isDownloading == true }
-        let summary = DownloadSummary(downloaded: downloadedCount, total: jellyfinTracks.count, isAnyDownloading: anyDownloading)
+        let failedCount = jellyfinTracks.filter { downloadStates[$0.id]?.isFailed == true }.count
+        let summary = DownloadSummary(downloaded: downloadedCount, total: jellyfinTracks.count, isAnyDownloading: anyDownloading, failed: failedCount)
         albumSummaries[album.id] = summary
         return summary
     }
@@ -444,7 +570,8 @@ public final class JellyfinDownloadManager: NSObject, @unchecked Sendable {
         }
         let downloadedCount = jellyfinTracks.filter { downloadRecords[$0.id] != nil }.count
         let anyDownloading = jellyfinTracks.contains { downloadStates[$0.id]?.isDownloading == true }
-        return DownloadSummary(downloaded: downloadedCount, total: jellyfinTracks.count, isAnyDownloading: anyDownloading)
+        let failedCount = jellyfinTracks.filter { downloadStates[$0.id]?.isFailed == true }.count
+        return DownloadSummary(downloaded: downloadedCount, total: jellyfinTracks.count, isAnyDownloading: anyDownloading, failed: failedCount)
     }
 
     public func playlistSummary(for tracks: [Track]) -> DownloadSummary {
@@ -454,7 +581,8 @@ public final class JellyfinDownloadManager: NSObject, @unchecked Sendable {
         }
         let downloadedCount = jellyfinTracks.filter { downloadRecords[$0.id] != nil }.count
         let anyDownloading = jellyfinTracks.contains { downloadStates[$0.id]?.isDownloading == true }
-        return DownloadSummary(downloaded: downloadedCount, total: jellyfinTracks.count, isAnyDownloading: anyDownloading)
+        let failedCount = jellyfinTracks.filter { downloadStates[$0.id]?.isFailed == true }.count
+        return DownloadSummary(downloaded: downloadedCount, total: jellyfinTracks.count, isAnyDownloading: anyDownloading, failed: failedCount)
     }
 
     public var downloadedTracksList: [DownloadedTrackRecord] {
@@ -505,21 +633,34 @@ public final class JellyfinDownloadManager: NSObject, @unchecked Sendable {
         }
     }
 
-    /// Enqueues a single track for download by matching its folderID to a ServerSourceLink.
+    /// Enqueues a single track for download on the server it belongs to (`folderID` = source ID).
+    /// No fallback to another server: a song whose source is not linked is marked failed with a clear reason.
     public func download(track: Track, servers: [ServerSourceLink]) {
-        guard let server = servers.first(where: { $0.id == track.folderID }) ?? servers.first else { return }
+        guard let server = servers.first(where: { $0.id == track.folderID }) else {
+            markFailed(trackID: track.id, reason: .serverNotFound)
+            return
+        }
         download(track: track, server: server)
+    }
+
+    private func markFailed(trackID: UUID, reason: DownloadFailureReason) {
+        let state = JellyfinDownloadState.failed(reason.localizedDescription)
+        downloadStates[trackID] = state
+        perTrackStates[trackID]?.state = state
+        invalidateSummaries()
     }
 
     /// Enqueues multiple tracks for download by matching their folderID to ServerSourceLink items.
     public func download(tracks: [Track], servers: [ServerSourceLink]) {
         let serversByID = Dictionary(servers.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        let fallback = servers.first
         var didEnqueue = false
         for track in tracks {
             guard !isDownloaded(trackId: track.id) else { continue }
             guard !downloadStates[track.id, default: .notDownloaded].isDownloading else { continue }
-            guard let server = (track.folderID.flatMap { serversByID[$0] }) ?? fallback else { continue }
+            guard let server = track.folderID.flatMap({ serversByID[$0] }) else {
+                markFailed(trackID: track.id, reason: .serverNotFound)
+                continue
+            }
 
             downloadStates[track.id] = .queued
             downloadProgress[track.id] = 0.0
@@ -536,17 +677,15 @@ public final class JellyfinDownloadManager: NSObject, @unchecked Sendable {
         }
     }
 
-    /// Enqueues a single track for download, resolving the Jellyfin server automatically.
+    /// Enqueues a single track for download on its own server, resolved from the linked sources in settings
+    /// (the same lookup playback uses), so it works before any server session has been opened.
     public func download(track: Track) {
-        let server = (track.folderID.flatMap { ServerSessionCache.shared.serverLink(for: $0) })
-            ?? ServerSessionCache.shared.allLinks.first
-        guard let server else { return }
-        download(track: track, server: server)
+        download(track: track, servers: LibraryStore.shared?.settings.serverSources ?? [])
     }
 
-    /// Enqueues multiple tracks for download, resolving servers automatically.
+    /// Enqueues multiple tracks for download, each on its own server (see `download(track:)`).
     public func download(tracks: [Track]) {
-        download(tracks: tracks, servers: ServerSessionCache.shared.allLinks)
+        download(tracks: tracks, servers: LibraryStore.shared?.settings.serverSources ?? [])
     }
 
     /// Cancels an in-progress or queued download.
@@ -561,6 +700,7 @@ public final class JellyfinDownloadManager: NSObject, @unchecked Sendable {
             DownloadProgressThrottler.shared.remove(taskID: taskID)
         }
         downloadQueue.removeAll { $0.track.id == trackId }
+        resumeDataByTrack.removeValue(forKey: trackId)
         downloadStates.removeValue(forKey: trackId)
         downloadProgress.removeValue(forKey: trackId)
         perTrackStates[trackId]?.state = .notDownloaded
@@ -594,6 +734,7 @@ public final class JellyfinDownloadManager: NSObject, @unchecked Sendable {
         }
         activeTasks.removeAll()
         downloadQueue.removeAll()
+        resumeDataByTrack.removeAll()
         taskToTrackID.removeAll()
         taskToTrack.removeAll()
         taskToServer.removeAll()
@@ -623,6 +764,9 @@ public final class JellyfinDownloadManager: NSObject, @unchecked Sendable {
     // MARK: - Queue Processing
 
     private func processNextInQueue() {
+        defer { updateWaitingState() }
+        // Hold queued downloads while cellular is the only route and cellular downloads are off.
+        guard !isBlockedByCellularPolicy else { return }
         guard activeTasks.count < maxConcurrentDownloads, !downloadQueue.isEmpty else { return }
 
         let item = downloadQueue.removeFirst()
@@ -630,8 +774,11 @@ public final class JellyfinDownloadManager: NSObject, @unchecked Sendable {
         let server = item.server
 
         // Original file for AVPlayer-native formats, AAC 320 M4A for everything else (TranscodePolicy via provider).
-        guard let request = ServerProviderRegistry.provider(for: server)?.mediaRequest(for: track, purpose: .download) else {
-            let state = JellyfinDownloadState.failed("INVALID URL")
+        let request: URLRequest
+        do {
+            request = try ServerStreamRequestBuilder.request(for: track, link: server, purpose: .download, caller: "download")
+        } catch {
+            let state = JellyfinDownloadState.failed(error.localizedDescription)
             downloadStates[track.id] = state
             perTrackStates[track.id]?.state = state
             invalidateSummaries()
@@ -639,7 +786,12 @@ public final class JellyfinDownloadManager: NSObject, @unchecked Sendable {
             return
         }
 
-        let task = session.downloadTask(with: request)
+        let task: URLSessionDownloadTask
+        if let resumeData = resumeDataByTrack.removeValue(forKey: track.id) {
+            task = session.downloadTask(withResumeData: resumeData)
+        } else {
+            task = session.downloadTask(with: request)
+        }
         activeTasks[track.id] = task
         taskToTrackID[task.taskIdentifier] = track.id
         taskToTrack[task.taskIdentifier] = track
@@ -649,6 +801,8 @@ public final class JellyfinDownloadManager: NSObject, @unchecked Sendable {
         perTrackStates[track.id]?.progress = 0.0
         invalidateSummaries()
         task.resume()
+        // Fill remaining slots (e.g. several queued tracks when Wi-Fi returns).
+        processNextInQueue()
     }
 
     // MARK: - Task Completion Callbacks
@@ -712,6 +866,22 @@ public final class JellyfinDownloadManager: NSObject, @unchecked Sendable {
 
     fileprivate func handleDownloadError(taskID: Int, error: Error?) {
         guard let trackID = taskToTrackID[taskID] else { return }
+        if shouldRequeueForCellularPolicy(error), let track = taskToTrack[taskID], let server = taskToServer[taskID] {
+            if let data = (error as? URLError)?.downloadTaskResumeData {
+                resumeDataByTrack[trackID] = data
+            }
+            activeTasks.removeValue(forKey: trackID)
+            taskToTrackID.removeValue(forKey: taskID)
+            taskToTrack.removeValue(forKey: taskID)
+            taskToServer.removeValue(forKey: taskID)
+            DownloadProgressThrottler.shared.remove(taskID: taskID)
+            downloadStates[trackID] = .queued
+            perTrackStates[trackID]?.state = .queued
+            downloadQueue.insert((track, server), at: 0)
+            invalidateSummaries()
+            processNextInQueue()
+            return
+        }
         activeTasks.removeValue(forKey: trackID)
         taskToTrackID.removeValue(forKey: taskID)
         taskToTrack.removeValue(forKey: taskID)
@@ -733,7 +903,23 @@ public final class JellyfinDownloadManager: NSObject, @unchecked Sendable {
     // MARK: - Magic Bytes & Format Detection
 
     public nonisolated static func detectAudioExtension(for fileURL: URL, preferred: String?) -> String {
-        // 1. Try reading the first 64 bytes for magic bytes
+        // 1. Magic bytes
+        if let sniffed = sniffedAudioExtension(for: fileURL) {
+            return sniffed
+        }
+
+        // 2. If magic bytes didn't definitively match, check preferred extension
+        if let preferred = preferred?.lowercased().trimmingCharacters(in: .whitespacesAndNewlines),
+           !preferred.isEmpty, preferred != "tmp" {
+            return preferred
+        }
+
+        // 3. Fallback: m4a
+        return "m4a"
+    }
+
+    /// Audio container recognized from the file's first bytes, or nil when the header is not a known audio format.
+    public nonisolated static func sniffedAudioExtension(for fileURL: URL) -> String? {
         if let fileHandle = try? FileHandle(forReadingFrom: fileURL) {
             defer { try? fileHandle.close() }
             let headerData = (try? fileHandle.read(upToCount: 64)) ?? Data()
@@ -786,15 +972,7 @@ public final class JellyfinDownloadManager: NSObject, @unchecked Sendable {
                 }
             }
         }
-
-        // 2. If magic bytes didn't definitively match, check preferred extension
-        if let preferred = preferred?.lowercased().trimmingCharacters(in: .whitespacesAndNewlines),
-           !preferred.isEmpty, preferred != "tmp" {
-            return preferred
-        }
-
-        // 3. Fallback: m4a
-        return "m4a"
+        return nil
     }
 }
 
@@ -809,7 +987,7 @@ extension JellyfinDownloadManager: URLSessionDownloadDelegate {
         totalBytesWritten: Int64,
         totalBytesExpectedToWrite: Int64
     ) {
-        guard totalBytesExpectedToWrite > 0 else { return }
+        guard totalBytesExpectedToWrite > 0, Self.isCurrent(session) else { return }
         let fraction = Double(totalBytesWritten) / Double(totalBytesExpectedToWrite)
         let taskID = downloadTask.taskIdentifier
 
@@ -829,6 +1007,7 @@ extension JellyfinDownloadManager: URLSessionDownloadDelegate {
         downloadTask: URLSessionDownloadTask,
         didFinishDownloadingTo location: URL
     ) {
+        guard Self.isCurrent(session) else { return }
         let taskID = downloadTask.taskIdentifier
         let dir = JellyfinDownloadManager.shared.downloadsDirectoryURL
 
@@ -846,6 +1025,29 @@ extension JellyfinDownloadManager: URLSessionDownloadDelegate {
             }
             let track = context.track
             let server = context.server
+
+            // Accept only a successful response carrying audio. Subsonic answers errors with HTTP 200 and an
+            // XML/JSON body, so the status alone is not enough: require an audio MIME type or audio magic bytes.
+            let statusCode = (downloadTask.response as? HTTPURLResponse)?.statusCode ?? 0
+            let responseMIME = downloadTask.response?.mimeType?.lowercased() ?? ""
+            let failure: DownloadFailureReason?
+            if !(200...299).contains(statusCode) {
+                failure = .httpStatus(statusCode)
+            } else if !responseMIME.hasPrefix("audio/"),
+                      JellyfinDownloadManager.sniffedAudioExtension(for: tempTarget) == nil {
+                failure = .notAudio
+            } else {
+                failure = nil
+            }
+            if let failure {
+                try? FileManager.default.removeItem(at: tempTarget)
+                await JellyfinDownloadManager.shared.handleDownloadFinishedError(
+                    taskID: taskID,
+                    trackID: trackID,
+                    error: failure
+                )
+                return
+            }
 
             // Determine preferred extension from track metadata, suggested filename, or MIME type
             var preferredExt: String? = nil
@@ -918,7 +1120,7 @@ extension JellyfinDownloadManager: URLSessionDownloadDelegate {
         task: URLSessionTask,
         didCompleteWithError error: Error?
     ) {
-        guard let error = error else { return }
+        guard let error = error, Self.isCurrent(session) else { return }
         let taskID = task.taskIdentifier
         Task { @MainActor in
             JellyfinDownloadManager.shared.handleDownloadError(taskID: taskID, error: error)
