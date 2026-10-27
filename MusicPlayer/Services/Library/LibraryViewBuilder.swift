@@ -13,6 +13,8 @@ nonisolated struct LibraryViewInput: Sendable {
     /// Server tracks downloaded for offline playback (rank like local copies).
     let downloadedTrackIDs: Set<UUID>
     let joinedArtists: [String]
+    /// Offline: only tracks on this device (local tracks and downloaded server tracks) are shown.
+    var offlineOnly: Bool = false
 }
 
 /// What the Library tabs and Library search show for the current source selection:
@@ -47,6 +49,9 @@ nonisolated enum LibraryViewBuilder {
             return input.localFolderPaths.first(where: { !$0.path.isEmpty && path.hasPrefix($0.path) })?.id
         }
         func isEnabled(_ track: Track) -> Bool {
+            if input.offlineOnly, !OfflineMode.isOnDevice(track, downloadedTrackIDs: input.downloadedTrackIDs) {
+                return false
+            }
             guard !input.disabledSourceIDs.isEmpty, let src = source(of: track) else { return true }
             return !input.disabledSourceIDs.contains(src)
         }
@@ -61,7 +66,7 @@ nonisolated enum LibraryViewBuilder {
             }
         }
 
-        if input.disabledSourceIDs.isEmpty && hidden.isEmpty {
+        if input.disabledSourceIDs.isEmpty && hidden.isEmpty && !input.offlineOnly {
             var artistsByID: [String: Artist] = [:]
             artistsByID.reserveCapacity(input.artists.count)
             for artist in input.artists { artistsByID[artist.id] = artist }

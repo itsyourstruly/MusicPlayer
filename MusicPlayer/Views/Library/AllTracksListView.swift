@@ -124,39 +124,10 @@ public struct AllTracksListView: View {
 
     // Playlist picker sheet
     private func playlistPickerSheet(for track: Track) -> some View {
-        NavigationStack {
-            List {
-                if libraryStore.playlists.isEmpty {
-                    Text("No playlists created yet.")
-                        .font(.system(size: 13, design: .monospaced))
-                        .foregroundStyle(.secondary)
-                } else {
-                    ForEach(libraryStore.playlists) { playlist in
-                        Button(action: {
-                            libraryStore.addTrack(track, toPlaylistID: playlist.id)
-                            selectedTrackForPlaylist = nil
-                        }) {
-                            HStack {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(playlist.name)
-                                        .font(.system(size: 15, weight: .bold))
-                                    Text(playlist.formattedTrackCount)
-                                        .font(.system(size: 12, design: .monospaced))
-                                        .foregroundStyle(.secondary)
-                                }
-                                Spacer()
-                                Text("ADD")
-                                    .font(.system(size: 12, weight: .bold, design: .monospaced))
-                            }
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-            }
-            .navigationTitle("ADD TO PLAYLIST")
-            .navigationBarTitleDisplayMode(.inline)
+        PlaylistPickerSheet(libraryStore: libraryStore) { playlist in
+            libraryStore.addTrack(track, toPlaylistID: playlist.id)
+            selectedTrackForPlaylist = nil
         }
-        .presentationDetents([.medium])
     }
 }
 

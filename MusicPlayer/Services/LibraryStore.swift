@@ -289,7 +289,7 @@ public final class LibraryStore {
             while let self, self.libraryViewDirty {
                 self.libraryViewDirty = false
                 let generation = self.libraryContentGeneration
-                let signature = self.settings.disabledFolderIDs.map(\.uuidString).sorted().joined(separator: ",")
+                let signature = self.libraryViewSignature()
                 if self.libraryViewCacheGeneration != generation {
                     self.libraryViewCache.removeAll()
                     self.libraryViewCacheGeneration = generation
@@ -304,7 +304,7 @@ public final class LibraryStore {
                 }.value
                 // A newer change arrived while building: loop again with fresh inputs.
                 guard generation == self.libraryContentGeneration,
-                      signature == self.settings.disabledFolderIDs.map(\.uuidString).sorted().joined(separator: ",") else {
+                      signature == self.libraryViewSignature() else {
                     self.libraryViewDirty = true
                     continue
                 }
@@ -316,6 +316,39 @@ public final class LibraryStore {
         }
     }
 
+    /// Cache key for a Library view: the disabled-source set plus the Offline state.
+    private func libraryViewSignature() -> String {
+        settings.disabledFolderIDs.map(\.uuidString).sorted().joined(separator: ",")
+            + (OfflineMode.isEnabled ? "|offline" : "")
+    }
+
+    // MARK: - Offline
+
+    /// Bumped when Offline turns on or off, or a download changes while on, so views reading filtered lists refresh.
+    private(set) var offlineRevision = 0
+
+    /// True while Offline filters what is shown (reads `offlineRevision` so SwiftUI observes changes).
+    var isOfflineFiltering: Bool {
+        _ = offlineRevision
+        return OfflineMode.isEnabled
+    }
+
+    /// False only for a server track without a finished download while Offline is on. O(1).
+    func isPlayableNow(_ track: Track) -> Bool {
+        guard isOfflineFiltering, OfflineMode.isServerTrack(track) else { return true }
+        return JellyfinDownloadManager.shared.isDownloaded(trackId: track.id)
+    }
+
+    /// Mirrors the setting into the central gate. Offline only applies while at least one server is connected.
+    private func applyOfflineMode() {
+        let enabled = settings.isOfflineModeEnabled && !settings.serverSources.isEmpty
+        guard OfflineMode.set(enabled) else { return }
+        offlineRevision &+= 1
+        scheduleLibraryViewRebuild()
+        JellyfinDownloadManager.shared.offlineModeChanged()
+        if enabled { AudioPlayerService.shared?.offlineModeDidEnable() }
+    }
+
     private func makeLibraryViewInput() -> LibraryViewInput {
         LibraryViewInput(
             tracks: tracks,
@@ -325,14 +358,21 @@ public final class LibraryStore {
             disabledSourceIDs: settings.disabledFolderIDs,
             localFolderPaths: settings.linkedFolders.compactMap { folder in folder.path.map { (id: folder.id, path: $0) } },
             downloadedTrackIDs: JellyfinDownloadManager.shared.downloadedTrackIDs,
-            joinedArtists: settings.joinedArtists
+            joinedArtists: settings.joinedArtists,
+            offlineOnly: OfflineMode.isEnabled
         )
     }
 
     private func publishLibraryView(_ view: LibraryViewSnapshot) {
         libraryView = view
         invalidateSortedCaches()
+        libraryViewRevision &+= 1
     }
+
+    /// Observed counter bumped each time a new Library view is published. The sorted-list getters below
+    /// return @ObservationIgnored caches on a hit, so without reading this a view body that only ever hit
+    /// the cache would register no dependency and keep showing the old list (e.g. after Offline changes).
+    private(set) var libraryViewRevision = 0
 
     /// Album as shown in the Library for the current source selection (nil if not visible there).
     private func viewAlbum(forID id: String) -> Album? {
@@ -373,6 +413,7 @@ public final class LibraryStore {
 
     /// Computed recently played albums matching known library albums
     public var recentAlbums: [Album] {
+        if isOfflineFiltering { return recentAlbumIDs.compactMap { viewAlbum(forID: $0) } }
         if !recentAlbumsCache.isEmpty {
             return recentAlbumsCache
         }
@@ -383,7 +424,7 @@ public final class LibraryStore {
 
     /// Computed recently played tracks from Search Library matching known library tracks
     public var recentSearchPlayedTracks: [Track] {
-        return recentSearchPlayedTrackIDs.compactMap { tracksByID[$0] }
+        return recentSearchPlayedTrackIDs.compactMap { tracksByID[$0] }.filter(isPlayableNow)
     }
     // User preferences and configuration store
     public var settings: AppSettings = AppSettings()
@@ -858,6 +899,15 @@ public final class LibraryStore {
             await ServerArtworkRegistry.shared.fetchArtworkData(for: key, size: size)
         }
 
+        // Offline shows downloaded server tracks, so a finished or deleted download refreshes the view.
+        NotificationCenter.default.addObserver(forName: OfflineMode.downloadedTracksChanged, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, OfflineMode.isEnabled else { return }
+                self.offlineRevision &+= 1
+                self.libraryContentChanged()
+            }
+        }
+
         NotificationCenter.default.addObserver(forName: .hideTrackRequested, object: nil, queue: .main) { [weak self] note in
             guard let track = note.userInfo?["track"] as? Track else { return }
             self?.hideTrack(track)
@@ -871,6 +921,18 @@ public final class LibraryStore {
 
     /// Returns resolved user-pinned albums and playlists in their customized display order.
     public var pinnedItems: [PinnedItem] {
+        if isOfflineFiltering {
+            return pinnedItemIDs.compactMap { identifier in
+                switch identifier.type {
+                case .playlist:
+                    guard let plID = UUID(uuidString: identifier.targetID),
+                          let pl = playlists.first(where: { $0.id == plID }) else { return nil }
+                    return .playlist(pl)
+                case .album:
+                    return viewAlbum(forID: identifier.targetID).map { .album($0) }
+                }
+            }
+        }
         if !pinnedItemsCache.isEmpty {
             return pinnedItemsCache
         }
@@ -911,6 +973,7 @@ public final class LibraryStore {
     }
 
     public var filteredTracks: [Track] {
+        _ = libraryViewRevision
         let cleanQuery = FuzzyMatcher.normalize(searchQuery)
         if cleanQuery.isEmpty || !searchModel.isQueryActive {
             _ = sortedTracksVersion
@@ -982,6 +1045,7 @@ public final class LibraryStore {
     }
 
     public var filteredAlbums: [Album] {
+        _ = libraryViewRevision
         let trimmed = searchQuery.trimmingCharacters(in: .whitespaces)
         if trimmed.isEmpty || !searchModel.isQueryActive {
             if let cached = cachedSortedAlbums {
@@ -1004,6 +1068,7 @@ public final class LibraryStore {
     }
 
     public var filteredArtists: [Artist] {
+        _ = libraryViewRevision
         let cleanQuery = FuzzyMatcher.normalize(searchQuery)
         if cleanQuery.isEmpty || !searchModel.isQueryActive {
             if let cached = cachedSortedArtists {
@@ -1805,6 +1870,10 @@ public final class LibraryStore {
     /// Syncs tracks from a Jellyfin server, updating scan progress and surfacing any errors.
     /// `force` (manual rescan) makes Subsonic/Plex run a full enumeration + deletion sweep.
     public func syncServer(_ serverLink: ServerSourceLink, force: Bool = false) async {
+        // Offline: no server is contacted, not even for a manual rescan.
+        guard !OfflineMode.isEnabled else { return }
+        // A manual rescan forgets this source's "no description" answers so new ones can appear.
+        if force { await ServerDescriptionCache.shared.clearMissing(serverID: serverLink.id) }
         await ServerSyncCoordinator.shared.sync(sourceID: serverLink.id) { [weak self] in
             await self?.performServerSync(serverLink, force: force)
         }
@@ -2640,8 +2709,9 @@ public final class LibraryStore {
         seen.reserveCapacity(playlist.trackIDs.count)
         var result: [Track] = []
         result.reserveCapacity(playlist.trackIDs.count)
+        let offline = isOfflineFiltering
         for id in playlist.trackIDs where seen.insert(id).inserted {
-            if let track = lookup[id] { result.append(track) }
+            if let track = lookup[id], !offline || isPlayableNow(track) { result.append(track) }
         }
         return result
     }
@@ -6567,6 +6637,7 @@ public final class LibraryStore {
     // Save settings asynchronously
     public func saveSettings() {
         HapticManager.shared.isEnabled = self.settings.isHapticsEnabled
+        applyOfflineMode()
         UserDefaults.standard.set(self.settings.isArtworkRounded, forKey: "isArtworkRounded")
         let currentSettings = self.settings
         let url = self.settingsFileURL
@@ -7147,6 +7218,7 @@ public final class LibraryStore {
             self.selectedCategory = loaded.defaultLibraryCategory
         }
         HapticManager.shared.isEnabled = self.settings.isHapticsEnabled
+        applyOfflineMode()
 
         if let data = try? Data(contentsOf: pinsFileURL),
            let loadedPins = try? JSONDecoder().decode([PinnedItemIdentifier].self, from: data) {

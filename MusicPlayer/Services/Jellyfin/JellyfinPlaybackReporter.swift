@@ -31,6 +31,7 @@ public final class JellyfinPlaybackReporter: @unchecked Sendable {
     // MARK: - Reporting Lifecycle
 
     public func reportPlaybackStart(track: Track, serverLink: ServerSourceLink) {
+        guard !OfflineMode.isEnabled else { return }
         currentReportingTrack = track
         currentServerLink = serverLink
         lastReportedTime = 0
@@ -63,6 +64,7 @@ public final class JellyfinPlaybackReporter: @unchecked Sendable {
     }
 
     public func reportPlaybackProgress(seconds: TimeInterval, isPaused: Bool, eventName: String? = nil) {
+        guard !OfflineMode.isEnabled else { return }
         guard let track = currentReportingTrack,
               let serverLink = currentServerLink,
               let itemId = Self.extractItemId(from: track),
@@ -103,6 +105,7 @@ public final class JellyfinPlaybackReporter: @unchecked Sendable {
     }
 
     public func reportPlaybackStopped(seconds: TimeInterval) {
+        guard !OfflineMode.isEnabled else { return }
         guard let track = currentReportingTrack,
               let serverLink = currentServerLink,
               let itemId = Self.extractItemId(from: track),

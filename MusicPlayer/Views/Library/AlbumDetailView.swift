@@ -15,6 +15,7 @@ public struct AlbumDetailView: View {
     @State private var selectedTrackForInfo: Track? = nil
     @State private var selectedTrackForPlaylist: Track? = nil
     @State private var showingAlbumMetadataSheet: Bool = false
+    @State private var serverDescription: ServerDescription? = nil
     @Environment(\.appTheme) private var appTheme
 
     // Initialize with configured properties
@@ -202,11 +203,14 @@ public struct AlbumDetailView: View {
                                 }
                             }
 
-                            Button(action: {
-                                HapticFeedback.notificationSuccess()
-                                libraryStore.toggleCollaborativeAlbum(activeAlbum)
-                            }) {
-                                Text(libraryStore.isCollaborativeAlbum(activeAlbum) ? "REVERT COLLABORATIVE ALBUM" : "MAKE COLLABORATIVE ALBUM")
+                            // Local albums only; an album that is already collaborative can still be reverted.
+                            if libraryStore.isCollaborativeAlbum(activeAlbum) || activeAlbum.tracks.contains(where: { !OfflineMode.isServerTrack($0) }) {
+                                Button(action: {
+                                    HapticFeedback.notificationSuccess()
+                                    libraryStore.toggleCollaborativeAlbum(activeAlbum)
+                                }) {
+                                    Text(libraryStore.isCollaborativeAlbum(activeAlbum) ? "REVERT COLLABORATIVE ALBUM" : "MAKE COLLABORATIVE ALBUM")
+                                }
                             }
 
                             Button(action: {
@@ -412,64 +416,12 @@ public struct AlbumDetailView: View {
 
     // Playlist picker sheet
     private func playlistPickerSheet(for albumTracks: [Track]) -> some View {
-        NavigationStack {
-            List {
-                if libraryStore.playlists.isEmpty {
-                    EmptyStateView(
-                        title: "NO PLAYLISTS FOUND",
-                        message: "Create a playlist first from the Library tab."
-                    )
-                    .padding(.top, 40)
-                    .listRowBackground(Color.clear)
-                    .listRowSeparator(.hidden)
-                } else {
-                    ForEach(libraryStore.playlists) { playlist in
-                        Button(action: {
-                            HapticFeedback.notificationSuccess()
-                            libraryStore.addTracks(albumTracks, toPlaylistID: playlist.id)
-                            showingPlaylistPicker = false
-                        }) {
-                            HStack {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(playlist.name)
-                                        .font(.system(size: 15, weight: .bold))
-                                        .foregroundStyle(Color.primary)
-                                    Text(playlist.formattedTrackCount)
-                                        .font(.system(size: 12, design: .monospaced))
-                                        .foregroundStyle(.secondary)
-                                }
-                                Spacer()
-                                Text("ADD ALL (\(albumTracks.count))")
-                                    .font(.system(size: 11, weight: .bold, design: .monospaced))
-                                    .foregroundStyle(Color.primary)
-                                    .padding(.horizontal, 10)
-                                    .padding(.vertical, 6)
-                                    .background(Color.appSecondaryBackground)
-                                    .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-                            }
-                            .padding(.vertical, 4)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-            }
-            .listStyle(.plain)
-            .scrollContentBackground(.hidden)
-            .background(libraryStore.settings.appTheme.backgroundColor.ignoresSafeArea())
-            .navigationTitle("ADD TO PLAYLIST")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("CANCEL") {
-                        showingPlaylistPicker = false
-                    }
-                    .font(.system(size: 13, weight: .bold, design: .monospaced))
-                    .foregroundStyle(Color.primary)
-                }
-            }
+        PlaylistPickerSheet(libraryStore: libraryStore) { playlist in
+            HapticFeedback.notificationSuccess()
+            libraryStore.addTracks(albumTracks, toPlaylistID: playlist.id)
+            showingPlaylistPicker = false
+            selectedTrackForPlaylist = nil
         }
-        .presentationDetents([.medium, .large])
-        .presentationDragIndicator(.visible)
     }
 
     // Toggle search
@@ -553,11 +505,18 @@ public struct AlbumDetailView: View {
                             .font(.system(size: 12, weight: .semibold, design: .monospaced))
                             .foregroundStyle(.secondary)
                     }
+
+                    if let serverDescription {
+                        ServerDescriptionButton(description: serverDescription, title: activeAlbum.title)
+                            .padding(.top, 4)
+                    }
                 }
                 .padding(.top, 2)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .loadsServerDescription(ServerDescriptionTarget.album(activeAlbum, sources: libraryStore.settings.serverSources),
+                                sources: libraryStore.settings.serverSources, into: $serverDescription)
     }
 }
 

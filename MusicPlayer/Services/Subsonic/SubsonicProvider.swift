@@ -753,3 +753,39 @@ nonisolated private final class SubsonicAlbumHandoff: Sendable {
     /// Returns and forgets the list, so it is used once and not kept in memory.
     func take(for id: UUID) -> [AlbumListBody.Album]? { state.withLock { $0.removeValue(forKey: id) } }
 }
+
+// MARK: - Descriptions (getArtistInfo2 biography / getAlbumInfo2 notes)
+
+nonisolated private struct ArtistInfo2Body: Decodable {
+    struct Info: Decodable { let biography: String? }
+    let artistInfo2: Info?
+}
+
+nonisolated private struct AlbumInfo2Body: Decodable {
+    struct Info: Decodable { let notes: String? }
+    let albumInfo: Info?
+}
+
+nonisolated extension SubsonicProvider {
+    /// One request per page open. `count=0` asks for no similar artists, only the biography.
+    /// Error 70 (data not found) means the server has no description, which is a valid answer.
+    public func fetchDescription(_ kind: ServerDescriptionKind, itemId: String) async throws -> String? {
+        let idItem = URLQueryItem(name: "id", value: itemId)
+        do {
+            switch kind {
+            case .artist:
+                let body = try await SubsonicClient.request(
+                    ArtistInfo2Body.self, base: link.serverURL, endpoint: "getArtistInfo2",
+                    params: [idItem, URLQueryItem(name: "count", value: "0")], auth: try auth(), timeout: 15)
+                return body.artistInfo2?.biography
+            case .album:
+                let body = try await SubsonicClient.request(
+                    AlbumInfo2Body.self, base: link.serverURL, endpoint: "getAlbumInfo2",
+                    params: [idItem], auth: try auth(), timeout: 15)
+                return body.albumInfo?.notes
+            }
+        } catch let error as SubsonicAPIError where error.code == 70 {
+            return nil
+        }
+    }
+}

@@ -429,3 +429,14 @@ nonisolated public struct PlexProvider: MediaServerProvider {
         PlexConnectionStore.remove(for: link.id)
     }
 }
+
+// MARK: - Descriptions (metadata summary)
+
+nonisolated extension PlexProvider {
+    /// GET /library/metadata/{ratingKey}: the artist or album item's `summary`.
+    public func fetchDescription(_ kind: ServerDescriptionKind, itemId: String) async throws -> String? {
+        let container = try await getJSON("/library/metadata/\(itemId)")
+        let items = container["Metadata"] as? [[String: Any]]
+        return items?.first?["summary"] as? String
+    }
+}

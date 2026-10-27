@@ -30,7 +30,7 @@ nonisolated public final class ServerArtworkRegistry: @unchecked Sendable {
         config.waitsForConnectivity = false
         config.urlCache = nil
         config.requestCachePolicy = .reloadIgnoringLocalCacheData
-        return URLSession(configuration: config)
+        return URLSession(configuration: config.blockingRequestsWhileOffline())
     }()
 
     private static let versionsURL: URL = ArtworkCacheService.sharedCacheDirectoryURL
@@ -91,6 +91,8 @@ nonisolated public final class ServerArtworkRegistry: @unchecked Sendable {
     /// Returns `.notFound` only when every request answered 404 (the server has no image), so transient
     /// network failures are retried later instead of being cached as "no artwork".
     public func fetchArtworkData(for key: String, size: ArtworkFetchSize) async -> RemoteArtworkResult {
+        // Offline: cached artwork still shows; nothing is requested and nothing is remembered as missing.
+        guard !OfflineMode.isEnabled else { return .cancelled }
         let entry: RegistryEntry? = {
             lock.lock()
             defer { lock.unlock() }

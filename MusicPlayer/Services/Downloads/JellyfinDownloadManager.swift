@@ -211,7 +211,7 @@ public final class JellyfinDownloadManager: NSObject, @unchecked Sendable {
         config.allowsCellularAccess = allowsCellularAccess
         let queue = OperationQueue()
         queue.maxConcurrentOperationCount = 4
-        let newSession = URLSession(configuration: config, delegate: self, delegateQueue: queue)
+        let newSession = URLSession(configuration: config.blockingRequestsWhileOffline(), delegate: self, delegateQueue: queue)
         let tag = UUID().uuidString
         newSession.sessionDescription = tag
         Self.currentSessionTag.withLock { $0 = tag }
@@ -266,6 +266,16 @@ public final class JellyfinDownloadManager: NSObject, @unchecked Sendable {
         oldSession?.finishTasksAndInvalidate()
         invalidateSummaries()
         processNextInQueue()
+    }
+
+    /// Offline turned on: in-flight downloads are cancelled with resume data and held in the queue.
+    /// Offline turned off: the held queue starts again.
+    func offlineModeChanged() {
+        if OfflineMode.isEnabled {
+            if !activeTasks.isEmpty { rebuildSessionRequeueingActiveTasks() }
+        } else {
+            processNextInQueue()
+        }
     }
 
     private func startPathMonitor() {
@@ -725,6 +735,7 @@ public final class JellyfinDownloadManager: NSObject, @unchecked Sendable {
         invalidateSummaries()
         totalDownloadedBytes = max(0, totalDownloadedBytes - record.fileSizeBytes)
         saveIndex()
+        NotificationCenter.default.post(name: OfflineMode.downloadedTracksChanged, object: nil)
     }
 
     /// Deletes all downloaded Jellyfin tracks from disk.
@@ -759,6 +770,7 @@ public final class JellyfinDownloadManager: NSObject, @unchecked Sendable {
         invalidateSummaries()
         totalDownloadedBytes = 0
         saveIndex()
+        NotificationCenter.default.post(name: OfflineMode.downloadedTracksChanged, object: nil)
     }
 
     // MARK: - Queue Processing
@@ -767,6 +779,8 @@ public final class JellyfinDownloadManager: NSObject, @unchecked Sendable {
         defer { updateWaitingState() }
         // Hold queued downloads while cellular is the only route and cellular downloads are off.
         guard !isBlockedByCellularPolicy else { return }
+        // Offline: queued downloads wait until Offline is turned off.
+        guard !OfflineMode.isEnabled else { return }
         guard activeTasks.count < maxConcurrentDownloads, !downloadQueue.isEmpty else { return }
 
         let item = downloadQueue.removeFirst()
@@ -843,6 +857,7 @@ public final class JellyfinDownloadManager: NSObject, @unchecked Sendable {
         invalidateSummaries()
         totalDownloadedBytes += fileSize
         saveIndex()
+        NotificationCenter.default.post(name: OfflineMode.downloadedTracksChanged, object: nil)
         processNextInQueue()
     }
 

@@ -662,51 +662,12 @@ public struct PlaylistDetailView: View {
 
     // Playlist picker sheet
     private func playlistPickerSheet(for tracks: [Track]) -> some View {
-        NavigationStack {
-            List {
-                if libraryStore.playlists.isEmpty {
-                    EmptyStateView(
-                        title: "NO PLAYLISTS FOUND",
-                        message: "Create a playlist first from the Library tab."
-                    )
-                    .padding(.top, 40)
-                    .listRowBackground(Color.clear)
-                    .listRowSeparator(.hidden)
-                } else {
-                    ForEach(libraryStore.playlists) { targetPlaylist in
-                        Button(action: {
-                            for track in tracks {
-                                libraryStore.addTrack(track, toPlaylistID: targetPlaylist.id)
-                            }
-                            selectedTrackForPlaylist = nil
-                        }) {
-                            HStack {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(targetPlaylist.name)
-                                        .font(.system(size: 15, weight: .bold))
-                                        .foregroundStyle(Color.primary)
-
-                                    Text(targetPlaylist.formattedTrackCount)
-                                        .font(.system(size: 12, design: .monospaced))
-                                        .foregroundStyle(.secondary)
-                                }
-
-                                Spacer()
-
-                                Text("ADD")
-                                    .font(.system(size: 12, weight: .bold, design: .monospaced))
-                                    .foregroundStyle(Color.primary)
-                            }
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
+        PlaylistPickerSheet(libraryStore: libraryStore) { targetPlaylist in
+            for track in tracks {
+                libraryStore.addTrack(track, toPlaylistID: targetPlaylist.id)
             }
-            .navigationTitle("ADD TO PLAYLIST")
-            .navigationBarTitleDisplayMode(.inline)
+            selectedTrackForPlaylist = nil
         }
-        .presentationDetents([.medium])
     }
 
     // Edit playlist sheet

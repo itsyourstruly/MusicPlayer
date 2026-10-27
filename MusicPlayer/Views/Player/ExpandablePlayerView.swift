@@ -369,42 +369,11 @@ public struct ExpandablePlayerView: View {
 
     // Playlist picker sheet
     private func playlistPickerSheet(for track: Track) -> some View {
-        NavigationStack {
-            List {
-                if libraryStore.playlists.isEmpty {
-                    Text("No playlists created yet.")
-                        .font(.system(size: 13, design: .monospaced))
-                        .foregroundStyle(.secondary)
-                } else {
-                    ForEach(libraryStore.playlists) { playlist in
-                        Button(action: {
-                            HapticFeedback.notificationSuccess()
-                            libraryStore.addTrack(track, toPlaylistID: playlist.id)
-                            showingPlaylistPicker = false
-                        }) {
-                            HStack {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(playlist.name)
-                                        .font(.system(size: 15, weight: .bold))
-                                    Text(playlist.formattedTrackCount)
-                                        .font(.system(size: 12, design: .monospaced))
-                                        .foregroundStyle(.secondary)
-                                }
-                                Spacer()
-                                Text("ADD")
-                                    .font(.system(size: 12, weight: .bold, design: .monospaced))
-                                    .foregroundStyle(Color.primary)
-                            }
-                            .padding(.vertical, 4)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-            }
-            .navigationTitle("ADD TO PLAYLIST")
-            .navigationBarTitleDisplayMode(.inline)
+        PlaylistPickerSheet(libraryStore: libraryStore) { playlist in
+            HapticFeedback.notificationSuccess()
+            libraryStore.addTrack(track, toPlaylistID: playlist.id)
+            showingPlaylistPicker = false
         }
-        .presentationDetents([.medium, .large])
     }
 }
 

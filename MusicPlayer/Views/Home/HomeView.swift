@@ -196,7 +196,13 @@ public struct HomeView: View {
         .semanticCard(cornerRadius: 12, padding: 16)
     }
 
+    /// Offline: only tracks on this device join the shuffle.
     private var customShuffleTracks: [Track] {
+        let tracks = unfilteredCustomShuffleTracks
+        return libraryStore.isOfflineFiltering ? tracks.filter(libraryStore.isPlayableNow) : tracks
+    }
+
+    private var unfilteredCustomShuffleTracks: [Track] {
         switch libraryStore.settings.customShuffleTarget {
         case .all:
             return libraryStore.tracks
@@ -229,7 +235,9 @@ public struct HomeView: View {
 
     private var shuffleButtonSubtitle: String {
         let count: Int
-        switch libraryStore.settings.customShuffleTarget {
+        switch libraryStore.isOfflineFiltering ? nil : libraryStore.settings.customShuffleTarget {
+        case nil:
+            count = customShuffleTracks.count
         case .all:
             count = libraryStore.tracks.count
         case .artist(let name):

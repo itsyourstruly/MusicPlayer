@@ -14,7 +14,7 @@ actor ServerTranscodeCache {
         config.waitsForConnectivity = false
         config.timeoutIntervalForRequest = 90   // servers may take a while to start emitting a transcode
         config.timeoutIntervalForResource = 900
-        return URLSession(configuration: config)
+        return URLSession(configuration: config.blockingRequestsWhileOffline())
     }()
 
     nonisolated private static var rootDirectory: URL {

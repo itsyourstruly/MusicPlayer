@@ -134,3 +134,23 @@ nonisolated public struct JellyfinProvider: MediaServerProvider {
         await JellyfinClient.shared.logout(link: link)
     }
 }
+
+// MARK: - Descriptions (BaseItemDto.Overview)
+
+nonisolated extension JellyfinProvider {
+    /// GET /Items/{itemId}?userId= returns the item's BaseItemDto, whose Overview holds the description.
+    public func fetchDescription(_ kind: ServerDescriptionKind, itemId: String) async throws -> String? {
+        let (serverURL, token) = try session()
+        guard var components = URLComponents(url: serverURL.appendingPathComponent("Items/\(itemId)"),
+                                             resolvingAgainstBaseURL: false) else { throw JellyfinClientError.invalidURL }
+        components.queryItems = [URLQueryItem(name: "userId", value: link.userId)]
+        guard let url = components.url else { throw JellyfinClientError.invalidURL }
+        var request = URLRequest(url: url, timeoutInterval: 15)
+        request.setValue(JellyfinClient.shared.authHeader(token: token), forHTTPHeaderField: "Authorization")
+        let (data, _) = try await ServerHTTPClient.data(for: request, session: JellyfinClient.syncSession)
+        guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw JellyfinClientError.invalidResponse
+        }
+        return object["Overview"] as? String
+    }
+}

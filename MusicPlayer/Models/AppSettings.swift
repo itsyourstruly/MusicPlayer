@@ -310,6 +310,8 @@ public struct AppSettings: Codable, Sendable {
     public var removedTrackPaths: Set<String>
     // System-wide tactile haptic feedback toggle (off by default)
     public var isHapticsEnabled: Bool
+    // Offline: show only on-device tracks and send nothing to connected servers (off by default)
+    public var isOfflineModeEnabled: Bool
     // Set of album IDs manually designated as collaborative albums
     public var manualCollaborativeAlbumIDs: Set<String>
     // Preserved default album artists for tracks before being made collaborative, keyed by track UUID string
@@ -369,6 +371,7 @@ public struct AppSettings: Codable, Sendable {
         isLyricsViewPreferred: Bool = false,
         removedTrackPaths: Set<String> = [],
         isHapticsEnabled: Bool = false,
+        isOfflineModeEnabled: Bool = false,
         manualCollaborativeAlbumIDs: Set<String> = [],
         originalAlbumArtistsByTrackID: [String: String] = [:],
         disabledFolderIDs: Set<UUID> = [],
@@ -408,6 +411,7 @@ public struct AppSettings: Codable, Sendable {
         self.isLyricsViewPreferred = isLyricsViewPreferred
         self.removedTrackPaths = removedTrackPaths
         self.isHapticsEnabled = isHapticsEnabled
+        self.isOfflineModeEnabled = isOfflineModeEnabled
         self.manualCollaborativeAlbumIDs = manualCollaborativeAlbumIDs
         self.originalAlbumArtistsByTrackID = originalAlbumArtistsByTrackID
         self.disabledFolderIDs = disabledFolderIDs
@@ -479,6 +483,8 @@ public struct AppSettings: Codable, Sendable {
         case removedTrackPaths
         // Haptics enabled option
         case isHapticsEnabled
+        // Offline option
+        case isOfflineModeEnabled
         // Collaborative album settings
         case manualCollaborativeAlbumIDs
         case originalAlbumArtistsByTrackID
@@ -555,6 +561,7 @@ public struct AppSettings: Codable, Sendable {
         self.isLyricsViewPreferred = (try? container.decodeIfPresent(Bool.self, forKey: .isLyricsViewPreferred)) ?? false
         self.removedTrackPaths = (try? container.decodeIfPresent(Set<String>.self, forKey: .removedTrackPaths)) ?? []
         self.isHapticsEnabled = (try? container.decodeIfPresent(Bool.self, forKey: .isHapticsEnabled)) ?? false
+        self.isOfflineModeEnabled = (try? container.decodeIfPresent(Bool.self, forKey: .isOfflineModeEnabled)) ?? false
         self.manualCollaborativeAlbumIDs = (try? container.decodeIfPresent(Set<String>.self, forKey: .manualCollaborativeAlbumIDs)) ?? []
         self.originalAlbumArtistsByTrackID = (try? container.decodeIfPresent([String: String].self, forKey: .originalAlbumArtistsByTrackID)) ?? [:]
         self.disabledFolderIDs = (try? container.decodeIfPresent(Set<UUID>.self, forKey: .disabledFolderIDs)) ?? []
@@ -599,6 +606,7 @@ public struct AppSettings: Codable, Sendable {
         try container.encode(isLyricsViewPreferred, forKey: .isLyricsViewPreferred)
         try container.encode(removedTrackPaths, forKey: .removedTrackPaths)
         try container.encode(isHapticsEnabled, forKey: .isHapticsEnabled)
+        try container.encode(isOfflineModeEnabled, forKey: .isOfflineModeEnabled)
         try container.encode(manualCollaborativeAlbumIDs, forKey: .manualCollaborativeAlbumIDs)
         try container.encode(originalAlbumArtistsByTrackID, forKey: .originalAlbumArtistsByTrackID)
         try container.encode(disabledFolderIDs, forKey: .disabledFolderIDs)

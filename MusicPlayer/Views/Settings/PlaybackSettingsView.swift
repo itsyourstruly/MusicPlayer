@@ -41,13 +41,27 @@ public struct PlaybackSettingsView: View {
         .navigationTitle("PLAYBACK")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
-            libraryStore.settings.autoPlayNext = true
-            playerService.autoPlayNext = true
-            playerService.playTrackInCurrentQueue = libraryStore.settings.playTrackInCurrentQueue
-            playerService.tapToPlayNext = libraryStore.settings.tapToPlayNext
-            playerService.smoothSkippingEnabled = libraryStore.settings.smoothSkippingEnabled
-            playerService.rememberPlaybackPosition = libraryStore.settings.rememberPlaybackPosition
-            playerService.rememberPlaybackPositionMinMinutes = libraryStore.settings.rememberPlaybackPositionMinMinutes
+            // Write only values that actually differ: any assignment to an @Observable property notifies
+            // observers even when the value is unchanged, and `settings` is read by nearly every view, so
+            // unconditional writes here re-rendered the whole app during the push animation.
+            let settings = libraryStore.settings
+            if !settings.autoPlayNext { libraryStore.settings.autoPlayNext = true }
+            if !playerService.autoPlayNext { playerService.autoPlayNext = true }
+            if playerService.playTrackInCurrentQueue != settings.playTrackInCurrentQueue {
+                playerService.playTrackInCurrentQueue = settings.playTrackInCurrentQueue
+            }
+            if playerService.tapToPlayNext != settings.tapToPlayNext {
+                playerService.tapToPlayNext = settings.tapToPlayNext
+            }
+            if playerService.smoothSkippingEnabled != settings.smoothSkippingEnabled {
+                playerService.smoothSkippingEnabled = settings.smoothSkippingEnabled
+            }
+            if playerService.rememberPlaybackPosition != settings.rememberPlaybackPosition {
+                playerService.rememberPlaybackPosition = settings.rememberPlaybackPosition
+            }
+            if playerService.rememberPlaybackPositionMinMinutes != settings.rememberPlaybackPositionMinMinutes {
+                playerService.rememberPlaybackPositionMinMinutes = settings.rememberPlaybackPositionMinMinutes
+            }
         }
         .sheet(item: $activeDetail) { detail in
             SettingOptionDetailSheet(detail: detail)

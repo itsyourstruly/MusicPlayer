@@ -25,6 +25,8 @@ nonisolated public enum ServerHTTPClient {
         budget: TimeInterval = 90,
         caller: String = #fileID
     ) async throws -> (Data, HTTPURLResponse) {
+        // Offline: nothing reaches a connected server.
+        guard !OfflineMode.isEnabled else { throw OfflineMode.blockedError }
         ServerRequestLog.log(request, caller: caller)
         let start = Date()
         var attempt = 0

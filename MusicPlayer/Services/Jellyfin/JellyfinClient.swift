@@ -75,7 +75,7 @@ public final class JellyfinClient: Sendable {
         config.waitsForConnectivity = false
         config.timeoutIntervalForRequest = 10
         config.timeoutIntervalForResource = 20
-        return URLSession(configuration: config)
+        return URLSession(configuration: config.blockingRequestsWhileOffline())
     }()
 
     /// Library sync/API session: no connectivity waiting; a stalled transfer fails after 30 s without data.
@@ -85,7 +85,7 @@ public final class JellyfinClient: Sendable {
         config.waitsForConnectivity = false
         config.timeoutIntervalForRequest = 30
         config.timeoutIntervalForResource = 300
-        return URLSession(configuration: config)
+        return URLSession(configuration: config.blockingRequestsWhileOffline())
     }()
 
     private let session: URLSession

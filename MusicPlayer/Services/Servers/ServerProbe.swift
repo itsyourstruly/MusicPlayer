@@ -20,7 +20,7 @@ nonisolated enum ServerProbe {
         config.timeoutIntervalForRequest = timeout
         config.timeoutIntervalForResource = timeout + 2
         config.waitsForConnectivity = false
-        return URLSession(configuration: config)
+        return URLSession(configuration: config.blockingRequestsWhileOffline())
     }()
 
     /// Candidate base URLs for user input. Explicit scheme: used as typed (http adds the default ports when no

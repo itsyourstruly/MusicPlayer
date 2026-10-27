@@ -15,7 +15,7 @@ public struct PlaybackControlsSheetView: View {
     @State private var isVolumeBoosterExpanded: Bool = false
     @State private var isPlaybackSpeedExpanded: Bool = false
 
-    private let toggleAnimation = Animation.easeInOut(duration: 0.22)
+    private let toggleAnimation = Animation.easeInOut(duration: 0.15)
 
     public init(playerService: AudioPlayerService, libraryStore: LibraryStore? = nil) {
         self.playerService = playerService
@@ -160,7 +160,7 @@ public struct PlaybackControlsSheetView: View {
                     .frame(height: 14)
                 }
                 .padding(.horizontal, 2)
-                .transition(.opacity.combined(with: .move(edge: .top)))
+                .transition(.opacity)
             }
         }
     }
@@ -276,7 +276,7 @@ public struct PlaybackControlsSheetView: View {
                     .frame(height: 14)
                 }
                 .padding(.horizontal, 2)
-                .transition(.opacity.combined(with: .move(edge: .top)))
+                .transition(.opacity)
             }
         }
     }
@@ -369,7 +369,7 @@ public struct PlaybackControlsSheetView: View {
                     .frame(height: 14)
                 }
                 .padding(.horizontal, 2)
-                .transition(.opacity.combined(with: .move(edge: .top)))
+                .transition(.opacity)
             }
         }
     }
@@ -418,7 +418,7 @@ public struct PlaybackControlsSheetView: View {
                     equalizerOptionsSection
                         .padding(.horizontal, 20)
                 }
-                .transition(.opacity.combined(with: .move(edge: .top)))
+                .transition(.opacity)
             }
         }
     }
@@ -516,7 +516,7 @@ public struct PlaybackControlsSheetView: View {
                     .frame(height: 14)
                 }
                 .padding(.horizontal, 2)
-                .transition(.opacity.combined(with: .move(edge: .top)))
+                .transition(.opacity)
             }
         }
     }

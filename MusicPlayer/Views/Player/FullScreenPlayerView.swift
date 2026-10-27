@@ -1007,44 +1007,11 @@ public struct FullScreenPlayerView: View {
     // MARK: - Playlist Picker Sheet
 
     private func playlistPickerSheet(for track: Track) -> some View {
-        NavigationStack {
-            List {
-                if libraryStore.playlists.isEmpty {
-                    Text("No playlists created yet.")
-                        .font(.system(size: 13, design: .monospaced))
-                        .foregroundStyle(.secondary)
-                } else {
-                    ForEach(libraryStore.playlists) { playlist in
-                        Button(action: {
-                            libraryStore.addTrack(track, toPlaylistID: playlist.id)
-                            HapticFeedback.notificationSuccess()
-                            showingPlaylistPicker = false
-                            triggerAddedToPlaylistBanner(playlistID: playlist.id, playlistName: playlist.name)
-                        }) {
-                            HStack {
-                                Text(playlist.name)
-                                    .font(.system(size: 14, weight: .semibold))
-                                    .foregroundStyle(Color.primary)
-                                Spacer()
-                                Text(playlist.formattedTrackCount)
-                                    .font(.system(size: 11, design: .monospaced))
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-            }
-            .navigationTitle("ADD TO PLAYLIST")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("CANCEL") {
-                        showingPlaylistPicker = false
-                    }
-                    .font(.system(size: 13, weight: .bold, design: .monospaced))
-                }
-            }
+        PlaylistPickerSheet(libraryStore: libraryStore) { playlist in
+            libraryStore.addTrack(track, toPlaylistID: playlist.id)
+            HapticFeedback.notificationSuccess()
+            showingPlaylistPicker = false
+            triggerAddedToPlaylistBanner(playlistID: playlist.id, playlistName: playlist.name)
         }
     }
 

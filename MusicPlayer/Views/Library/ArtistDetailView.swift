@@ -10,6 +10,7 @@ public struct ArtistDetailView: View {
     @State private var selectedAlbumForNavigation: Album? = nil
     @State private var selectedArtistForNavigation: Artist? = nil
     @State private var selectedTrackForInfo: Track? = nil
+    @State private var serverDescription: ServerDescription? = nil
     @State private var selectedTrackForPlaylist: Track? = nil
     @State private var showingFavorites: Bool = false
     @State private var showingDiscographyReviewSheet: Bool = false
@@ -369,51 +370,12 @@ public struct ArtistDetailView: View {
 
     // Playlist picker sheet
     private func playlistPickerSheet(for tracks: [Track]) -> some View {
-        NavigationStack {
-            List {
-                if libraryStore.playlists.isEmpty {
-                    EmptyStateView(
-                        title: "NO PLAYLISTS FOUND",
-                        message: "Create a playlist first from the Library tab."
-                    )
-                    .padding(.top, 40)
-                    .listRowBackground(Color.clear)
-                    .listRowSeparator(.hidden)
-                } else {
-                    ForEach(libraryStore.playlists) { playlist in
-                        Button(action: {
-                            for track in tracks {
-                                libraryStore.addTrack(track, toPlaylistID: playlist.id)
-                            }
-                            selectedTrackForPlaylist = nil
-                        }) {
-                            HStack {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(playlist.name)
-                                        .font(.system(size: 15, weight: .bold))
-                                        .foregroundStyle(Color.primary)
-
-                                    Text(playlist.formattedTrackCount)
-                                        .font(.system(size: 12, design: .monospaced))
-                                        .foregroundStyle(.secondary)
-                                }
-
-                                Spacer()
-
-                                Text("ADD")
-                                    .font(.system(size: 12, weight: .bold, design: .monospaced))
-                                    .foregroundStyle(Color.primary)
-                            }
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
+        PlaylistPickerSheet(libraryStore: libraryStore) { playlist in
+            for track in tracks {
+                libraryStore.addTrack(track, toPlaylistID: playlist.id)
             }
-            .navigationTitle("ADD TO PLAYLIST")
-            .navigationBarTitleDisplayMode(.inline)
+            selectedTrackForPlaylist = nil
         }
-        .presentationDetents([.medium])
     }
 
     private var headerView: some View {
@@ -445,9 +407,16 @@ public struct ArtistDetailView: View {
                         : activeArtist.discographySummary)
                         .font(.system(size: 12, design: .monospaced))
                         .foregroundStyle(.secondary)
+
+                    if let serverDescription {
+                        ServerDescriptionButton(description: serverDescription, title: activeArtist.name)
+                            .padding(.top, 2)
+                    }
                 }
                 Spacer(minLength: 0)
             }
+            .loadsServerDescription(ServerDescriptionTarget.artist(activeArtist, sources: libraryStore.settings.serverSources),
+                                    sources: libraryStore.settings.serverSources, into: $serverDescription)
 
             // Multi-Source Discography Scanning Banner & Review Button
             if libraryStore.activeDiscographyScanArtistName == activeArtist.name {
@@ -674,17 +643,20 @@ private struct ArtistDetailToolbarMenuView: View {
                 Divider()
             }
 
-            Menu {
-                ForEach(MetadataAPIOption.allCases) { source in
-                    Button(action: {
-                        HapticFeedback.lightImpact()
-                        libraryStore.scanArtistDiscographyMetadata(artistName: currentArtist.name, source: source)
-                    }) {
-                        Text(source.displayName)
+            // Metadata lookup rewrites local files only, so it is offered only for artists with local tracks.
+            if currentArtist.tracks.contains(where: { !OfflineMode.isServerTrack($0) }) {
+                Menu {
+                    ForEach(MetadataAPIOption.allCases) { source in
+                        Button(action: {
+                            HapticFeedback.lightImpact()
+                            libraryStore.scanArtistDiscographyMetadata(artistName: currentArtist.name, source: source)
+                        }) {
+                            Text(source.displayName)
+                        }
                     }
+                } label: {
+                    Text("FIND METADATA (DISCOGRAPHY)...")
                 }
-            } label: {
-                Text("FIND METADATA (DISCOGRAPHY)...")
             }
         } label: {
             Image(systemName: "ellipsis.circle")

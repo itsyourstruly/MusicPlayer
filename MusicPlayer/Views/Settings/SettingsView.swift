@@ -244,39 +244,52 @@ public enum SettingOptionCatalog {
         title: "HAPTICS",
         description: "Enables haptic feedback on actions throughout the app."
     )
+
+    public static let offline = SettingOptionDetail(
+        id: "offline",
+        title: "OFFLINE",
+        description: "Only tracks on your device will be shown. While enabled, LAP won't send any requests or play counts to your connected servers."
+    )
 }
 
 /// Setting option detailed sheet overlay
 public struct SettingOptionDetailSheet: View {
     public let detail: SettingOptionDetail
+    /// Long texts (ABOUT descriptions) open at medium and can be dragged to full screen.
+    public let expandsToFullScreen: Bool
     @Environment(\.dismiss) private var dismiss
     @Environment(\.appTheme) private var appTheme
 
-    public init(detail: SettingOptionDetail) {
+    public init(detail: SettingOptionDetail, expandsToFullScreen: Bool = false) {
         self.detail = detail
+        self.expandsToFullScreen = expandsToFullScreen
     }
 
     public var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text(detail.title)
-                .font(.system(size: 14, weight: .bold, design: .monospaced))
-                .foregroundStyle(Color.primary)
+        // Scrolls only when the text is taller than the sheet (long artist or album descriptions).
+        ScrollView(.vertical, showsIndicators: false) {
+            VStack(alignment: .leading, spacing: 14) {
+                Text(detail.title)
+                    .font(.system(size: 14, weight: .bold, design: .monospaced))
+                    .foregroundStyle(Color.primary)
 
-            Text(detail.description)
-                .font(.system(size: 13, weight: .regular, design: .monospaced))
-                .foregroundStyle(.secondary)
-                .lineSpacing(4)
-                .fixedSize(horizontal: false, vertical: true)
-
-            Spacer()
+                Text(detail.description)
+                    .font(.system(size: 13, weight: .regular, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .lineSpacing(4)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.horizontal, 24)
+            .padding(.top, 28)
+            .padding(.bottom, 20)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding(.horizontal, 24)
-        .padding(.top, 28)
-        .padding(.bottom, 20)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .scrollBounceBehavior(.basedOnSize)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(appTheme.backgroundColor.ignoresSafeArea())
         .presentationBackground(appTheme.backgroundColor)
-        .presentationDetents([.height(200), .medium])
+        .presentationDetents(expandsToFullScreen ? [.medium, .large] : [.height(200), .medium])
+        .presentationContentInteraction(expandsToFullScreen ? .resizes : .automatic)
         .presentationDragIndicator(.visible)
     }
 }
@@ -438,6 +451,23 @@ public struct SettingsView: View {
                     activeDetail = SettingOptionCatalog.haptics
                 }
             )
+
+            // OFFLINE Toggle (only meaningful with a connected server)
+            if !libraryStore.settings.serverSources.isEmpty {
+                TypographicToggleRow(
+                    title: "OFFLINE",
+                    isOn: Binding(
+                        get: { libraryStore.settings.isOfflineModeEnabled },
+                        set: { newValue in
+                            libraryStore.settings.isOfflineModeEnabled = newValue
+                            libraryStore.saveSettings()
+                        }
+                    ),
+                    onLongPress: {
+                        activeDetail = SettingOptionCatalog.offline
+                    }
+                )
+            }
 
             // Action: Reset Home Shuffle
             if !libraryStore.settings.customShuffleTarget.isAll {

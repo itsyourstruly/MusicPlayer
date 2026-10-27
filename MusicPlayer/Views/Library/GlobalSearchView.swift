@@ -1197,40 +1197,10 @@ public struct GlobalSearchView: View {
     // MARK: - Playlist Picker Sheet
 
     private func playlistPickerSheet(for track: Track) -> some View {
-        NavigationStack {
-            List {
-                ForEach(libraryStore.playlists) { playlist in
-                    Button(action: {
-                        libraryStore.addTrack(track, toPlaylistID: playlist.id)
-                        HapticFeedback.notificationSuccess()
-                        selectedTrackForPlaylist = nil
-                    }) {
-                        HStack(spacing: 12) {
-                            AlbumArtworkView(
-                                artworkKey: libraryStore.artworkKey(for: playlist),
-                                title: playlist.name,
-                                subtitle: "Playlist",
-                                cornerRadius: 6
-                            )
-                            .frame(width: 36, height: 36)
-
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(playlist.name)
-                                    .font(.system(size: 14, weight: .semibold))
-                                    .foregroundStyle(Color.primary)
-
-                                Text("\(playlist.trackIDs.count) tracks")
-                                    .font(.system(size: 11))
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                        .padding(.vertical, 2)
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-            .navigationTitle("Add to Playlist")
-            .navigationBarTitleDisplayMode(.inline)
+        PlaylistPickerSheet(libraryStore: libraryStore) { playlist in
+            libraryStore.addTrack(track, toPlaylistID: playlist.id)
+            HapticFeedback.notificationSuccess()
+            selectedTrackForPlaylist = nil
         }
     }
 

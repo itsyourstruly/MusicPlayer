@@ -258,6 +258,29 @@ public final class AudioPlayerService {
         return ServerProviderRegistry.provider(for: link)
     }
 
+    /// Provider for play reports and scrobbles. Nil while Offline is on: plays are dropped, never queued.
+    private func playReportingProvider(for track: Track) -> (any MediaServerProvider)? {
+        guard !OfflineMode.isEnabled else { return nil }
+        return serverProvider(for: track)
+    }
+
+    /// Called when Offline turns on. A streamed current track stops at once and its network item is released,
+    /// so AVPlayer stops buffering from the server; a prewarmed stream is dropped too. Pressing play again then
+    /// shows OFFLINE. Downloaded, local and already-cached tracks keep playing untouched.
+    func offlineModeDidEnable() {
+        if let prewarmed = prewarmedPlayerItem, let asset = prewarmed.asset as? AVURLAsset, !asset.url.isFileURL {
+            prewarmTask?.cancel()
+            prewarmTask = nil
+            prewarmedTrackID = nil
+            prewarmedPlayerItem = nil
+            prewarmingTrackID = nil
+        }
+        guard let player, let asset = player.currentItem?.asset as? AVURLAsset, !asset.url.isFileURL else { return }
+        cancelCrossfade()
+        pause(smooth: false)
+        player.replaceCurrentItem(with: nil)
+    }
+
     /// Signed server audio request via the single ServerStreamRequestBuilder (throws instead of falling back
     /// to the unsigned identity URL).
     func signedServerRequest(for track: Track, purpose: ServerMediaPurpose, caller: String) throws -> URLRequest {
@@ -1709,7 +1732,7 @@ public final class AudioPlayerService {
 
         // Jellyfin playback reporting start
         if track.metadataSource == .server {
-            serverProvider(for: track)?.reportPlayback(.started, track: track)
+            playReportingProvider(for: track)?.reportPlayback(.started, track: track)
         }
 
         AppLogger.audio.info("Now playing: \(track.title) by \(track.artist) (rate: \(currentSpeed)x, resumed at: \(resumePosition)s)")
@@ -2320,7 +2343,7 @@ public final class AudioPlayerService {
             if let track = self.currentTrack, track.metadataSource == .server {
                 if Int(seconds) / 10 != Int(self.lastJellyfinReportedSeconds) / 10 {
                     self.lastJellyfinReportedSeconds = seconds
-                    self.serverProvider(for: track)?.reportPlayback(
+                    self.playReportingProvider(for: track)?.reportPlayback(
                         .progress(position: seconds, isPaused: self.playbackStatus != .playing),
                         track: track
                     )
@@ -2332,7 +2355,7 @@ public final class AudioPlayerService {
     // Handle track ended
     private func handleTrackEnded() {
         if let track = currentTrack, track.metadataSource == .server {
-            serverProvider(for: track)?.reportPlayback(.stopped(position: duration), track: track)
+            playReportingProvider(for: track)?.reportPlayback(.stopped(position: duration), track: track)
         }
         if !hasCountedCurrentPlay, let track = currentTrack {
             hasCountedCurrentPlay = true
@@ -2437,7 +2460,7 @@ public final class AudioPlayerService {
         // Old-track bookkeeping, run against the OLD track before switching
         if let oldTrack = self.currentTrack {
             if oldTrack.metadataSource == .server {
-                serverProvider(for: oldTrack)?.reportPlayback(.stopped(position: duration), track: oldTrack)
+                playReportingProvider(for: oldTrack)?.reportPlayback(.stopped(position: duration), track: oldTrack)
             }
             if !hasCountedCurrentPlay {
                 hasCountedCurrentPlay = true

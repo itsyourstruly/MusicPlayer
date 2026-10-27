@@ -69,6 +69,10 @@ nonisolated public protocol MediaServerProvider: Sendable {
     /// Lyrics for a server track (LRC text when synced, plain text otherwise). Nil when unsupported or absent.
     func fetchLyrics(for track: Track) async -> String?
 
+    /// Raw artist biography or album notes for a server item. Nil when the server has none;
+    /// throws when the request fails, so a failure is never remembered as "no description".
+    func fetchDescription(_ kind: ServerDescriptionKind, itemId: String) async throws -> String?
+
     /// Playback reporting / scrobbling (fire-and-forget).
     @MainActor func reportPlayback(_ event: ServerPlaybackEvent, track: Track)
 
@@ -82,6 +86,13 @@ public extension MediaServerProvider {
     nonisolated func transcodeFallbackRequest(for track: Track) -> URLRequest? { nil }
     nonisolated func fetchCatalog() async throws -> ServerCatalog { ServerCatalog() }
     nonisolated func fetchLyrics(for track: Track) async -> String? { nil }
+    nonisolated func fetchDescription(_ kind: ServerDescriptionKind, itemId: String) async throws -> String? { nil }
+}
+
+/// Which description a page asks for.
+nonisolated public enum ServerDescriptionKind: String, Sendable, Codable {
+    case artist
+    case album
 }
 
 // MARK: - ServerStreamError
@@ -90,11 +101,13 @@ public extension MediaServerProvider {
 nonisolated public enum ServerStreamError: LocalizedError, Sendable, Equatable {
     case credentialsMissing
     case noProvider
+    case offline
 
     public var errorDescription: String? {
         switch self {
         case .credentialsMissing: return "SIGN IN AGAIN"
         case .noProvider: return "SERVER UNAVAILABLE"
+        case .offline: return "OFFLINE"
         }
     }
 }
@@ -108,6 +121,10 @@ nonisolated public enum ServerStreamRequestBuilder {
     public static func request(for track: Track, link: ServerSourceLink?, purpose: ServerMediaPurpose,
                                caller: String) throws -> URLRequest {
         let endpoint = purpose == .download ? "download" : "stream"
+        guard !OfflineMode.isEnabled else {
+            ServerRequestLog.failure(endpoint: endpoint, caller: caller, reason: "offline")
+            throw ServerStreamError.offline
+        }
         guard let link, let provider = ServerProviderRegistry.provider(for: link) else {
             ServerRequestLog.failure(endpoint: endpoint, caller: caller, reason: "noProvider")
             throw ServerStreamError.noProvider
