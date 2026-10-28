@@ -12,6 +12,9 @@ public struct PlayerQueueView: View {
     @State private var viewModel = QueueViewModel()
     @State private var selectedArtist: Artist? = nil
     @State private var selectedAlbum: Album? = nil
+    /// False until the list has been scrolled to Now Playing on open; the list stays invisible until then so
+    /// the user never sees it start at the oldest past song and jump.
+    @State private var isPositionedAtNowPlaying = false
 
     // Initialize with configured properties
     public init(playerService: AudioPlayerService, libraryStore: LibraryStore? = nil) {
@@ -31,36 +34,11 @@ public struct PlayerQueueView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .background(appTheme.backgroundColor.ignoresSafeArea())
                 } else {
-                    List {
-                        // 1. NOW PLAYING SECTION (Top of default visible queue for instant display)
-                        if let current = playerService.currentTrack {
-                            Section {
-                                NowPlayingQueueRowView(
-                                    track: current,
-                                    playerService: playerService,
-                                    onNavigateToArtist: { name in
-                                        navigateToArtist(name: name, fallbackTrack: current)
-                                    },
-                                    onNavigateToAlbum: { title, artist in
-                                        navigateToAlbum(title: title, artist: artist, fallbackTrack: current)
-                                    }
-                                )
-                                .id("now_playing_item")
-                                .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
-                                .listRowSeparator(.hidden)
-                                .listRowBackground(Color.clear)
-                            } header: {
-                                Text("NOW PLAYING")
-                                    .font(.system(size: 11, weight: .bold, design: .monospaced))
-                                    .foregroundStyle(appTheme.accentColor)
-                                    .textCase(nil)
-                            }
-                        }
-
-                        // 2. PAST SONGS SECTION (Collapsible header avoids long layout passes)
-                        if !viewModel.pastEntries.isEmpty {
-                            Section {
-                                if viewModel.isPastExpanded {
+                    ScrollViewReader { proxy in
+                        List {
+                            // 1. PAST SONGS SECTION (Scroll up from Now Playing to view history)
+                            if !viewModel.pastEntries.isEmpty {
+                                Section {
                                     ForEach(viewModel.pastEntries) { entry in
                                         if let track = playerService.track(for: entry) {
                                             QueueRowView(
@@ -99,171 +77,201 @@ public struct PlayerQueueView: View {
                                             .listRowBackground(Color.clear)
                                         }
                                     }
+                                } header: {
+                                    Text("PAST SONGS (\(viewModel.pastEntries.count))")
+                                        .font(.system(size: 11, weight: .bold, design: .monospaced))
+                                        .foregroundStyle(.secondary)
+                                        .textCase(nil)
                                 }
-                            } header: {
-                                Button(action: {
-                                    withAnimation(.easeInOut(duration: 0.2)) {
-                                        viewModel.isPastExpanded.toggle()
-                                    }
-                                }) {
-                                    HStack {
-                                        Text("PAST SONGS (\(viewModel.pastEntries.count))")
-                                            .font(.system(size: 11, weight: .bold, design: .monospaced))
-                                            .foregroundStyle(.secondary)
-                                            .textCase(nil)
-
-                                        Spacer()
-
-                                        Image(systemName: viewModel.isPastExpanded ? "chevron.up" : "chevron.down")
-                                            .font(.system(size: 10, weight: .bold, design: .monospaced))
-                                            .foregroundStyle(.secondary)
-                                    }
-                                    .contentShape(Rectangle())
-                                }
-                                .buttonStyle(.plain)
                             }
-                        }
 
-                        // 3. QUEUE (PLAY NEXT) SECTION
-                        if !viewModel.playNextEntries.isEmpty {
-                            Section {
-                                ForEach(viewModel.playNextEntries) { entry in
-                                    if let track = playerService.track(for: entry) {
-                                        QueueRowView(
-                                            entryID: entry.id,
-                                            trackID: track.id,
-                                            title: track.title,
-                                            artist: track.artist,
-                                            durationText: TimeFormatting.format(seconds: track.duration),
-                                            artworkKey: track.artworkKey,
-                                            albumTitle: track.album,
-                                            isNext: entry.id == viewModel.nextEntryID,
-                                            kind: .playNext,
-                                            onTap: {
-                                                if let idx = playerService.playNextQueue.firstIndex(where: { $0.id == entry.id }) {
-                                                    playerService.playFromPlayNext(at: idx)
-                                                }
-                                            },
-                                            onRemove: {
-                                                if let idx = playerService.playNextQueue.firstIndex(where: { $0.id == entry.id }) {
-                                                    withAnimation(.spring(response: 0.28, dampingFraction: 0.8)) {
-                                                        playerService.removePlayNextItem(at: idx)
-                                                    }
-                                                }
-                                            },
-                                            onMoveSection: {
-                                                if let idx = playerService.playNextQueue.firstIndex(where: { $0.id == entry.id }) {
-                                                    let baseIndex = (playerService.currentIndex ?? 0) + 1
-                                                    withAnimation(.spring(response: 0.28, dampingFraction: 0.8)) {
-                                                        playerService.moveFromPlayNextToQueue(
-                                                            playNextIndex: idx,
-                                                            queueDestinationIndex: baseIndex
-                                                        )
-                                                    }
-                                                    HapticFeedback.dragDrop()
-                                                }
-                                            },
-                                            onNavigateToArtist: { name in
-                                                navigateToArtist(name: name, fallbackTrack: track)
-                                            },
-                                            onNavigateToAlbum: { title, artist in
-                                                navigateToAlbum(title: title, artist: artist, fallbackTrack: track)
-                                            }
-                                        )
-                                        .equatable()
-                                        .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
-                                        .listRowSeparator(.hidden)
-                                        .listRowBackground(Color.clear)
-                                    }
+                            // 2. NOW PLAYING SECTION (List opens scrolled here, anchored at the top)
+                            if let current = playerService.currentTrack {
+                                Section {
+                                    NowPlayingQueueRowView(
+                                        track: current,
+                                        playerService: playerService,
+                                        onNavigateToArtist: { name in
+                                            navigateToArtist(name: name, fallbackTrack: current)
+                                        },
+                                        onNavigateToAlbum: { title, artist in
+                                            navigateToAlbum(title: title, artist: artist, fallbackTrack: current)
+                                        }
+                                    )
+                                    .id("now_playing_item")
+                                    .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+                                    .listRowSeparator(.hidden)
+                                    .listRowBackground(Color.clear)
+                                } header: {
+                                    Text("NOW PLAYING")
+                                        .font(.system(size: 11, weight: .bold, design: .monospaced))
+                                        .foregroundStyle(appTheme.accentColor)
+                                        .textCase(nil)
                                 }
-                                .onMove { source, destination in
-                                    withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
-                                        playerService.movePlayNextItem(fromOffsets: source, toOffset: destination)
-                                    }
-                                    HapticFeedback.dragDrop()
-                                }
-                            } header: {
-                                sectionHeaderView(
-                                    title: "QUEUE (\(viewModel.playNextEntries.count))",
-                                    titleColor: appTheme.accentColor,
-                                    onClear: {
-                                        withAnimation(.easeInOut(duration: 0.2)) {
-                                            playerService.clearPlayNextQueue()
+                            }
+
+                            // 3. QUEUE (PLAY NEXT) SECTION
+                            if !viewModel.playNextEntries.isEmpty {
+                                Section {
+                                    ForEach(viewModel.playNextEntries) { entry in
+                                        if let track = playerService.track(for: entry) {
+                                            QueueRowView(
+                                                entryID: entry.id,
+                                                trackID: track.id,
+                                                title: track.title,
+                                                artist: track.artist,
+                                                durationText: TimeFormatting.format(seconds: track.duration),
+                                                artworkKey: track.artworkKey,
+                                                albumTitle: track.album,
+                                                isNext: entry.id == viewModel.nextEntryID,
+                                                kind: .playNext,
+                                                onTap: {
+                                                    if let idx = playerService.playNextQueue.firstIndex(where: { $0.id == entry.id }) {
+                                                        playerService.playFromPlayNext(at: idx)
+                                                    }
+                                                },
+                                                onRemove: {
+                                                    if let idx = playerService.playNextQueue.firstIndex(where: { $0.id == entry.id }) {
+                                                        withAnimation(.spring(response: 0.28, dampingFraction: 0.8)) {
+                                                            playerService.removePlayNextItem(at: idx)
+                                                        }
+                                                    }
+                                                },
+                                                onMoveSection: {
+                                                    if let idx = playerService.playNextQueue.firstIndex(where: { $0.id == entry.id }) {
+                                                        let baseIndex = (playerService.currentIndex ?? 0) + 1
+                                                        withAnimation(.spring(response: 0.28, dampingFraction: 0.8)) {
+                                                            playerService.moveFromPlayNextToQueue(
+                                                                playNextIndex: idx,
+                                                                queueDestinationIndex: baseIndex
+                                                            )
+                                                        }
+                                                        HapticFeedback.dragDrop()
+                                                    }
+                                                },
+                                                onNavigateToArtist: { name in
+                                                    navigateToArtist(name: name, fallbackTrack: track)
+                                                },
+                                                onNavigateToAlbum: { title, artist in
+                                                    navigateToAlbum(title: title, artist: artist, fallbackTrack: track)
+                                                }
+                                            )
+                                            .equatable()
+                                            .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+                                            .listRowSeparator(.hidden)
+                                            .listRowBackground(Color.clear)
                                         }
                                     }
-                                )
+                                    .onMove { source, destination in
+                                        withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                                            playerService.movePlayNextItem(fromOffsets: source, toOffset: destination)
+                                        }
+                                        HapticFeedback.dragDrop()
+                                    }
+                                } header: {
+                                    sectionHeaderView(
+                                        title: "QUEUE (\(viewModel.playNextEntries.count))",
+                                        titleColor: appTheme.accentColor,
+                                        onClear: {
+                                            withAnimation(.easeInOut(duration: 0.2)) {
+                                                playerService.clearPlayNextQueue()
+                                            }
+                                        }
+                                    )
+                                }
+                            }
+
+                            // 4. UP NEXT SECTION
+                            if !viewModel.upNextEntries.isEmpty {
+                                Section {
+                                    ForEach(viewModel.upNextEntries) { entry in
+                                        if let track = playerService.track(for: entry) {
+                                            QueueRowView(
+                                                entryID: entry.id,
+                                                trackID: track.id,
+                                                title: track.title,
+                                                artist: track.artist,
+                                                durationText: TimeFormatting.format(seconds: track.duration),
+                                                artworkKey: track.artworkKey,
+                                                albumTitle: track.album,
+                                                isNext: entry.id == viewModel.nextEntryID,
+                                                kind: .upNext,
+                                                onTap: {
+                                                    playerService.playQueueEntry(id: entry.id)
+                                                },
+                                                onRemove: {
+                                                    if let idx = playerService.queue.firstIndex(where: { $0.id == entry.id }) {
+                                                        playerService.removeQueueItem(at: idx)
+                                                    }
+                                                },
+                                                onMoveSection: {
+                                                    if let idx = playerService.queue.firstIndex(where: { $0.id == entry.id }) {
+                                                        playerService.moveFromQueueToPlayNext(
+                                                            queueIndex: idx,
+                                                            playNextDestinationIndex: playerService.playNextQueue.count
+                                                        )
+                                                        HapticFeedback.dragDrop()
+                                                    }
+                                                },
+                                                onNavigateToArtist: { name in
+                                                    navigateToArtist(name: name, fallbackTrack: track)
+                                                },
+                                                onNavigateToAlbum: { title, artist in
+                                                    navigateToAlbum(title: title, artist: artist, fallbackTrack: track)
+                                                }
+                                            )
+                                            .equatable()
+                                            .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+                                            .listRowSeparator(.hidden)
+                                            .listRowBackground(Color.clear)
+                                        }
+                                    }
+                                    .onMove { source, destination in
+                                        let baseIndex = (playerService.currentIndex ?? 0) + 1
+                                        var adjustedSource = IndexSet()
+                                        for offset in source {
+                                            adjustedSource.insert(baseIndex + offset)
+                                        }
+                                        let adjustedDestination = baseIndex + destination
+                                        playerService.moveQueueItem(fromOffsets: adjustedSource, toOffset: adjustedDestination)
+                                        HapticFeedback.dragDrop()
+                                    }
+                                } header: {
+                                    sectionHeaderView(
+                                        title: "UP NEXT (\(viewModel.upNextEntries.count))",
+                                        titleColor: .secondary,
+                                        onClear: {
+                                            clearUpcoming()
+                                        }
+                                    )
+                                }
                             }
                         }
-
-                        // 4. UP NEXT SECTION
-                        if !viewModel.upNextEntries.isEmpty {
-                            Section {
-                                ForEach(viewModel.upNextEntries) { entry in
-                                    if let track = playerService.track(for: entry) {
-                                        QueueRowView(
-                                            entryID: entry.id,
-                                            trackID: track.id,
-                                            title: track.title,
-                                            artist: track.artist,
-                                            durationText: TimeFormatting.format(seconds: track.duration),
-                                            artworkKey: track.artworkKey,
-                                            albumTitle: track.album,
-                                            isNext: entry.id == viewModel.nextEntryID,
-                                            kind: .upNext,
-                                            onTap: {
-                                                playerService.playQueueEntry(id: entry.id)
-                                            },
-                                            onRemove: {
-                                                if let idx = playerService.queue.firstIndex(where: { $0.id == entry.id }) {
-                                                    playerService.removeQueueItem(at: idx)
-                                                }
-                                            },
-                                            onMoveSection: {
-                                                if let idx = playerService.queue.firstIndex(where: { $0.id == entry.id }) {
-                                                    playerService.moveFromQueueToPlayNext(
-                                                        queueIndex: idx,
-                                                        playNextDestinationIndex: playerService.playNextQueue.count
-                                                    )
-                                                    HapticFeedback.dragDrop()
-                                                }
-                                            },
-                                            onNavigateToArtist: { name in
-                                                navigateToArtist(name: name, fallbackTrack: track)
-                                            },
-                                            onNavigateToAlbum: { title, artist in
-                                                navigateToAlbum(title: title, artist: artist, fallbackTrack: track)
-                                            }
-                                        )
-                                        .equatable()
-                                        .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
-                                        .listRowSeparator(.hidden)
-                                        .listRowBackground(Color.clear)
-                                    }
-                                }
-                                .onMove { source, destination in
-                                    let baseIndex = (playerService.currentIndex ?? 0) + 1
-                                    var adjustedSource = IndexSet()
-                                    for offset in source {
-                                        adjustedSource.insert(baseIndex + offset)
-                                    }
-                                    let adjustedDestination = baseIndex + destination
-                                    playerService.moveQueueItem(fromOffsets: adjustedSource, toOffset: adjustedDestination)
-                                    HapticFeedback.dragDrop()
-                                }
-                            } header: {
-                                sectionHeaderView(
-                                    title: "UP NEXT (\(viewModel.upNextEntries.count))",
-                                    titleColor: .secondary,
-                                    onClear: {
-                                        clearUpcoming()
-                                    }
+                        .listStyle(.plain)
+                        .scrollContentBackground(.hidden)
+                        .background(appTheme.backgroundColor.ignoresSafeArea())
+                        .opacity(isPositionedAtNowPlaying ? 1 : 0)
+                        .task {
+                            // Runs once per open (not on track changes). Past rows must exist and the List must
+                            // have laid them out before scrollTo can land on Now Playing, so load the entries if
+                            // the outer onAppear hasn't yet, then scroll after the next layout passes and reveal.
+                            if !viewModel.hasLoaded {
+                                viewModel.update(
+                                    queue: playerService.queue,
+                                    playNextQueue: playerService.playNextQueue,
+                                    currentIndex: playerService.currentIndex
                                 )
                             }
+                            if playerService.currentTrack != nil {
+                                await Task.yield()
+                                proxy.scrollTo("now_playing_item", anchor: .top)
+                                try? await Task.sleep(for: .milliseconds(32))
+                                proxy.scrollTo("now_playing_item", anchor: .top)
+                                try? await Task.sleep(for: .milliseconds(16))
+                            }
+                            isPositionedAtNowPlaying = true
                         }
                     }
-                    .listStyle(.plain)
-                    .scrollContentBackground(.hidden)
-                    .background(appTheme.backgroundColor.ignoresSafeArea())
                 }
             }
             .background(appTheme.backgroundColor.ignoresSafeArea())
@@ -363,9 +371,11 @@ final class QueueViewModel {
     var playNextEntries: [QueueEntry] = []
     var upNextEntries: [QueueEntry] = []
     var nextEntryID: UUID? = nil
-    var isPastExpanded: Bool = false
+    /// True once `update` has run at least once for this queue sheet.
+    @ObservationIgnored private(set) var hasLoaded = false
 
     func update(queue: [QueueEntry], playNextQueue: [QueueEntry], currentIndex: Int?) {
+        hasLoaded = true
         let currentIdx = currentIndex ?? 0
 
         // Past entries
