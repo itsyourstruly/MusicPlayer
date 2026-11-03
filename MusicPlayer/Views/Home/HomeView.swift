@@ -11,6 +11,7 @@ public struct HomeView: View {
     @Binding var selectedAlbumForNavigation: Album?
     @Binding var selectedPlaylistForNavigation: Playlist?
     @State private var showingShuffleTargetPicker: Bool = false
+    @State private var selectedArtistForNavigationHome: Artist? = nil
 
     @Binding var navigateToSearch: Bool
 
@@ -58,6 +59,9 @@ public struct HomeView: View {
                         },
                         onSelectAlbum: { album in
                             selectedAlbumForNavigation = album
+                        },
+                        onSelectArtist: { artist in
+                            selectedArtistForNavigationHome = artist
                         }
                     )
                 }
@@ -85,6 +89,13 @@ public struct HomeView: View {
         .navigationDestination(item: $selectedAlbumForNavigation) { album in
             AlbumDetailView(
                 album: album,
+                libraryStore: libraryStore,
+                playerService: playerService
+            )
+        }
+        .navigationDestination(item: $selectedArtistForNavigationHome) { artist in
+            ArtistDetailView(
+                artist: artist,
                 libraryStore: libraryStore,
                 playerService: playerService
             )
@@ -138,34 +149,7 @@ public struct HomeView: View {
                                 }
                             }
                             .buttonStyle(.plain)
-                            .contextMenu {
-                                Button(action: {
-                                    let tracks = album.tracks
-                                    if let first = tracks.first {
-                                        playerService.play(track: first, inQueue: tracks)
-                                    }
-                                }) {
-                                    Text("PLAY ALBUM")
-                                }
-                                Button(action: {
-                                    let tracks = album.tracks
-                                    playerService.playNext(tracks: tracks)
-                                }) {
-                                    Text("PLAY NEXT")
-                                }
-                                Button(action: {
-                                    let tracks = album.tracks
-                                    playerService.appendToQueue(tracks: tracks)
-                                }) {
-                                    Text("ADD TO QUEUE")
-                                }
-                                Button(action: {
-                                    HapticFeedback.lightImpact()
-                                    libraryStore.togglePinAlbum(album)
-                                }) {
-                                    Text(libraryStore.isAlbumPinned(album) ? "UNPIN ALBUM" : "PIN ALBUM")
-                                }
-                            }
+                            .albumContextMenu(album: album, libraryStore: libraryStore, playerService: playerService, onGoToArtist: { selectedArtistForNavigationHome = $0 })
                         }
                     }
                     .padding(.horizontal, 2)

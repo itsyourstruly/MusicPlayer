@@ -46,7 +46,17 @@ public final class AudioPlayerService {
     // MARK: - Observable State
     
     // Currently playing or paused track
-    public private(set) var currentTrack: Track?
+    public private(set) var currentTrack: Track? {
+        didSet {
+            guard oldValue?.id != currentTrack?.id else { return }
+            // CACHE IN ADVANCE: keep the outgoing track's session file briefly (crossfade tail), then offload it.
+            if let previousID = oldValue?.id {
+                advanceCacheGraceIDs[previousID] = Date()
+                scheduleAdvanceCacheGraceExpiry()
+            }
+            scheduleAdvanceCacheReconcile()
+        }
+    }
     // Current playback state (playing, paused, stopped)
     public private(set) var playbackStatus: PlaybackStatus = .stopped {
         didSet {
@@ -118,16 +128,22 @@ public final class AudioPlayerService {
         didSet {
             updateQueueBadges()
             prewarmNextTrackIfNeeded()
+            scheduleAdvanceCacheReconcile()
         }
     }
     // Index of current track in active queue
     public private(set) var currentIndex: Int? {
         didSet {
             updateQueueBadges()
+            scheduleAdvanceCacheReconcile()
         }
     }
     // Active repeat configuration (off, all, one)
-    public var repeatMode: RepeatMode = .off
+    public var repeatMode: RepeatMode = .off {
+        didSet {
+            if oldValue != repeatMode { scheduleAdvanceCacheReconcile() }
+        }
+    }
     // Active shuffle configuration
     public var shuffleMode: ShuffleMode = .off
     
@@ -233,6 +249,7 @@ public final class AudioPlayerService {
         didSet {
             updateQueueBadges()
             prewarmNextTrackIfNeeded()
+            scheduleAdvanceCacheReconcile()
         }
     }
     // Callback invoked whenever a track begins playing
@@ -248,9 +265,35 @@ public final class AudioPlayerService {
     // Cloud streaming, prefetch & Jellyfin reporting state
     public private(set) var cloudWaitTrackID: UUID?
     public var cloudPlaybackError: String?
-    public var serverSources: [ServerSourceLink] = []
+    public var serverSources: [ServerSourceLink] = [] {
+        didSet {
+            if oldValue != serverSources { scheduleAdvanceCacheReconcile() }
+        }
+    }
     public var autoDownloadOnPlay: Bool = false
     public var downloadOnCellular: Bool = true
+    // CACHE IN ADVANCE: session-caches the next N streamed server tracks once the current one is on device.
+    public var cacheInAdvanceEnabled: Bool = false {
+        didSet {
+            if oldValue != cacheInAdvanceEnabled { scheduleAdvanceCacheReconcile() }
+        }
+    }
+    public var cacheInAdvanceCount: Int = 3 {
+        didSet {
+            if oldValue != cacheInAdvanceCount { scheduleAdvanceCacheReconcile() }
+        }
+    }
+    /// Track whose playback is fully on device, which unlocks advance caching (nil = locked).
+    @ObservationIgnored private var advanceCacheGateTrackID: UUID?
+    /// Start of the 60 s fallback clock for a streamed current track that never reports fully buffered.
+    @ObservationIgnored private var advanceCacheGateClockTrackID: UUID?
+    @ObservationIgnored private var advanceCacheGateClockStart: Date?
+    /// Recently played tracks whose session files are kept for a short grace period (crossfade tail).
+    @ObservationIgnored private var advanceCacheGraceIDs: [UUID: Date] = [:]
+    /// True while the session cache may hold files (so changes still reconcile after the toggle goes off).
+    @ObservationIgnored private var advanceCacheHasState: Bool = false
+    @ObservationIgnored private var advanceCacheReconcileTask: Task<Void, Never>?
+    @ObservationIgnored private var advanceCacheGraceTask: Task<Void, Never>?
 
     /// Provider for a server track's source, or nil for local tracks / unsupported server kinds.
     private func serverProvider(for track: Track) -> (any MediaServerProvider)? {
@@ -348,6 +391,11 @@ public final class AudioPlayerService {
     @ObservationIgnored private var prewarmedPlayerItem: AVPlayerItem?
     @ObservationIgnored private var prewarmingTrackID: UUID?
     @ObservationIgnored private var prewarmTask: Task<Void, Never>?
+    /// Track whose player item must be rebuilt before it can play (network loss, failed load or transcode).
+    @ObservationIgnored private var rebuildTrackID: UUID?
+    @ObservationIgnored private var rebuildPosition: TimeInterval = 0
+    /// Parked by a network failure while meant to be playing: resume automatically on reconnect.
+    @ObservationIgnored private var rebuildWantsPlay = false
     
     // MARK: - Playback Position Helpers
     
@@ -492,6 +540,8 @@ public final class AudioPlayerService {
         setupLifecycleObservers()
 #endif
         EqualizerManager.shared.playerService = self
+        // CACHE IN ADVANCE is session-only: drop anything left from a previous launch.
+        Task { await SessionStreamCache.shared.removeAll() }
     }
     
     deinit {
@@ -740,11 +790,17 @@ public final class AudioPlayerService {
     
     /// Toggles play and pause state.
     public func togglePlayPause() {
-        if playbackStatus == .playing || isFadingInPlay {
+        if willPauseOnToggle {
             pause()
         } else {
             play()
         }
+    }
+
+    /// True when `togglePlayPause()` would pause (playing, or fading in to play). Lets UI pick the right
+    /// feedback before toggling.
+    public var willPauseOnToggle: Bool {
+        playbackStatus == .playing || isFadingInPlay
     }
     
     /// Dynamically applies playback rate to the active player.
@@ -769,6 +825,11 @@ public final class AudioPlayerService {
     /// Resumes playback. When TRANSITION TRACKS WHEN SKIPPING is enabled, smoothly fades in audio
     /// quickly at first, then smoothens out nicely to full volume.
     public func play() {
+        // A failed or parked item cannot play: rebuild it from the track at the saved position.
+        if let track = currentTrack, needsItemRebuild(for: track) {
+            rebuildAndPlay(track: track, at: rebuildTrackID == track.id ? rebuildPosition : currentTime)
+            return
+        }
         // Ensure preconditions are met before proceeding
         guard let player = player, player.currentItem != nil else {
             if let track = currentTrack ?? (queue.first.flatMap { track(for: $0) }) {
@@ -793,7 +854,7 @@ public final class AudioPlayerService {
         let speed = Float(EqualizerManager.shared.playbackSpeed)
         player.defaultRate = speed
         player.isMuted = isMuted
-        let isRemote = (currentTrack?.isJellyfinItem == true || currentTrack?.metadataSource == .server) && JellyfinDownloadManager.shared.localFileURL(for: currentTrack?.id ?? UUID()) == nil
+        let isRemote = currentTrack.map { isRemoteServerStream($0) } ?? false
         player.automaticallyWaitsToMinimizeStalling = isRemote
 
         let wasFadingOut = isFadingOutPause
@@ -853,6 +914,7 @@ public final class AudioPlayerService {
         pendingSmoothSkipAction = nil
 
         userPausedManually = true
+        rebuildWantsPlay = false
         AudioSessionManager.shared.markPaused()
 
         guard let player = player else {
@@ -976,6 +1038,10 @@ public final class AudioPlayerService {
         let speed = Float(EqualizerManager.shared.playbackSpeed)
         // If track has been playing for more than 3 seconds, restart and play it
         if currentTime > 3.0 {
+            if let track = currentTrack, needsItemRebuild(for: track) {
+                rebuildAndPlay(track: track, at: 0)
+                return
+            }
             seek(to: 0)
             player?.defaultRate = speed
             player?.play()
@@ -1027,6 +1093,10 @@ public final class AudioPlayerService {
                 loadAndPlay(track: lastSong)
             }
         } else {
+            if let track = currentTrack, needsItemRebuild(for: track) {
+                rebuildAndPlay(track: track, at: 0)
+                return
+            }
             seek(to: 0)
             let speed = Float(EqualizerManager.shared.playbackSpeed)
             player?.defaultRate = speed
@@ -1368,6 +1438,8 @@ public final class AudioPlayerService {
         prewarmedTrackID = nil
         prewarmedPlayerItem = nil
         prewarmingTrackID = nil
+        rebuildTrackID = nil
+        rebuildWantsPlay = false
         teardownPlayerObservers()
         player?.pause()
         player = nil
@@ -1382,6 +1454,9 @@ public final class AudioPlayerService {
         activeTrackSecurityScopeURL?.stopAccessingSecurityScopedResource()
         activeTrackSecurityScopeURL = nil
         clearNowPlayingInfo()
+        // Nothing is playing any more: let the pending reconcile offload every session-cached file.
+        advanceCacheGraceIDs.removeAll()
+        advanceCacheGateTrackID = nil
     }
 
     /// Prunes tracks with the given IDs from playback, upcoming queue, play next, and cache.
@@ -1476,6 +1551,9 @@ public final class AudioPlayerService {
         } else if let transcodedURL = ServerTranscodeCache.cachedFileURL(for: track) {
             resolvedURL = transcodedURL
             AppLogger.audio.debug("Resolved pre-fetched server transcode: \(transcodedURL.lastPathComponent)")
+        } else if OfflineMode.isServerTrack(track), let sessionURL = SessionStreamCache.cachedFileURL(for: track) {
+            resolvedURL = sessionURL
+            AppLogger.audio.debug("Resolved cache-in-advance session file: \(sessionURL.lastPathComponent)")
         } else if track.isJellyfinItem || track.metadataSource == .server {
             let request = try signedServerRequest(for: track, purpose: .stream, caller: caller)
             guard let url = request.url else { throw ServerStreamError.noProvider }
@@ -1507,8 +1585,10 @@ public final class AudioPlayerService {
     }
 
     // Load and play
-    private func loadAndPlay(track: Track) {
+    private func loadAndPlay(track: Track, resumeAt: TimeInterval? = nil) {
         PlaybackTiming.tap(track.id)
+        rebuildTrackID = nil
+        rebuildWantsPlay = false
         if let current = currentTrack, current.id != track.id {
             saveCurrentPlaybackPositionIfNeeded()
         }
@@ -1530,7 +1610,7 @@ public final class AudioPlayerService {
         }
         self.lastPlaybackError = nil
 
-        let resumePosition = savedPlaybackPosition(for: track) ?? 0.0
+        let resumePosition = resumeAt ?? savedPlaybackPosition(for: track) ?? 0.0
         self.currentTime = resumePosition
         self.hasCountedCurrentPlay = false
         self.playbackAccumulatedTime = 0
@@ -1569,6 +1649,7 @@ public final class AudioPlayerService {
                     } catch {
                         guard self.cloudWaitTrackID == track.id else { return }
                         self.cloudWaitTrackID = nil
+                        self.markNeedsRebuild(track: track, position: resumePosition)
                         self.playbackStatus = .paused
                         self.cloudPlaybackError = error.localizedDescription
                         HapticFeedback.notificationError()
@@ -1584,6 +1665,7 @@ public final class AudioPlayerService {
         if needsTranscodePrefetch(track) {
             let requests = transcodeRequests(for: track)
             guard !requests.isEmpty else {
+                markNeedsRebuild(track: track, position: resumePosition)
                 self.playbackStatus = .paused
                 self.cloudPlaybackError = "SERVER UNAVAILABLE"
                 return
@@ -1599,6 +1681,11 @@ public final class AudioPlayerService {
                 } catch {
                     guard let self, self.cloudWaitTrackID == track.id else { return }
                     self.cloudWaitTrackID = nil
+                    if Self.isNetworkFailure(error) || !ServerNetworkMonitor.isPathSatisfied {
+                        self.parkForNetworkRecovery(track: track, position: resumePosition)
+                        return
+                    }
+                    self.markNeedsRebuild(track: track, position: resumePosition)
                     self.playbackStatus = .paused
                     self.cloudPlaybackError = "TRANSCODE FAILED"
                     HapticFeedback.notificationError()
@@ -1626,16 +1713,14 @@ public final class AudioPlayerService {
 
         // 2. Use pre-warmed item if available, otherwise instantiate with pristine audio algorithm
         let playerItem: AVPlayerItem
-        if prewarmedTrackID == track.id, let prewarmed = prewarmedPlayerItem {
+        if let prewarmed = takePrewarmedItem(for: track.id) {
             playerItem = prewarmed
-            prewarmedTrackID = nil
-            prewarmedPlayerItem = nil
-            prewarmingTrackID = nil
         } else {
             do {
                 playerItem = try makePlayerItem(for: track, caller: "play")
             } catch {
                 player?.pause()
+                markNeedsRebuild(track: track, position: resumePosition)
                 self.playbackStatus = .paused
                 self.cloudPlaybackError = error.localizedDescription
                 HapticFeedback.notificationError()
@@ -1647,7 +1732,7 @@ public final class AudioPlayerService {
         if playerItem.audioMix == nil {
             attachAudioMix(to: playerItem)
         }
-        let isRemoteStream = (track.isJellyfinItem || track.metadataSource == .server) && JellyfinDownloadManager.shared.localFileURL(for: track.id) == nil
+        let isRemoteStream = isRemoteServerStream(track)
         playerItem.preferredForwardBufferDuration = 0.0 // 0 = system-chosen buffer for local and remote
 
         if (track.isJellyfinItem || track.metadataSource == .server) && autoDownloadOnPlay {
@@ -1846,6 +1931,285 @@ public final class AudioPlayerService {
         // The tap is attached once at item creation and detached only on track change.
     }
 
+    // MARK: - Cache In Advance
+
+    /// True when playback of this track would come over the network (server track with no download or session file).
+    private func isRemoteServerStream(_ track: Track) -> Bool {
+        OfflineMode.isServerTrack(track)
+            && JellyfinDownloadManager.shared.localFileURL(for: track.id) == nil
+            && SessionStreamCache.cachedFileURL(for: track) == nil
+    }
+
+    private var isAdvanceCacheFeatureOn: Bool {
+        cacheInAdvanceEnabled && cacheInAdvanceCount > 0 && !serverSources.isEmpty
+    }
+
+    /// Streamed server tracks only: downloaded, local/iCloud and already-transcoded tracks are skipped and do not count.
+    private func isAdvanceCacheCandidate(_ track: Track) -> Bool {
+        OfflineMode.isServerTrack(track)
+            && JellyfinDownloadManager.shared.localFileURL(for: track.id) == nil
+            && !(TranscodePolicy.requiresTranscode(track) && ServerTranscodeCache.cachedFileURL(for: track) != nil)
+    }
+
+    /// The next N streamed server tracks in playback order: Play Next, then the queue after the current index
+    /// (wrapping on repeat-all), deduplicated and excluding the current track. Empty on repeat-one.
+    private func advanceCacheWindow() -> [Track] {
+        let limit = min(max(cacheInAdvanceCount, 0), 25)
+        guard limit > 0, repeatMode != .one else { return [] }
+        var result: [Track] = []
+        var seen: Set<UUID> = []
+        if let current = currentTrack { seen.insert(current.id) }
+        func consider(_ entry: QueueEntry) -> Bool {
+            if let track = track(for: entry), !seen.contains(track.id) {
+                seen.insert(track.id)
+                if isAdvanceCacheCandidate(track) { result.append(track) }
+            }
+            return result.count >= limit
+        }
+        for entry in playNextQueue where consider(entry) { return result }
+        if let index = currentIndex, !queue.isEmpty {
+            if index + 1 < queue.count {
+                for entry in queue[(index + 1)...] where consider(entry) { return result }
+            }
+            if repeatMode == .all {
+                for entry in queue[..<min(max(index, 0), queue.count)] where consider(entry) { return result }
+            }
+        }
+        return result
+    }
+
+    /// Debounced reconcile after queue, playback order, settings or track changes.
+    private func scheduleAdvanceCacheReconcile() {
+        guard isAdvanceCacheFeatureOn || advanceCacheHasState else { return }
+        advanceCacheReconcileTask?.cancel()
+        advanceCacheReconcileTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            guard !Task.isCancelled else { return }
+            self?.reconcileAdvanceCache()
+        }
+    }
+
+    private func scheduleAdvanceCacheGraceExpiry() {
+        guard isAdvanceCacheFeatureOn || advanceCacheHasState else { return }
+        advanceCacheGraceTask?.cancel()
+        advanceCacheGraceTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 21_000_000_000)
+            guard !Task.isCancelled else { return }
+            self?.reconcileAdvanceCache()
+        }
+    }
+
+    /// Keeps the current track, recently played grace tracks and the upcoming window; evicts everything else and,
+    /// once the current track is fully on device, fetches what the window is missing (nearest first, one at a time).
+    private func reconcileAdvanceCache() {
+        let now = Date()
+        advanceCacheGraceIDs = advanceCacheGraceIDs.filter { now.timeIntervalSince($0.value) < 20 }
+        var keep = Set(advanceCacheGraceIDs.keys)
+        if let current = currentTrack { keep.insert(current.id) }
+
+        guard isAdvanceCacheFeatureOn else {
+            if keep.isEmpty {
+                advanceCacheHasState = false
+                Task { await SessionStreamCache.shared.removeAll() }
+            } else {
+                Task { await SessionStreamCache.shared.sync(keep: keep, jobs: [], onStored: { _ in }) }
+            }
+            return
+        }
+        advanceCacheHasState = true
+
+        let window = advanceCacheWindow()
+        keep.formUnion(window.map(\.id))
+        var jobs: [SessionStreamCache.Job] = []
+        if let current = currentTrack, advanceCacheGateTrackID == current.id, !OfflineMode.isEnabled {
+            for track in window {
+                if TranscodePolicy.requiresTranscode(track) {
+                    // Transcodes keep today's persistent ServerTranscodeCache behavior.
+                    guard ServerTranscodeCache.cachedFileURL(for: track) == nil else { continue }
+                    let requests = transcodeRequests(for: track)
+                    if !requests.isEmpty { jobs.append(.transcode(track: track, requests: requests)) }
+                } else if SessionStreamCache.cachedFileURL(for: track) == nil,
+                          let sourceID = track.folderID,
+                          let request = try? signedServerRequest(for: track, purpose: .stream, caller: "cacheInAdvance") {
+                    jobs.append(.stream(trackID: track.id, sourceID: sourceID, request: request,
+                                        preferredExtension: track.url.pathExtension))
+                }
+            }
+        }
+        let onStored: @Sendable (UUID) -> Void = { [weak self] trackID in
+            Task { @MainActor in self?.advanceCacheDidStore(trackID) }
+        }
+        Task { await SessionStreamCache.shared.sync(keep: keep, jobs: jobs, onStored: onStored) }
+    }
+
+    /// Opens the gate once the current track is playing and fully on device: local/downloaded/cached immediately,
+    /// streams when the buffered range reaches the end (AVPlayerItem.loadedTimeRanges) or the buffer is full,
+    /// with a 60 s fallback. Called from the periodic time observer.
+    private func advanceCacheTick() {
+        guard isAdvanceCacheFeatureOn, !isCrossfading, skipTransitionTask == nil,
+              let track = currentTrack, advanceCacheGateTrackID != track.id,
+              playbackStatus == .playing,
+              let item = player?.currentItem, item.status == .readyToPlay else { return }
+        var onDevice = !isRemoteServerStream(track)
+        if !onDevice {
+            let itemSeconds = CMTimeGetSeconds(item.duration)
+            let total = (itemSeconds.isFinite && itemSeconds > 0) ? itemSeconds : duration
+            let now = CMTimeGetSeconds(item.currentTime())
+            let bufferedEnd = item.loadedTimeRanges
+                .map { $0.timeRangeValue }
+                .filter { CMTimeGetSeconds($0.start) <= now + 1 }
+                .map { CMTimeGetSeconds(CMTimeRangeGetEnd($0)) }
+                .filter { $0.isFinite }
+                .max() ?? 0
+            if (total > 0 && bufferedEnd >= total - 1) || item.isPlaybackBufferFull {
+                onDevice = true
+            } else if advanceCacheGateClockTrackID != track.id {
+                advanceCacheGateClockTrackID = track.id
+                advanceCacheGateClockStart = Date()
+            } else if let start = advanceCacheGateClockStart, Date().timeIntervalSince(start) >= 60 {
+                onDevice = true
+            }
+        }
+        guard onDevice else { return }
+        advanceCacheGateTrackID = track.id
+        advanceCacheReconcileTask?.cancel()
+        reconcileAdvanceCache()
+    }
+
+    /// A session file just landed: replace a stream-backed prewarm of that track so it plays from disk.
+    private func advanceCacheDidStore(_ trackID: UUID) {
+        guard prewarmedTrackID == trackID, let item = prewarmedPlayerItem,
+              let asset = item.asset as? AVURLAsset, !asset.url.isFileURL else { return }
+        prewarmTask?.cancel()
+        prewarmTask = nil
+        prewarmedPlayerItem = nil
+        prewarmedTrackID = nil
+        prewarmingTrackID = nil
+        prewarmNextTrackIfNeeded()
+    }
+
+    // MARK: - Network Recovery
+
+    /// True for URL errors that mean no connection / server unreachable (checks underlying errors too).
+    nonisolated private static func isNetworkFailure(_ error: Error?) -> Bool {
+        let codes: Set<Int> = [
+            NSURLErrorNotConnectedToInternet, NSURLErrorNetworkConnectionLost, NSURLErrorTimedOut,
+            NSURLErrorCannotFindHost, NSURLErrorCannotConnectToHost, NSURLErrorDNSLookupFailed,
+            NSURLErrorDataNotAllowed, NSURLErrorInternationalRoamingOff, NSURLErrorCallIsActive
+        ]
+        var current = error.map { $0 as NSError }
+        var depth = 0
+        while let err = current, depth < 6 {
+            if err.domain == NSURLErrorDomain && codes.contains(err.code) { return true }
+            current = err.userInfo[NSUnderlyingErrorKey] as? NSError
+            depth += 1
+        }
+        return false
+    }
+
+    /// A streamed server track that failed because of the network (error chain, item error log, or no path).
+    private func shouldParkForNetwork(track: Track, error: Error?, item: AVPlayerItem) -> Bool {
+        guard isRemoteServerStream(track) else { return false }
+        if !ServerNetworkMonitor.isPathSatisfied || Self.isNetworkFailure(error) { return true }
+        let codes: Set<Int> = [NSURLErrorNotConnectedToInternet, NSURLErrorNetworkConnectionLost, NSURLErrorTimedOut,
+                               NSURLErrorCannotFindHost, NSURLErrorCannotConnectToHost, NSURLErrorDNSLookupFailed]
+        return (item.errorLog()?.events ?? []).contains { $0.errorDomain == NSURLErrorDomain && codes.contains($0.errorStatusCode) }
+    }
+
+    /// The current item cannot play as is and must be rebuilt from the track.
+    private func needsItemRebuild(for track: Track) -> Bool {
+        rebuildTrackID == track.id || player?.currentItem?.status == .failed || player?.status == .failed
+    }
+
+    private func markNeedsRebuild(track: Track, position: TimeInterval) {
+        rebuildTrackID = track.id
+        rebuildPosition = max(0, position)
+    }
+
+    /// Rebuilds the item (and a failed player) and plays from `position`.
+    private func rebuildAndPlay(track: Track, at position: TimeInterval) {
+        rebuildTrackID = nil
+        rebuildWantsPlay = false
+        if player?.status == .failed {
+            teardownPlayerObservers()
+            player?.replaceCurrentItem(with: nil)
+            player = nil
+        }
+        dropFailedOrStreamPrewarm(streamsToo: false)
+        userPausedManually = false
+        AppLogger.audio.info("Rebuilding player item for \"\(track.title)\" at \(String(format: "%.2f", position))s.")
+        loadAndPlay(track: track, resumeAt: position)
+    }
+
+    /// Stops on the track that lost its connection (no skipping) and remembers where to pick up.
+    private func parkForNetworkRecovery(track: Track, position: TimeInterval) {
+        let wasMeantToPlay = playbackStatus == .playing || playbackStatus == .buffering
+        markNeedsRebuild(track: track, position: position)
+        rebuildWantsPlay = wasMeantToPlay
+        isTransitioningTrack = false
+        transitionTimeoutTask?.cancel()
+        playPauseFadeTask?.cancel()
+        playPauseFadeTask = nil
+        isFadingInPlay = false
+        isFadingOutPause = false
+        player?.pause()
+        player?.volume = volume
+        playbackStatus = .paused
+        updateNowPlayingPlaybackState()
+        cloudPlaybackError = "NO CONNECTION"
+        HapticFeedback.notificationError()
+        dropFailedOrStreamPrewarm(streamsToo: true)
+        AppLogger.audio.warning("Parked \"\(track.title)\" at \(String(format: "%.2f", position))s after losing the connection (resume on reconnect: \(wasMeantToPlay)).")
+    }
+
+    /// Drops a prewarmed item that failed (and, if asked, any stream-backed one).
+    private func dropFailedOrStreamPrewarm(streamsToo: Bool) {
+        guard let item = prewarmedPlayerItem else {
+            // A stream prewarm still loading would fail offline: cancel it too.
+            if streamsToo, prewarmTask != nil {
+                prewarmTask?.cancel()
+                prewarmTask = nil
+                prewarmingTrackID = nil
+            }
+            return
+        }
+        let isStream = (item.asset as? AVURLAsset).map { !$0.url.isFileURL } ?? false
+        guard item.status == .failed || (streamsToo && isStream) else { return }
+        prewarmTask?.cancel()
+        prewarmTask = nil
+        prewarmedTrackID = nil
+        prewarmedPlayerItem = nil
+        prewarmingTrackID = nil
+    }
+
+    /// Returns the prewarmed item for this track (clearing the slot), or nil if none or it failed.
+    private func takePrewarmedItem(for trackID: UUID) -> AVPlayerItem? {
+        guard prewarmedTrackID == trackID, let item = prewarmedPlayerItem else { return nil }
+        prewarmedTrackID = nil
+        prewarmedPlayerItem = nil
+        prewarmingTrackID = nil
+        return item.status == .failed ? nil : item
+    }
+
+    /// Network path came back (or changed): pick up a parked or stuck stream, refresh prewarm and the advance cache.
+    func networkDidReconnect() {
+        guard !OfflineMode.isEnabled else { return }
+        crossfadeFailedTrackID = nil
+        dropFailedOrStreamPrewarm(streamsToo: false)
+        if let track = currentTrack, !isCrossfading, !isStaggeredTransitioning, cloudWaitTrackID == nil {
+            if rebuildTrackID == track.id {
+                if rebuildWantsPlay {
+                    rebuildAndPlay(track: track, at: rebuildPosition)
+                }
+            } else if isRemoteServerStream(track), playbackStatus == .buffering || player?.currentItem?.status == .failed,
+                      player?.currentItem?.isPlaybackLikelyToKeepUp != true {
+                rebuildAndPlay(track: track, at: currentTime)
+            }
+        }
+        prewarmNextTrackIfNeeded()
+        scheduleAdvanceCacheReconcile()
+    }
+
     // Pre-warms the next track in queue asynchronously so skipping to it is instantaneous
     private func prewarmNextTrackIfNeeded() {
         guard let currentItem = player?.currentItem, currentItem.status == .readyToPlay else {
@@ -1876,6 +2240,10 @@ public final class AudioPlayerService {
             return
         }
         
+        // No connection: a stream item opened now would fail and stay failed after reconnect.
+        if isRemoteServerStream(next) && !ServerNetworkMonitor.isPathSatisfied {
+            return
+        }
         prewarmingTrackID = next.id
         prewarmTask?.cancel()
         prewarmTask = Task { [weak self] in
@@ -1897,11 +2265,17 @@ public final class AudioPlayerService {
                 )
             } else if next.isJellyfinItem || next.metadataSource == .server {
                 if let urlAsset = item.asset as? AVURLAsset {
-                    _ = try? await urlAsset.load(.isPlayable, .duration)
+                    do {
+                        _ = try await urlAsset.load(.isPlayable, .duration)
+                    } catch {
+                        // Failed load (e.g. offline): never keep it, the asset would stay failed.
+                        self.prewarmingTrackID = nil
+                        return
+                    }
                 }
             }
             
-            guard !Task.isCancelled else {
+            guard !Task.isCancelled, item.status != .failed else {
                 self.prewarmingTrackID = nil
                 return
             }
@@ -1968,6 +2342,8 @@ public final class AudioPlayerService {
         playerTimeControlObserver = player.observe(\.timeControlStatus, options: [.new]) { [weak self] p, _ in
             Task { @MainActor [weak self] in
                 guard let self = self else { return }
+                // Ignore late status callbacks from a player that has already been handed off (smooth skip / crossfade)
+                guard p === self.player else { return }
                 switch p.timeControlStatus {
                 case .playing:
                     self.isTransitioningTrack = false
@@ -2067,6 +2443,12 @@ public final class AudioPlayerService {
                     AppLogger.audio.error(fullReport)
                     self.lastPlaybackError = fullReport
 
+                    // Lost connection on a stream: park here and recover on reconnect instead of skipping down the queue.
+                    if self.currentTrack?.id == track.id, self.shouldParkForNetwork(track: track, error: item.error, item: item) {
+                        self.parkForNetworkRecovery(track: track, position: self.currentTime)
+                        return
+                    }
+
                     // Show short UPPERCASE error, fire haptic, and skip to the next track. Never sit silently on PLAY.
                     self.cloudPlaybackError = "CAN'T PLAY FILE"
                     HapticFeedback.notificationError()
@@ -2135,6 +2517,14 @@ public final class AudioPlayerService {
                 AppLogger.audio.warning(failReport)
                 guard let self = self else { return }
                 self.lastPlaybackError = failReport
+
+                // Lost connection mid-stream (not at the track's end): park and recover on reconnect.
+                let nearEnd = self.duration > 0 && self.currentTime >= self.duration - 2.0
+                if !nearEnd, self.currentTrack?.id == track.id,
+                   self.shouldParkForNetwork(track: track, error: error, item: playerItem) {
+                    self.parkForNetworkRecovery(track: track, position: self.currentTime)
+                    return
+                }
 
                 // If playback failed while audio processing tap was attached, detach audioMix immediately
                 if playerItem.audioMix != nil {
@@ -2326,6 +2716,7 @@ public final class AudioPlayerService {
             if self.isCrossfadeEnabled && !self.isCrossfading && self.duration > 0 {
                 self.checkAndTriggerCrossfadeIfNeeded()
             }
+            self.advanceCacheTick()
             }
             
             if self.duration <= 0, let itemDur = self.player?.currentItem?.duration {
@@ -2433,11 +2824,8 @@ public final class AudioPlayerService {
         // Next item: reuse the prewarmed item if it matches, else unified makePlayerItem (signed).
         // On failure the track ends normally and the regular advance surfaces the error.
         let nextItem: AVPlayerItem
-        if prewarmedTrackID == nextTrack.id, let prewarmed = prewarmedPlayerItem {
+        if let prewarmed = takePrewarmedItem(for: nextTrack.id) {
             nextItem = prewarmed
-            prewarmedTrackID = nil
-            prewarmedPlayerItem = nil
-            prewarmingTrackID = nil
         } else {
             do {
                 nextItem = try makePlayerItem(for: nextTrack, caller: "crossfade")
@@ -2478,7 +2866,7 @@ public final class AudioPlayerService {
         teardownItemObservers() // also clears boundary observers on the outgoing player
         
         // Incoming player
-        let isRemoteStream = (nextTrack.isJellyfinItem || nextTrack.metadataSource == .server) && JellyfinDownloadManager.shared.localFileURL(for: nextTrack.id) == nil
+        let isRemoteStream = isRemoteServerStream(nextTrack)
         let incomingPlayer = AVPlayer(playerItem: nextItem)
         incomingPlayer.automaticallyWaitsToMinimizeStalling = isRemoteStream
         incomingPlayer.allowsExternalPlayback = true
@@ -2677,11 +3065,8 @@ public final class AudioPlayerService {
         
         // 3. Prepare incoming player item using unified makePlayerItem
         let playerItem: AVPlayerItem
-        if prewarmedTrackID == nextTrack.id, let prewarmed = prewarmedPlayerItem {
+        if let prewarmed = takePrewarmedItem(for: nextTrack.id) {
             playerItem = prewarmed
-            prewarmedTrackID = nil
-            prewarmedPlayerItem = nil
-            prewarmingTrackID = nil
         } else {
             do {
                 playerItem = try makePlayerItem(for: nextTrack, caller: "smoothSkip")
@@ -2789,7 +3174,9 @@ public final class AudioPlayerService {
             
             guard !Task.isCancelled else { return }
             
-            // Finalize Handoff
+            // Finalize Handoff: stop listening to the old player's state first, then pause it (matches crossfade)
+            self.playerTimeControlObserver?.invalidate()
+            self.playerTimeControlObserver = nil
             outgoingPlayer.volume = 0.0
             outgoingPlayer.pause()
             outgoingPlayer.replaceCurrentItem(with: nil)
@@ -3423,6 +3810,9 @@ public final class AudioPlayerService {
         guard generation == nowPlayingArtworkGeneration, currentTrack?.id == trackID,
               var currentInfo = MPNowPlayingInfoCenter.default().nowPlayingInfo else { return false }
         currentInfo[MPMediaItemPropertyArtwork] = artwork
+        // Re-anchor the lock-screen clock so the progress bar keeps advancing from the real position
+        currentInfo[MPNowPlayingInfoPropertyElapsedPlaybackTime] = max(0, currentTime)
+        currentInfo[MPNowPlayingInfoPropertyPlaybackRate] = playbackStatus == .playing ? EqualizerManager.shared.playbackSpeed : 0.0
         MPNowPlayingInfoCenter.default().nowPlayingInfo = currentInfo
         return true
     }
@@ -3432,6 +3822,9 @@ public final class AudioPlayerService {
         guard duration > 0, var info = MPNowPlayingInfoCenter.default().nowPlayingInfo else { return }
         info[MPMediaItemPropertyPlaybackDuration] = duration
         info[MPNowPlayingInfoPropertyIsLiveStream] = false
+        // Re-anchor the lock-screen clock so the progress bar keeps advancing from the real position
+        info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = max(0, currentTime)
+        info[MPNowPlayingInfoPropertyPlaybackRate] = playbackStatus == .playing ? EqualizerManager.shared.playbackSpeed : 0.0
         MPNowPlayingInfoCenter.default().nowPlayingInfo = info
     }
 

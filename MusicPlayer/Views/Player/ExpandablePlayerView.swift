@@ -16,6 +16,8 @@ public struct ExpandablePlayerView: View {
     @State private var expansionProgress: CGFloat = 0.0
     @State private var dragStartProgress: CGFloat = 0.0
     @State private var isDragging: Bool = false
+    /// Direction a fullscreen drag committed to on its first movement, so a dismiss drag can never open the queue.
+    @State private var dragIntent: DragIntent = .undecided
     @State private var isCollapsingToMini: Bool = false
 
     /// Strict guard preventing button presses while dragging, flicking, or collapsing the player.
@@ -169,6 +171,15 @@ public struct ExpandablePlayerView: View {
                         if !isDragging {
                             isDragging = true
                             dragStartProgress = min(1.0, max(0.0, expansionProgress))
+                            dragIntent = .undecided
+                        }
+                        // Lock the fullscreen drag's intent on its first movement.
+                        if dragIntent == .undecided && dragStartProgress >= 0.5 {
+                            if abs(deltaX) > abs(deltaY) {
+                                dragIntent = .horizontal
+                            } else {
+                                dragIntent = deltaY > 0 ? .dismiss : .queue
+                            }
                         }
 
                         let computed = dragStartProgress - (deltaY / totalTravelDistance)
@@ -181,6 +192,8 @@ public struct ExpandablePlayerView: View {
                     },
                     onDragEnded: { translation, predictedEnd in
                         guard isDragging else { return }
+                        let intent = dragIntent
+                        dragIntent = .undecided
                         let h = translation.height
                         let w = translation.width
                         let predictedH = predictedEnd.height
@@ -219,7 +232,7 @@ public struct ExpandablePlayerView: View {
                                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.38) {
                                     isCollapsingToMini = false
                                 }
-                            } else if h < -35 || predictedH < -60 {
+                            } else if intent == .queue && (h < -35 || predictedH < -60) {
                                 // Upward swipe while in Fullscreen -> Open Queue!
                                 snapTo(expanded: true)
                                 showingQueue = true
@@ -355,7 +368,7 @@ public struct ExpandablePlayerView: View {
     private func skipNext() {
         // Ensure preconditions are met before proceeding
         guard playerService.hasNextTrack else { return }
-        HapticFeedback.trackSkip(forward: true)
+        HapticFeedback.transport(.next)
         playerService.next()
     }
 
@@ -363,13 +376,13 @@ public struct ExpandablePlayerView: View {
     private func skipPrevious() {
         // Ensure preconditions are met before proceeding
         guard playerService.hasPreviousTrack else { return }
-        HapticFeedback.trackSkip(forward: false)
+        HapticFeedback.transport(.back)
         playerService.previous()
     }
 
     // Playlist picker sheet
     private func playlistPickerSheet(for track: Track) -> some View {
-        PlaylistPickerSheet(libraryStore: libraryStore) { playlist in
+        PlaylistPickerSheet(libraryStore: libraryStore, previewArtworkKey: track.artworkKey) { playlist in
             HapticFeedback.notificationSuccess()
             libraryStore.addTrack(track, toPlaylistID: playlist.id)
             showingPlaylistPicker = false
@@ -453,6 +466,14 @@ private struct MorphingPlayerCard: View, Animatable {
     }
 
     @State private var lyricsGlobalFrame: CGRect = .zero
+
+    // Play/pause morph geometry: mini glyph measured at rest in the card space (per mode),
+    // fullscreen glyph measured in the fullscreen layer's own space (per layout, per screen size).
+    @State private var miniPlayGlyphIconFrame: CGRect = .zero
+    @State private var miniPlayGlyphTextFrame: CGRect = .zero
+    @State private var fullPlayGlyphStandardFrame: CGRect = .zero
+    @State private var fullPlayGlyphLyricsFrame: CGRect = .zero
+    @State private var fullPlayGlyphScreenSize: CGSize = .zero
 
     private func isLocationInsideLyrics(_ location: CGPoint) -> Bool {
         // If a card drag is already actively ongoing, don't interrupt it
@@ -545,6 +566,20 @@ private struct MorphingPlayerCard: View, Animatable {
         let miniOpacity: Double = max(0.0, min(1.0, Double(1.0 - clampedProgress * 2.8)))
         // Full opacity
         let fullOpacity: Double = max(0.0, min(1.0, Double((clampedProgress - 0.18) / 0.78)))
+        // Fullscreen layer's transition offset (shared by the layer and the play/pause morph target)
+        let fullLayerOffsetY: CGFloat = (1.0 - clampedProgress) * 28
+
+        // Play/pause morph: a single floating glyph replaces the mini and fullscreen buttons mid-transition.
+        // Falls back to the plain crossfade when unmeasured, in expanded lyrics, or while a cloud track loads.
+        let useIcons = libraryStore.settings.usePlayerIcons
+        let miniPlayGlyphFrame: CGRect = useIcons ? miniPlayGlyphIconFrame : miniPlayGlyphTextFrame
+        let fullPlayGlyphFrame: CGRect = isLyricsViewActive ? fullPlayGlyphLyricsFrame : fullPlayGlyphStandardFrame
+        let canMorphPlayPause: Bool = miniPlayGlyphFrame != .zero
+            && fullPlayGlyphFrame != .zero
+            && fullPlayGlyphScreenSize == CGSize(width: screenWidth, height: screenHeight)
+            && !(isLyricsViewActive && isLyricsExpanded)
+            && playerService.cloudWaitTrackID == nil
+        let isPlayPauseMorphing: Bool = canMorphPlayPause && clampedProgress > 0.001 && clampedProgress < 0.999
 
         ZStack(alignment: .bottom) {
             // Backdrop Dimmer (Smoothly dims background content without blocking miniplayer tabs)
@@ -565,22 +600,53 @@ private struct MorphingPlayerCard: View, Animatable {
                 cardBackground(cornerRadius: cardCornerRadius, progress: clampedProgress)
 
                 // 2. Miniplayer Layer (Always active when collapsed, handles tap-to-expand)
-                miniplayerContent(miniArtworkSize: miniArtworkSize)
+                miniplayerContent(
+                    miniArtworkSize: miniArtworkSize,
+                    hidesPlayPause: isPlayPauseMorphing,
+                    isAtRest: clampedProgress < 0.001
+                )
                     .opacity(miniOpacity)
                     .offset(x: -clampedProgress * 24)
                     .allowsHitTesting(clampedProgress < 0.25)
                     .zIndex(2)
+                    .onPreferenceChange(MiniPlayGlyphIconFrameKey.self) { frame in
+                        if frame != .zero && frame != self.miniPlayGlyphIconFrame {
+                            self.miniPlayGlyphIconFrame = frame
+                        }
+                    }
+                    .onPreferenceChange(MiniPlayGlyphTextFrameKey.self) { frame in
+                        if frame != .zero && frame != self.miniPlayGlyphTextFrame {
+                            self.miniPlayGlyphTextFrame = frame
+                        }
+                    }
 
                 // 3. Fullscreen Layer (Controls, progress bar, title, queue, lyrics)
                 if clampedProgress > 0.01 {
                     fullscreenContent(
                         fullArtworkSize: fullArtworkDimension,
-                        progress: clampedProgress
+                        progress: clampedProgress,
+                        hidesPlayPause: isPlayPauseMorphing
                     )
                     .opacity(fullOpacity)
-                    .offset(y: (1.0 - clampedProgress) * 28)
+                    .offset(y: fullLayerOffsetY)
                     .allowsHitTesting(clampedProgress > 0.75)
                     .zIndex(5)
+                }
+
+                // 3b. Floating play/pause morph. Driven purely by progress (like the shared artwork), so it
+                // follows drags and spring-backs; moves card-space mini center -> fullscreen center and grows.
+                if isPlayPauseMorphing {
+                    let fullCenterY: CGFloat = fullPlayGlyphFrame.midY + fullLayerOffsetY
+                    morphingPlayPauseGlyph(t: clampedProgress, useIcons: useIcons, isPlaying: isPlaying)
+                        .position(
+                            x: lerp(start: miniPlayGlyphFrame.midX, end: fullPlayGlyphFrame.midX, t: clampedProgress),
+                            y: lerp(start: miniPlayGlyphFrame.midY, end: fullCenterY, t: clampedProgress)
+                        )
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
+                        // Appears/disappears instantly at the hand-offs (never fades in on its own)
+                        .transition(.identity)
+                        .zIndex(6)
                 }
 
                 // 4. SINGLE SHARED ALBUM ARTWORK (Continuous transition in all modes: hero 3D in standard, header in lyrics mode)
@@ -729,6 +795,7 @@ private struct MorphingPlayerCard: View, Animatable {
                 )
                 .zIndex(10)
             }
+            .coordinateSpace(.named(playerCardMorphSpace))
             .frame(width: screenWidth - (horizontalMargin * 2), height: cardHeight, alignment: .topLeading)
             .clipShape(RoundedRectangle(cornerRadius: cardCornerRadius, style: .continuous))
             .shadow(
@@ -1077,14 +1144,24 @@ private struct MorphingPlayerCard: View, Animatable {
         let style = backgroundStyle
 
         return ZStack {
-            PlayerBackgroundView(
-                style: style,
-                appTheme: appTheme,
-                primaryColor: palette.primaryColor,
-                artworkKey: track.artworkKey,
-                cornerRadius: cornerRadius,
-                overlayOpacity: lerp(start: 0.38, end: 0.50, t: progress)
-            )
+            // Card-sized base keeps the card's layout unchanged; the background is laid out once at full-screen size,
+            // anchored to the card's top, and only clipped by the card. The miniplayer shows the top of the same
+            // background, and expanding reveals the rest, so it never rescales or re-blurs during the transition.
+            // Inputs are constant so the blur is not re-rendered per animation frame.
+            Color.clear
+                .overlay(alignment: .top) {
+                    PlayerBackgroundView(
+                        style: style,
+                        appTheme: appTheme,
+                        primaryColor: palette.primaryColor,
+                        artworkKey: track.artworkKey,
+                        cornerRadius: 0,
+                        overlayOpacity: 0.50
+                    )
+                    .frame(width: screenWidth, height: screenHeight)
+                    // Oversized layer: clipping doesn't limit hit testing, so keep it from catching taps outside the card
+                    .allowsHitTesting(false)
+                }
 
             // Border highlight
             RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
@@ -1096,7 +1173,7 @@ private struct MorphingPlayerCard: View, Animatable {
     // MARK: - Miniplayer Layer
 
     // Miniplayer content
-    private func miniplayerContent(miniArtworkSize: CGFloat) -> some View {
+    private func miniplayerContent(miniArtworkSize: CGFloat, hidesPlayPause: Bool, isAtRest: Bool) -> some View {
         HStack(spacing: 12) {
             // Tappable leading area to expand player
             HStack(spacing: 12) {
@@ -1128,15 +1205,59 @@ private struct MorphingPlayerCard: View, Animatable {
             // Play / Pause Button with immediate zero-latency touch delivery
             Button(action: {
                 guard canTriggerButtonPress() else { return }
-                HapticFeedback.lightImpact()
+                HapticFeedback.transport(playerService.willPauseOnToggle ? .pause : .play)
                 playerService.togglePlayPause()
             }) {
-                Text(playerService.playbackStatus.isPlaying ? "PAUSE" : "PLAY")
-                    .font(.system(size: 12, weight: .black, design: .monospaced))
-                    .foregroundStyle(Color.white)
-                    .contentTransition(.interpolate)
-                    .frame(width: 58, height: 36, alignment: .center)
-                    .contentShape(Rectangle())
+                Group {
+                    if libraryStore.settings.usePlayerIcons {
+                        // Icons mode: the icon's right edge sits exactly where the centered "PAUSE" text's right edge
+                        // would be (invisible same-font reference), so switching modes doesn't move the control's edge.
+                        ZStack(alignment: .trailing) {
+                            Text("PAUSE")
+                                .font(.system(size: 12, weight: .black, design: .monospaced))
+                                .hidden()
+
+                            ZStack {
+                                Image(systemName: playerService.playbackStatus.isPlaying ? "pause.fill" : "play.fill")
+                                    .font(.system(size: 20, weight: .black))
+                                    .foregroundStyle(Color.white)
+                                    .id(playerService.playbackStatus.isPlaying)
+                                    .transition(.opacity.combined(with: .scale(scale: 0.85)))
+                            }
+                            .animation(.easeInOut(duration: 0.2), value: playerService.playbackStatus.isPlaying)
+                            .background(
+                                GeometryReader { proxy in
+                                    Color.clear.preference(
+                                        key: MiniPlayGlyphIconFrameKey.self,
+                                        value: isAtRest ? proxy.frame(in: .named(playerCardMorphSpace)) : .zero
+                                    )
+                                }
+                            )
+                        }
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel(playerService.playbackStatus.isPlaying ? "Pause" : "Play")
+                    } else {
+                        Text(playerService.playbackStatus.isPlaying ? "PAUSE" : "PLAY")
+                            .font(.system(size: 12, weight: .black, design: .monospaced))
+                            .foregroundStyle(Color.white)
+                            .contentTransition(.interpolate)
+                            .background(
+                                GeometryReader { proxy in
+                                    Color.clear.preference(
+                                        key: MiniPlayGlyphTextFrameKey.self,
+                                        value: isAtRest ? proxy.frame(in: .named(playerCardMorphSpace)) : .zero
+                                    )
+                                }
+                            )
+                    }
+                }
+                // Hidden (instantly) while the floating morph glyph stands in for it
+                .opacity(hidesPlayPause ? 0 : 1)
+                .animation(nil, value: hidesPlayPause)
+                .frame(width: 58, height: 36, alignment: .center)
+                .contentShape(Rectangle())
+                // Lay out and move as one unit with the card so nothing inside can jump during expansion
+                .geometryGroup()
             }
             .buttonStyle(.plain)
         }
@@ -1148,7 +1269,7 @@ private struct MorphingPlayerCard: View, Animatable {
     // MARK: - Fullscreen Layer
 
     // Fullscreen content
-    private func fullscreenContent(fullArtworkSize: CGFloat, progress: CGFloat) -> some View {
+    private func fullscreenContent(fullArtworkSize: CGFloat, progress: CGFloat, hidesPlayPause: Bool) -> some View {
         VStack(spacing: 0) {
             // 1. Top Navigation Bar
             topBar()
@@ -1176,8 +1297,13 @@ private struct MorphingPlayerCard: View, Animatable {
                             playerService: playerService,
                             foregroundColor: Color.white,
                             secondaryForegroundColor: Color.white.opacity(0.65),
-                            canPerformAction: canTriggerButtonPress
+                            canPerformAction: canTriggerButtonPress,
+                            useIcons: libraryStore.settings.usePlayerIcons,
+                            hidesPlayPauseGlyph: hidesPlayPause
                         )
+                        .onPreferenceChange(PlayerPlayPauseGlyphFrameKey.self) { frame in
+                            recordFullPlayGlyphFrame(frame, isLyricsLayout: true)
+                        }
                         .padding(.vertical, 4)
 
                         // Bottom Action Bar (QUEUE on left, Audio Route on right)
@@ -1186,11 +1312,20 @@ private struct MorphingPlayerCard: View, Animatable {
                                 guard canTriggerButtonPress() else { return }
                                 onOpenQueue()
                             }) {
-                                HStack(spacing: 6) {
-                                    Text("QUEUE")
-                                        .font(.system(size: 13, weight: .bold, design: .monospaced))
-                                    Text("↑")
-                                        .font(.system(size: 13, weight: .bold, design: .monospaced))
+                                Group {
+                                    if libraryStore.settings.usePlayerIcons {
+                                        Image(systemName: "arrow.up.and.down.text.horizontal")
+                                            .font(.system(size: 18, weight: .semibold))
+                                            .frame(minWidth: 54, alignment: .leading)
+                                            .accessibilityLabel("Queue")
+                                    } else {
+                                        HStack(spacing: 6) {
+                                            Text("QUEUE")
+                                                .font(.system(size: 13, weight: .bold, design: .monospaced))
+                                            Text("↑")
+                                                .font(.system(size: 13, weight: .bold, design: .monospaced))
+                                        }
+                                    }
                                 }
                                 .foregroundStyle(Color.white)
                                 .padding(.horizontal, 8)
@@ -1203,7 +1338,8 @@ private struct MorphingPlayerCard: View, Animatable {
                             AirPlayButtonView(
                                 routeName: playerService.currentAudioRouteName,
                                 foregroundColor: Color.white,
-                                onTap: onOpenDevicePicker
+                                onTap: onOpenDevicePicker,
+                                useIcon: libraryStore.settings.usePlayerIcons
                             )
                         }
                         .padding(.horizontal, 28)
@@ -1307,8 +1443,13 @@ private struct MorphingPlayerCard: View, Animatable {
                     playerService: playerService,
                     foregroundColor: Color.white,
                     secondaryForegroundColor: Color.white.opacity(0.65),
-                    canPerformAction: canTriggerButtonPress
+                    canPerformAction: canTriggerButtonPress,
+                    useIcons: libraryStore.settings.usePlayerIcons,
+                    hidesPlayPauseGlyph: hidesPlayPause
                 )
+                .onPreferenceChange(PlayerPlayPauseGlyphFrameKey.self) { frame in
+                    recordFullPlayGlyphFrame(frame, isLyricsLayout: false)
+                }
                 .padding(.vertical, 4)
 
                 Spacer(minLength: 12)
@@ -1319,11 +1460,20 @@ private struct MorphingPlayerCard: View, Animatable {
                         guard canTriggerButtonPress() else { return }
                         onOpenQueue()
                     }) {
-                        HStack(spacing: 6) {
-                            Text("QUEUE")
-                                .font(.system(size: 13, weight: .bold, design: .monospaced))
-                            Text("↑")
-                                .font(.system(size: 13, weight: .bold, design: .monospaced))
+                        Group {
+                            if libraryStore.settings.usePlayerIcons {
+                                Image(systemName: "arrow.up.and.down.text.horizontal")
+                                    .font(.system(size: 18, weight: .semibold))
+                                    .frame(minWidth: 54, alignment: .leading)
+                                    .accessibilityLabel("Queue")
+                            } else {
+                                HStack(spacing: 6) {
+                                    Text("QUEUE")
+                                        .font(.system(size: 13, weight: .bold, design: .monospaced))
+                                    Text("↑")
+                                        .font(.system(size: 13, weight: .bold, design: .monospaced))
+                                }
+                            }
                         }
                         .foregroundStyle(Color.white)
                         .padding(.horizontal, 8)
@@ -1342,7 +1492,8 @@ private struct MorphingPlayerCard: View, Animatable {
                     AirPlayButtonView(
                         routeName: playerService.currentAudioRouteName,
                         foregroundColor: Color.white,
-                        onTap: onOpenDevicePicker
+                        onTap: onOpenDevicePicker,
+                        useIcon: libraryStore.settings.usePlayerIcons
                     )
                 }
                 .padding(.horizontal, 28)
@@ -1350,6 +1501,7 @@ private struct MorphingPlayerCard: View, Animatable {
             }
         }
         .frame(width: screenWidth, height: screenHeight, alignment: .top)
+        .coordinateSpace(.named(PlayerMorphSpace.fullscreen))
         .overlay {
             if isArtworkFlipped {
                 Color.black.opacity(0.001)
@@ -1362,6 +1514,50 @@ private struct MorphingPlayerCard: View, Animatable {
                         }
                     }
             }
+        }
+    }
+
+    // MARK: - Play/Pause Morph
+
+    // Stores the fullscreen play/pause glyph frame for the layout it came from; a screen size change
+    // invalidates both layouts so a stale target is never used.
+    private func recordFullPlayGlyphFrame(_ frame: CGRect, isLyricsLayout: Bool) {
+        guard frame != .zero else { return }
+        let size = CGSize(width: screenWidth, height: screenHeight)
+        if fullPlayGlyphScreenSize != size {
+            fullPlayGlyphScreenSize = size
+            fullPlayGlyphStandardFrame = .zero
+            fullPlayGlyphLyricsFrame = .zero
+        }
+        if isLyricsLayout {
+            if fullPlayGlyphLyricsFrame != frame { fullPlayGlyphLyricsFrame = frame }
+        } else {
+            if fullPlayGlyphStandardFrame != frame { fullPlayGlyphStandardFrame = frame }
+        }
+    }
+
+    // Floating play/pause glyph. Icons: symbol size is interpolated (20 -> 50; symbols scale proportionally).
+    // Text: laid out once at the fullscreen 34pt size and scaled (12/34 -> 1) so it never re-lays out per frame
+    // (per-size tracking and pixel snapping made it wobble); scaleEffect stays crisp without drawingGroup.
+    @ViewBuilder
+    private func morphingPlayPauseGlyph(t: CGFloat, useIcons: Bool, isPlaying: Bool) -> some View {
+        if useIcons {
+            ZStack {
+                Image(systemName: isPlaying ? "pause.fill" : "play.fill")
+                    .font(.system(size: lerp(start: 20, end: 50, t: t), weight: .black))
+                    .foregroundStyle(Color.white)
+                    .id(isPlaying)
+                    .transition(.opacity.combined(with: .scale(scale: 0.85)))
+            }
+            .animation(.easeInOut(duration: 0.2), value: isPlaying)
+        } else {
+            Text(isPlaying ? "PAUSE" : "PLAY")
+                .font(.system(size: 34, weight: .black, design: .monospaced))
+                .foregroundStyle(Color.white)
+                .lineLimit(1)
+                .fixedSize()
+                .contentTransition(.identity)
+                .scaleEffect(lerp(start: 12, end: 34, t: t) / 34, anchor: .center)
         }
     }
 
@@ -1453,39 +1649,62 @@ private struct MorphingPlayerCard: View, Animatable {
                     Spacer()
 
                     if isLyricsViewActive && isLyricsExpanded {
-                        HStack(spacing: 16) {
+                        // Same symbols and states as the player's icons mode (PlayerControlsView), at header size
+                        HStack(spacing: 22) {
                             Button(action: {
                                 guard canTriggerButtonPress() else { return }
-                                HapticFeedback.trackSkip(forward: false)
+                                guard playerService.hasPreviousTrack else { return }
+                                HapticFeedback.transport(.back)
                                 playerService.previous()
                             }) {
-                                Image(systemName: "chevron.left.chevron.left.dotted")
-                                    .font(.system(size: 16, weight: .semibold))
-                                    .foregroundStyle(Color.white)
+                                Image(systemName: "backward.fill")
+                                    .font(.system(size: 14, weight: .heavy))
+                                    .foregroundStyle(
+                                        playerService.hasPreviousTrack
+                                            ? Color.white
+                                            : Color.white.opacity(0.65).opacity(0.3)
+                                    )
+                                    .accessibilityLabel("Previous Track")
                             }
                             .buttonStyle(.plain)
+                            .disabled(!playerService.hasPreviousTrack)
 
                             Button(action: {
                                 guard canTriggerButtonPress() else { return }
-                                HapticFeedback.playPause(isPlaying: !playerService.playbackStatus.isPlaying)
+                                HapticFeedback.transport(playerService.willPauseOnToggle ? .pause : .play)
                                 playerService.togglePlayPause()
                             }) {
-                                Image(systemName: playerService.playbackStatus.isPlaying ? "pause.fill" : "play.fill")
-                                    .font(.system(size: 17, weight: .bold))
-                                    .foregroundStyle(Color.white)
+                                // In-place crossfade with a subtle scale (~0.2s) between play and pause, as in icons mode
+                                ZStack {
+                                    Image(systemName: playerService.playbackStatus.isPlaying ? "pause.fill" : "play.fill")
+                                        .font(.system(size: 21, weight: .black))
+                                        .foregroundStyle(Color.white)
+                                        .id(playerService.playbackStatus.isPlaying)
+                                        .transition(.opacity.combined(with: .scale(scale: 0.85)))
+                                }
+                                .animation(.easeInOut(duration: 0.2), value: playerService.playbackStatus.isPlaying)
+                                .accessibilityElement(children: .ignore)
+                                .accessibilityLabel(playerService.playbackStatus.isPlaying ? "Pause" : "Play")
                             }
                             .buttonStyle(.plain)
 
                             Button(action: {
                                 guard canTriggerButtonPress() else { return }
-                                HapticFeedback.trackSkip(forward: true)
+                                guard playerService.hasNextTrack else { return }
+                                HapticFeedback.transport(.next)
                                 playerService.next()
                             }) {
-                                Image(systemName: "chevron.right.dotted.chevron.right")
-                                    .font(.system(size: 16, weight: .semibold))
-                                    .foregroundStyle(Color.white)
+                                Image(systemName: "forward.fill")
+                                    .font(.system(size: 14, weight: .heavy))
+                                    .foregroundStyle(
+                                        playerService.hasNextTrack
+                                            ? Color.white
+                                            : Color.white.opacity(0.65).opacity(0.3)
+                                    )
+                                    .accessibilityLabel("Next Track")
                             }
                             .buttonStyle(.plain)
+                            .disabled(!playerService.hasNextTrack)
                         }
                         .transition(.opacity.combined(with: .scale(scale: 0.92)))
                     } else {
@@ -1509,11 +1728,12 @@ private struct MorphingPlayerCard: View, Animatable {
                                 Text("FILE INFO")
                             }
                         } label: {
-                            Text("INFO")
-                                .font(.system(size: 13, weight: .bold, design: .monospaced))
+                            Text("i")
+                                .font(.system(size: 18, weight: .bold, design: .monospaced))
                                 .foregroundStyle(Color.white)
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 6)
+                                .frame(minWidth: 44, minHeight: 44)
+                                .contentShape(Rectangle())
+                                .accessibilityLabel("Info")
                         }
                         .transition(.opacity.combined(with: .scale(scale: 0.92)))
                     }
@@ -1610,7 +1830,7 @@ private struct MorphingPlayerCard: View, Animatable {
                                 .font(.system(size: 13, weight: .bold, design: .monospaced))
                                 .foregroundStyle(
                                     libraryStore.settings.playerBackgroundStyle == style ?
-                                        Color.white :
+                                        libraryStore.settings.appTheme.accentColor :
                                         Color.white.opacity(0.35)
                                 )
                         }
@@ -1619,22 +1839,40 @@ private struct MorphingPlayerCard: View, Animatable {
                 }
             }
 
-            // 4. ROUNDED Toggle Button (Toggle rounded vs sharp square artwork)
-            Button(action: {
-                guard canTriggerButtonPress() else { return }
-                HapticFeedback.modeToggle(isOn: !libraryStore.settings.isArtworkRounded)
-                withAnimation(.spring(response: 0.38, dampingFraction: 0.78)) {
-                    libraryStore.settings.isArtworkRounded.toggle()
-                    libraryStore.saveSettings()
+            // 4. ROUNDED and ICONS Toggle Buttons (rounded artwork; icon controls in the fullscreen player)
+            HStack(spacing: 24) {
+                Button(action: {
+                    guard canTriggerButtonPress() else { return }
+                    HapticFeedback.modeToggle(isOn: !libraryStore.settings.isArtworkRounded)
+                    withAnimation(.spring(response: 0.38, dampingFraction: 0.78)) {
+                        libraryStore.settings.isArtworkRounded.toggle()
+                        libraryStore.saveSettings()
+                    }
+                }) {
+                    Text("ROUNDED")
+                        .font(.system(size: 14, weight: .bold, design: .monospaced))
+                        .foregroundStyle(libraryStore.settings.isArtworkRounded ? libraryStore.settings.appTheme.accentColor : Color.white.opacity(0.40))
+                        .frame(minHeight: 28)
+                        .contentShape(Rectangle())
                 }
-            }) {
-                Text("ROUNDED")
-                    .font(.system(size: 14, weight: .bold, design: .monospaced))
-                    .foregroundStyle(libraryStore.settings.isArtworkRounded ? Color.blue : Color.white.opacity(0.40))
-                    .frame(minHeight: 28)
-                    .contentShape(Rectangle())
+                .buttonStyle(.plain)
+
+                Button(action: {
+                    guard canTriggerButtonPress() else { return }
+                    HapticFeedback.modeToggle(isOn: !libraryStore.settings.usePlayerIcons)
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        libraryStore.settings.usePlayerIcons.toggle()
+                        libraryStore.saveSettings()
+                    }
+                }) {
+                    Text("ICONS")
+                        .font(.system(size: 14, weight: .bold, design: .monospaced))
+                        .foregroundStyle(libraryStore.settings.usePlayerIcons ? libraryStore.settings.appTheme.accentColor : Color.white.opacity(0.40))
+                        .frame(minHeight: 28)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
 
             Spacer()
 
@@ -1683,4 +1921,39 @@ private struct MorphingPlayerCard: View, Animatable {
             }
         }
     }
+}
+
+// MARK: - Play/Pause Morph Geometry (mini player)
+
+/// Card-level coordinate space the mini play/pause glyph is measured in and the floating morph is positioned in.
+private let playerCardMorphSpace = "PlayerCardMorphSpace"
+
+/// Mini player play/pause icon frame (ICONS mode), measured at rest in `playerCardMorphSpace`.
+private struct MiniPlayGlyphIconFrameKey: PreferenceKey {
+    static var defaultValue: CGRect = .zero
+    static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
+        let next = nextValue()
+        if next != .zero {
+            value = next
+        }
+    }
+}
+
+/// Mini player PLAY/PAUSE text frame (text mode), measured at rest in `playerCardMorphSpace`.
+private struct MiniPlayGlyphTextFrameKey: PreferenceKey {
+    static var defaultValue: CGRect = .zero
+    static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
+        let next = nextValue()
+        if next != .zero {
+            value = next
+        }
+    }
+}
+
+/// First-movement direction of a player drag (fullscreen only).
+private enum DragIntent {
+    case undecided
+    case dismiss
+    case queue
+    case horizontal
 }

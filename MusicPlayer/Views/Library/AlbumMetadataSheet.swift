@@ -87,6 +87,12 @@ public struct AlbumMetadataSheet: View {
             .background(appTheme.backgroundColor.ignoresSafeArea())
             .navigationTitle("ALBUM METADATA")
             .navigationBarTitleDisplayMode(.inline)
+            .nativeSearchField(text: $searchQuery, prompt: "SEARCH ARTIST & ALBUM ONLINE")
+            .onSubmit(of: .search) {
+                Task {
+                    await performSearch()
+                }
+            }
             .task {
                 recalculateOtherAlbums()
                 if let preselected = selectedOnlineAlbum, onlineAlbumTracks.isEmpty {
@@ -108,6 +114,8 @@ public struct AlbumMetadataSheet: View {
     // MARK: - Top Search Bar
     private var topSearchBar: some View {
         VStack(spacing: 8) {
+            #if os(macOS)
+            // iOS uses the native search field (search runs from the keyboard's search key)
             HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass")
                     .font(.system(size: 13, weight: .medium))
@@ -150,6 +158,7 @@ public struct AlbumMetadataSheet: View {
             .padding(.vertical, 8)
             .background(Color.appSecondaryBackground)
             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            #endif
 
             // Source Selector Bar
             ScrollView(.horizontal, showsIndicators: false) {

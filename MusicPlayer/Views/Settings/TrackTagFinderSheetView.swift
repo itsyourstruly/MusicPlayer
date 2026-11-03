@@ -101,11 +101,13 @@ public struct TrackTagFinderSheetView: View {
     public var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                // Top Search Bar (Always visible)
+                #if os(macOS)
+                // Top Search Bar (Always visible). iOS uses the native search field.
                 searchBar
                     .padding(.horizontal, 16)
                     .padding(.top, 10)
                     .padding(.bottom, 8)
+                #endif
 
                 // Scrollable Content
                 ScrollView(.vertical, showsIndicators: true) {
@@ -137,6 +139,7 @@ public struct TrackTagFinderSheetView: View {
             .background(appTheme.backgroundColor.ignoresSafeArea())
             .navigationTitle("FIND TRACK TAGS")
             .navigationBarTitleDisplayMode(.inline)
+            .nativeSearchField(text: $searchText, prompt: "SEARCH TRACK, ALBUM, OR ARTIST...")
             .sheet(item: $selectedTrackForCustomSearch) { track in
                 OnlineMetadataMatchSheet(track: track, libraryStore: libraryStore, initialSource: selectedSourceForCustomSearch)
                     .tint(appTheme.accentColor)
@@ -341,7 +344,7 @@ public struct TrackTagFinderSheetView: View {
                 // Interactive "SCAN ALL TRACKS ONLINE" Button with Progress, Pause/Play, and Cancel
                 scanAllTracksButton
 
-                Text("LAC WILL COMPARE YOUR LOCAL TRACK METADATA INCLUDING TRACK TITLE, ARTIST, AND ALBUM TO FIND THE MOST ACCURATE MATCH ACROSS APPLE MUSIC, DEEZER, AND MUSICBRAINZ. RESULTS WILL NOT BE PERFECT. I HIGHLY RECOMMEND YOU DOUBLE CHECK BEFORE ENRICHING. FOR BETTER RESULTS, SEARCH ALBUMS OR TRACKS INDIVIDUALLY.")
+                Text("LAP WILL COMPARE YOUR LOCAL TRACK METADATA INCLUDING TRACK TITLE, ARTIST, AND ALBUM TO FIND THE MOST ACCURATE MATCH ACROSS APPLE MUSIC, DEEZER, AND MUSICBRAINZ. RESULTS WILL NOT BE PERFECT. I HIGHLY RECOMMEND YOU DOUBLE CHECK BEFORE ENRICHING. FOR BETTER RESULTS, SEARCH ALBUMS OR TRACKS INDIVIDUALLY.")
                     .font(.system(size: 10, weight: .medium, design: .monospaced))
                     .foregroundStyle(Color.secondary)
                     .lineSpacing(3)

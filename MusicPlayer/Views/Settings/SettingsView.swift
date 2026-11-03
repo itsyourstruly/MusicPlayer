@@ -44,7 +44,7 @@ public enum SettingOptionCatalog {
     public static let localOrganizationSection = SettingOptionDetail(
         id: "localOrganizationSection",
         title: "LOCAL FOLDER ORGANIZATION",
-        description: "This option only affects sources that are available locally on the device and will not affect Jellyfin. Metadata ignores folder heirarchy, instead it scans individual tracks and builds a library based on the metadata available on each track including its Album, and Artist. Folder will use your existing folder heirarchy, whether you store your library by Artist/Album/Track or another method. Option must be saved to apply."
+        description: "This option only affects sources that are available locally on the device and will not affect server sources. Metadata ignores folder heirarchy, instead it scans individual tracks and builds a library based on the metadata available on each track including its Album, and Artist. Folder will use your existing folder heirarchy, whether you store your library by Artist/Album/Track or another method. Option must be saved to apply."
     )
 
     public static let storageManagementSection = SettingOptionDetail(
@@ -68,19 +68,19 @@ public enum SettingOptionCatalog {
     public static let libraryScanMethod = SettingOptionDetail(
         id: "libraryScanMethod",
         title: "LIBRARY SCAN METHOD",
-        description: "Choose between organizing by standard ID3 tags or your hard drive folder hierarchy."
+        description: "Choose between organizing by standard ID3 tags or your local folder hierarchy."
     )
 
     public static let appearance = SettingOptionDetail(
         id: "appearance",
         title: "APPEARANCE",
-        description: "Customize the app theme, accent colors, default library view, and player display styles."
+        description: "Customize the accent colors, default library view, and player display."
     )
 
     public static let playback = SettingOptionDetail(
         id: "playback",
         title: "PLAYBACK",
-        description: "Configure crossfading, skipping transitions, and queue behaviors."
+        description: "Configure crossfading, queue behavior, and saving playback position."
     )
 
     public static let enrichTracks = SettingOptionDetail(
@@ -119,16 +119,22 @@ public enum SettingOptionCatalog {
         description: "Embeds enriched tags directly into your audio files on disk. If files are stored in iCloud, metadata is kept within the app."
     )
 
+    public static let cacheInAdvance = SettingOptionDetail(
+        id: "cacheInAdvance",
+        title: "CACHE IN ADVANCE",
+        description: "Saves the set amount of songs to cache in advance in case you lose connection."
+    )
+
     public static let autoDownloadOnPlay = SettingOptionDetail(
         id: "autoDownloadOnPlay",
         title: "AUTO-DOWNLOAD ON PLAY",
-        description: "Saves server tracks for offline playback when they start playing."
+        description: "Automatically downloads song when they're played."
     )
 
     public static let downloadOverCellular = SettingOptionDetail(
         id: "downloadOverCellular",
         title: "DOWNLOAD OVER CELLULAR",
-        description: "When off, downloads wait for Wi-Fi. Streaming is not affected."
+        description: "Enables downloading songs using Cellular data."
     )
 
     public static let linkFolder = SettingOptionDetail(
@@ -146,7 +152,7 @@ public enum SettingOptionCatalog {
     public static let findTrackTags = SettingOptionDetail(
         id: "findTrackTags",
         title: "FIND TRACK TAGS",
-        description: "Lets you perform an in-depth metadata scan on all the local tracks in your library, comparing across Apple Music, Deezer, and MusicBrainz. Each found track will be listed, along with its online counterpart, giving you the option to overwrite or add tags such as: Release Year, Artist, Album, Track Number, and Artwork. This will take a while depending on library size."
+        description: "Lets you perform an in-depth metadata scan on all local tracks in your library, comparing across Apple Music, Deezer, and MusicBrainz. Each found track will be listed, along with its online counterpart, giving you the option to overwrite or add tags such as: Release Year, Artist, Album, Track Number, and Artwork. This will take a while depending on library size."
     )
 
     public static let scanDuplicates = SettingOptionDetail(
@@ -231,6 +237,12 @@ public enum SettingOptionCatalog {
         id: "roundedArtwork",
         title: "ROUNDED ARTWORK",
         description: "Toggles rounded corners on album artwork across the app."
+    )
+
+    public static let playerIcons = SettingOptionDetail(
+        id: "playerIcons",
+        title: "ICONS",
+        description: "Shows icons instead of text for the controls in the full screen player."
     )
 
     public static let smoothSkipping = SettingOptionDetail(

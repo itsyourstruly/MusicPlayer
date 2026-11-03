@@ -89,18 +89,43 @@ public struct AirPlayButtonView: View {
     public let foregroundColor: Color
     public let font: Font
     public let onTap: (() -> Void)?
+    /// When true, shows the airplay.audio symbol instead of the route name (the name stays as the VoiceOver label).
+    public let useIcon: Bool
 
     // Initialize with configured properties
     public init(
         routeName: String = "THIS DEVICE",
         foregroundColor: Color = .primary,
         font: Font = .system(size: 13, weight: .bold, design: .monospaced),
-        onTap: (() -> Void)? = nil
+        onTap: (() -> Void)? = nil,
+        useIcon: Bool = false
     ) {
         self.routeName = routeName
         self.foregroundColor = foregroundColor
         self.font = font
         self.onTap = onTap
+        self.useIcon = useIcon
+    }
+
+    @ViewBuilder
+    private var routeLabel: some View {
+        if useIcon {
+            Image(systemName: "airplay.audio")
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(foregroundColor)
+                .frame(minWidth: 44, alignment: .trailing)
+                .padding(.vertical, 8)
+                .contentShape(Rectangle())
+                .accessibilityLabel(routeName)
+        } else {
+            Text(routeName)
+                .font(font)
+                .foregroundStyle(foregroundColor)
+                .lineLimit(1)
+                .multilineTextAlignment(.trailing)
+                .padding(.vertical, 8)
+                .contentShape(Rectangle())
+        }
     }
 
     public var body: some View {
@@ -112,13 +137,7 @@ public struct AirPlayButtonView: View {
                 RoutePickerManager.shared.presentRoutePicker()
             }
         }) {
-            Text(routeName)
-                .font(font)
-                .foregroundStyle(foregroundColor)
-                .lineLimit(1)
-                .multilineTextAlignment(.trailing)
-                .padding(.vertical, 8)
-                .contentShape(Rectangle())
+            routeLabel
         }
         .buttonStyle(.plain)
         .highPriorityGesture(
@@ -179,18 +198,43 @@ public struct AirPlayButtonView: View {
     public let foregroundColor: Color
     public let font: Font
     public let onTap: (() -> Void)?
+    /// When true, shows the airplay.audio symbol instead of the route name (the name stays as the VoiceOver label).
+    public let useIcon: Bool
 
     // Initialize with configured properties
     public init(
         routeName: String = "THIS DEVICE",
         foregroundColor: Color = .primary,
         font: Font = .system(size: 13, weight: .bold, design: .monospaced),
-        onTap: (() -> Void)? = nil
+        onTap: (() -> Void)? = nil,
+        useIcon: Bool = false
     ) {
         self.routeName = routeName
         self.foregroundColor = foregroundColor
         self.font = font
         self.onTap = onTap
+        self.useIcon = useIcon
+    }
+
+    @ViewBuilder
+    private var routeLabel: some View {
+        if useIcon {
+            Image(systemName: "airplay.audio")
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(foregroundColor)
+                .frame(minWidth: 44, alignment: .trailing)
+                .padding(.vertical, 8)
+                .contentShape(Rectangle())
+                .accessibilityLabel(routeName)
+        } else {
+            Text(routeName)
+                .font(font)
+                .foregroundStyle(foregroundColor)
+                .lineLimit(1)
+                .multilineTextAlignment(.trailing)
+                .padding(.vertical, 8)
+                .contentShape(Rectangle())
+        }
     }
 
     public var body: some View {
@@ -201,13 +245,7 @@ public struct AirPlayButtonView: View {
                 MacRoutePickerManager.shared.presentRoutePicker()
             }
         }) {
-            Text(routeName)
-                .font(font)
-                .foregroundStyle(foregroundColor)
-                .lineLimit(1)
-                .multilineTextAlignment(.trailing)
-                .padding(.vertical, 8)
-                .contentShape(Rectangle())
+            routeLabel
         }
         .buttonStyle(.plain)
     }

@@ -38,7 +38,7 @@ public struct CloudStatusBadge: View {
                         .frame(width: 12, height: 12)
                 }
             } else {
-                Image(systemName: "antenna.radiowaves.left.and.right")
+                Image(systemName: "icloud.dashed")
                     .font(.system(size: 9.5, weight: .semibold))
                     .foregroundStyle(tintColor.opacity(0.65))
             }

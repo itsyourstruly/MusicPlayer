@@ -9,6 +9,8 @@ public struct ContentView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var libraryStore = LibraryStore()
     @State private var playerService = AudioPlayerService()
+    // Library multi-select, in memory only (a relaunch starts fresh)
+    @State private var librarySelection = LibrarySelectionStore()
 
     // MARK: iOS State
 
@@ -40,9 +42,15 @@ public struct ContentView: View {
                             selectedHomePlaylist = nil
                             homeNavigateToSearch = false
                         } else if homeNavigateToSearch {
-                            // Currently in Search Library -> tap Home to return to the Home page
+                            // Currently in Search Library -> tap Home to return to the Home page.
+                            // Ask the search page to close its search first, then pop on the next run loop
+                            // (or once a just-tapped Cancel/X close animation is done, so the pop isn't dropped).
+                            let popDelay = GlobalSearchView.popDelayAfterSearchClose
+                            NotificationCenter.default.post(name: .globalSearchShouldLeave, object: nil)
                             UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
-                            homeNavigateToSearch = false
+                            DispatchQueue.main.asyncAfter(deadline: .now() + popDelay) {
+                                homeNavigateToSearch = false
+                            }
                         } else {
                             // Already on the Home page -> tap Home to go to the SEARCH LIBRARY page
                             homeNavigateToSearch = true
@@ -128,6 +136,12 @@ public struct ContentView: View {
         .onChange(of: libraryStore.settings.autoDownloadOnPlay) { _, isOn in
             playerService.autoDownloadOnPlay = isOn
         }
+        .onChange(of: libraryStore.settings.cacheInAdvanceEnabled) { _, isOn in
+            playerService.cacheInAdvanceEnabled = isOn
+        }
+        .onChange(of: libraryStore.settings.cacheInAdvanceCount) { _, count in
+            playerService.cacheInAdvanceCount = count
+        }
         .onChange(of: libraryStore.settings.downloadOverCellular) { _, isOn in
             playerService.downloadOnCellular = isOn
             JellyfinDownloadManager.shared.allowsCellularAccess = isOn
@@ -168,6 +182,7 @@ public struct ContentView: View {
                     )
                     .enableInteractivePopGesture()
                 }
+                .environment(librarySelection)
                 .tabItem {
                     Label("Library", systemImage: "music.note.list")
                 }
@@ -225,6 +240,12 @@ public struct ContentView: View {
         .onChange(of: libraryStore.settings.autoDownloadOnPlay) { _, isOn in
             playerService.autoDownloadOnPlay = isOn
         }
+        .onChange(of: libraryStore.settings.cacheInAdvanceEnabled) { _, isOn in
+            playerService.cacheInAdvanceEnabled = isOn
+        }
+        .onChange(of: libraryStore.settings.cacheInAdvanceCount) { _, count in
+            playerService.cacheInAdvanceCount = count
+        }
         .onChange(of: libraryStore.settings.downloadOverCellular) { _, isOn in
             playerService.downloadOnCellular = isOn
             JellyfinDownloadManager.shared.allowsCellularAccess = isOn
@@ -280,6 +301,8 @@ public struct ContentView: View {
         playerService.downloadNextSongOnWiFi = true
         playerService.serverSources = libraryStore.settings.serverSources
         playerService.autoDownloadOnPlay = libraryStore.settings.autoDownloadOnPlay
+        playerService.cacheInAdvanceEnabled = libraryStore.settings.cacheInAdvanceEnabled
+        playerService.cacheInAdvanceCount = libraryStore.settings.cacheInAdvanceCount
         playerService.downloadOnCellular = libraryStore.settings.downloadOverCellular
         JellyfinDownloadManager.shared.allowsCellularAccess = libraryStore.settings.downloadOverCellular
 

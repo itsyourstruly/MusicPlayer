@@ -24,8 +24,9 @@ public struct TrackInfoSheetView: View {
     @State private var showingSaveErrorAlert: Bool = false
     @State private var saveErrorMessage: String = ""
     @State private var showingRemoveConfirmation: Bool = false
-    @State private var showingDeleteConfirmation: Bool = false
     @State private var isProcessingAction: Bool = false
+    /// Bumped after REMOVE DOWNLOAD so the actions section re-reads the download state.
+    @State private var downloadRemovalTick: Int = 0
 
     // 12 editable tag properties (even if empty)
     @State private var editTitle: String = ""
@@ -109,7 +110,7 @@ public struct TrackInfoSheetView: View {
                 Button("OK", role: .cancel) {}
             }
             .alert(
-                currentTrack.isJellyfinItem || currentTrack.metadataSource == .server ? "HIDE TRACK?" : "REMOVE FROM LIBRARY?",
+                "HIDE TRACK?",
                 isPresented: $showingRemoveConfirmation
             ) {
                 Button("CANCEL", role: .cancel) {}
@@ -118,23 +119,6 @@ public struct TrackInfoSheetView: View {
                 }
             } message: {
                 Text("This track will be hidden from your library and will not appear in the app. The audio file itself will remain intact.")
-            }
-            .alert(
-                deleteAlertTitle,
-                isPresented: $showingDeleteConfirmation
-            ) {
-                Button("CANCEL", role: .cancel) {}
-                Button(isServerTrack && !deletesOnServer ? "REMOVE" : "DELETE", role: .destructive) {
-                    performDeleteTrack()
-                }
-            } message: {
-                if isServerTrack && deletesOnServer {
-                    Text("Are you sure you want to permanently delete \"\(currentTrack.title)\" from \(serverDescription)? This will delete the file on the server.")
-                } else if isServerTrack {
-                    Text("\"\(currentTrack.title)\" stays on \(serverDescription). It will be removed from this app's library, and its download on this phone will be deleted.")
-                } else {
-                    Text("Are you sure you want to permanently delete \"\(currentTrack.title)\" from your device? This will delete the audio file itself and cannot be undone.")
-                }
             }
         }
     }
@@ -502,32 +486,46 @@ public struct TrackInfoSheetView: View {
         }
     }
 
-    // MARK: - Remove & Delete Track Actions
+    // MARK: - Hide Track Action (nothing here deletes a file)
 
     private var trackActionsSection: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Button(action: {
-                showingRemoveConfirmation = true
-            }) {
-                Text(currentTrack.isJellyfinItem || currentTrack.metadataSource == .server ? "HIDE TRACK" : "REMOVE FROM LIBRARY")
-                    .font(.system(size: 13, weight: .bold, design: .monospaced))
-                    .foregroundStyle(Color.red)
+            let _ = downloadRemovalTick
+            // Downloaded: REMOVE DOWNLOAD replaces hide; downloading: no hide (same rule as the long-press menus).
+            switch trackMenuBottomAction(for: currentTrack, isPlayingOrNext: isPlayingOrNext) {
+            case .removeDownload:
+                Button(action: {
+                    removeTrackDownload(currentTrack)
+                    downloadRemovalTick &+= 1
+                }) {
+                    Text("REMOVE DOWNLOAD")
+                        .font(.system(size: 13, weight: .bold, design: .monospaced))
+                        .foregroundStyle(Color.red)
+                }
+                .buttonStyle(.plain)
+                .disabled(isProcessingAction)
+            case .hide:
+                Button(action: {
+                    showingRemoveConfirmation = true
+                }) {
+                    Text("HIDE TRACK")
+                        .font(.system(size: 13, weight: .bold, design: .monospaced))
+                        .foregroundStyle(Color.red)
+                }
+                .buttonStyle(.plain)
+                .disabled(isProcessingAction)
+            case .none:
+                EmptyView()
             }
-            .buttonStyle(.plain)
-            .disabled(isProcessingAction)
-
-            Button(action: {
-                showingDeleteConfirmation = true
-            }) {
-                Text(isServerTrack && !deletesOnServer ? "REMOVE FROM LIBRARY" : "DELETE TRACK")
-                    .font(.system(size: 13, weight: .bold, design: .monospaced))
-                    .foregroundStyle(Color.red)
-            }
-            .buttonStyle(.plain)
-            .disabled(isProcessingAction)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.top, 4)
+    }
+
+    /// Whether this track is playing or up next (its iCloud download can't be removed then).
+    private var isPlayingOrNext: Bool {
+        let player = AudioPlayerService.shared
+        return player?.currentTrack?.id == currentTrack.id || player?.nextTrack?.id == currentTrack.id
     }
 
     // MARK: - Server Source
@@ -540,11 +538,6 @@ public struct TrackInfoSheetView: View {
     private var serverLink: ServerSourceLink? {
         guard isServerTrack, let folderID = currentTrack.folderID else { return nil }
         return libraryStore?.settings.serverSources.first { $0.id == folderID }
-    }
-
-    /// Only Jellyfin servers delete the file; every other server keeps it and the song is only hidden here.
-    private var deletesOnServer: Bool {
-        serverLink?.kind == .jellyfin
     }
 
     /// Server name and type, e.g. "HOME (NAVIDROME)".
@@ -561,11 +554,6 @@ public struct TrackInfoSheetView: View {
         return serverDescription
     }
 
-    private var deleteAlertTitle: String {
-        guard isServerTrack else { return "DELETE TRACK PERMANENTLY?" }
-        return deletesOnServer ? "DELETE FROM \(serverDescription)?" : "REMOVE FROM LIBRARY?"
-    }
-
     private func performRemoveFromLibrary() {
         guard let libraryStore = libraryStore else { return }
         isProcessingAction = true
@@ -575,28 +563,5 @@ public struct TrackInfoSheetView: View {
         }
         libraryStore.hideTrack(currentTrack)
         dismiss()
-    }
-
-    private func performDeleteTrack() {
-        guard let libraryStore = libraryStore else { return }
-        isProcessingAction = true
-        HapticFeedback.notificationSuccess()
-        Task {
-            if let player = AudioPlayerService.shared, player.currentTrack?.id == currentTrack.id {
-                player.next()
-            }
-            if currentTrack.isJellyfinItem || currentTrack.metadataSource == .server {
-                do {
-                    try await libraryStore.deleteJellyfinTrack(currentTrack)
-                } catch {
-                    AppLogger.library.error("Failed to delete Jellyfin track: \(error.localizedDescription)")
-                }
-            } else {
-                _ = await libraryStore.deleteSingleTrackFile(track: currentTrack)
-            }
-            await MainActor.run {
-                dismiss()
-            }
-        }
     }
 }

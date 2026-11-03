@@ -13,6 +13,7 @@ public struct ArtistDetailView: View {
     @State private var serverDescription: ServerDescription? = nil
     @State private var selectedTrackForPlaylist: Track? = nil
     @State private var showingFavorites: Bool = false
+    @Environment(LibrarySelectionStore.self) private var librarySelection: LibrarySelectionStore?
     @State private var showingDiscographyReviewSheet: Bool = false
     @State private var selectedSectionDestination: ArtistSectionDestination? = nil
     @Environment(\.appTheme) private var appTheme
@@ -122,7 +123,8 @@ public struct ArtistDetailView: View {
                                         albumCard(album: album)
                                     }
                                     .buttonStyle(.plain)
-                                    .albumContextMenu(album: album, libraryStore: libraryStore, playerService: playerService)
+                                    .albumSelectModeTap(album: album) { selectedAlbumForNavigation = album }
+                                    .albumContextMenu(album: album, libraryStore: libraryStore, playerService: playerService, onGoToArtist: { selectedArtistForNavigation = $0 }, hidingArtistNamed: artist.name)
                                 }
                             }
                         }
@@ -159,7 +161,8 @@ public struct ArtistDetailView: View {
                                         albumCard(album: single)
                                     }
                                     .buttonStyle(.plain)
-                                    .albumContextMenu(album: single, libraryStore: libraryStore, playerService: playerService)
+                                    .albumSelectModeTap(album: single) { selectedAlbumForNavigation = single }
+                                    .albumContextMenu(album: single, libraryStore: libraryStore, playerService: playerService, onGoToArtist: { selectedArtistForNavigation = $0 }, hidingArtistNamed: artist.name)
                                 }
                             }
                         }
@@ -196,7 +199,8 @@ public struct ArtistDetailView: View {
                                         albumCard(album: altAlbum)
                                     }
                                     .buttonStyle(.plain)
-                                    .albumContextMenu(album: altAlbum, libraryStore: libraryStore, playerService: playerService)
+                                    .albumSelectModeTap(album: altAlbum) { selectedAlbumForNavigation = altAlbum }
+                                    .albumContextMenu(album: altAlbum, libraryStore: libraryStore, playerService: playerService, onGoToArtist: { selectedArtistForNavigation = $0 }, hidingArtistNamed: artist.name)
                                 }
                             }
                         }
@@ -233,7 +237,8 @@ public struct ArtistDetailView: View {
                                         featuredAlbumCard(album: featAlbum)
                                     }
                                     .buttonStyle(.plain)
-                                    .albumContextMenu(album: featAlbum, libraryStore: libraryStore, playerService: playerService)
+                                    .albumSelectModeTap(album: featAlbum) { selectedAlbumForNavigation = featAlbum }
+                                    .albumContextMenu(album: featAlbum, libraryStore: libraryStore, playerService: playerService, onGoToArtist: { selectedArtistForNavigation = $0 }, hidingArtistNamed: artist.name)
                                 }
                             }
                         }
@@ -314,7 +319,11 @@ public struct ArtistDetailView: View {
                                     if let albumObj = libraryStore.findAlbum(title: track.album, artist: track.artist) {
                                         selectedAlbumForNavigation = albumObj
                                     }
-                                }
+                                },
+                                quickAddLibraryStore: libraryStore,
+                                isSelected: librarySelection?.contains(track.id) ?? false,
+                                isSelectMode: librarySelection?.isActive ?? false,
+                                onToggleSelect: librarySelection?.toggler(for: track)
                             )
                         }
                     }
@@ -333,6 +342,8 @@ public struct ArtistDetailView: View {
                     libraryStore: libraryStore
                 )
             }
+            // Hide the iOS 26 Liquid Glass toolbar background so the plain "i" matches the fullscreen player
+            .sharedBackgroundVisibility(.hidden)
         }
         // Modal presentation sheet
         .sheet(item: $selectedTrackForInfo) { track in
@@ -370,7 +381,7 @@ public struct ArtistDetailView: View {
 
     // Playlist picker sheet
     private func playlistPickerSheet(for tracks: [Track]) -> some View {
-        PlaylistPickerSheet(libraryStore: libraryStore) { playlist in
+        PlaylistPickerSheet(libraryStore: libraryStore, previewArtworkKey: tracks.lazy.compactMap(\.artworkKey).first) { playlist in
             for track in tracks {
                 libraryStore.addTrack(track, toPlaylistID: playlist.id)
             }
@@ -638,6 +649,14 @@ private struct ArtistDetailToolbarMenuView: View {
                     } label: {
                         Text("DOWNLOAD AVAILABLE DISCOGRAPHY")
                     }
+                    if summary.downloaded > 0 {
+                        Button(role: .destructive) {
+                            HapticFeedback.selectionChanged()
+                            JellyfinDownloadManager.shared.deleteDownloads(trackIds: jellyfinTracks.map(\.id))
+                        } label: {
+                            Text("REMOVE DOWNLOADED TRACKS")
+                        }
+                    }
                 }
 
                 Divider()
@@ -659,11 +678,12 @@ private struct ArtistDetailToolbarMenuView: View {
                 }
             }
         } label: {
-            Image(systemName: "ellipsis.circle")
-                .font(.system(size: 16, weight: .semibold))
+            Text("i")
+                .font(.system(size: 18, weight: .bold, design: .monospaced))
                 .foregroundStyle(Color.primary)
-                .padding(.horizontal, 4)
-                .padding(.vertical, 4)
+                .frame(minWidth: 44, minHeight: 44)
+                .contentShape(Rectangle())
+                .accessibilityLabel("More options")
         }
     }
 }

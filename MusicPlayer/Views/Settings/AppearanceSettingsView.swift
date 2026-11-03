@@ -149,6 +149,13 @@ public struct AppearanceSettingsView: View {
                 onToggle: { libraryStore.saveSettings() },
                 onLongPress: { activeDetail = SettingOptionCatalog.roundedArtwork }
             )
+
+            TypographicToggleRow(
+                title: "ICONS",
+                isOn: $libraryStore.settings.usePlayerIcons,
+                onToggle: { libraryStore.saveSettings() },
+                onLongPress: { activeDetail = SettingOptionCatalog.playerIcons }
+            )
         }
     }
 }

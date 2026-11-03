@@ -320,6 +320,8 @@ public struct AppSettings: Codable, Sendable {
     public var disabledFolderIDs: Set<UUID>
     // When enabled, fullscreen album artwork has rounded corners; when disabled, artwork is a non-rounded square
     public var isArtworkRounded: Bool
+    // When enabled, the fullscreen player shows symbol icons instead of text labels for its controls
+    public var usePlayerIcons: Bool
     // Track ID hashing scheme version (1 = legacy full path hash, 2 = stable relative path v2)
     public var trackIDSchemeVersion: Int
     // Configured remote Jellyfin server instances
@@ -333,6 +335,9 @@ public struct AppSettings: Codable, Sendable {
     // DOWNLOAD OVER CELLULAR (Settings > Sources): server downloads may use cellular. Default off.
     // Separate from the legacy `downloadOnCellular` key, which older installs persisted as true.
     public var downloadOverCellular: Bool
+    // CACHE IN ADVANCE (Settings > Playback): session-caches the next N streamed server tracks. Default off, N = 3.
+    public var cacheInAdvanceEnabled: Bool
+    public var cacheInAdvanceCount: Int
     // Persistently hidden/removed Jellyfin item IDs excluded from library sync
     public var removedJellyfinItemIDs: Set<String>
 
@@ -376,12 +381,15 @@ public struct AppSettings: Codable, Sendable {
         originalAlbumArtistsByTrackID: [String: String] = [:],
         disabledFolderIDs: Set<UUID> = [],
         isArtworkRounded: Bool = true,
+        usePlayerIcons: Bool = false,
         trackIDSchemeVersion: Int = 1,
         serverSources: [ServerSourceLink] = [],
         downloadNextSongOnWiFi: Bool = true,
         autoDownloadOnPlay: Bool = false,
         downloadOnCellular: Bool = true,
         downloadOverCellular: Bool = false,
+        cacheInAdvanceEnabled: Bool = false,
+        cacheInAdvanceCount: Int = 3,
         removedJellyfinItemIDs: Set<String> = []
     ) {
         self.appTheme = appTheme
@@ -416,12 +424,15 @@ public struct AppSettings: Codable, Sendable {
         self.originalAlbumArtistsByTrackID = originalAlbumArtistsByTrackID
         self.disabledFolderIDs = disabledFolderIDs
         self.isArtworkRounded = isArtworkRounded
+        self.usePlayerIcons = usePlayerIcons
         self.trackIDSchemeVersion = trackIDSchemeVersion
         self.serverSources = serverSources
         self.downloadNextSongOnWiFi = downloadNextSongOnWiFi
         self.autoDownloadOnPlay = autoDownloadOnPlay
         self.downloadOnCellular = downloadOnCellular
         self.downloadOverCellular = downloadOverCellular
+        self.cacheInAdvanceEnabled = cacheInAdvanceEnabled
+        self.cacheInAdvanceCount = min(max(cacheInAdvanceCount, 0), 25)
         self.removedJellyfinItemIDs = removedJellyfinItemIDs
     }
 
@@ -490,12 +501,15 @@ public struct AppSettings: Codable, Sendable {
         case originalAlbumArtistsByTrackID
         case disabledFolderIDs
         case isArtworkRounded
+        case usePlayerIcons
         case trackIDSchemeVersion
         case serverSources = "jellyfinServers" // legacy key kept so existing Jellyfin links decode unchanged
         case downloadNextSongOnWiFi
         case autoDownloadOnPlay
         case downloadOnCellular
         case downloadOverCellular
+        case cacheInAdvanceEnabled
+        case cacheInAdvanceCount
         case removedJellyfinItemIDs
     }
 
@@ -566,12 +580,15 @@ public struct AppSettings: Codable, Sendable {
         self.originalAlbumArtistsByTrackID = (try? container.decodeIfPresent([String: String].self, forKey: .originalAlbumArtistsByTrackID)) ?? [:]
         self.disabledFolderIDs = (try? container.decodeIfPresent(Set<UUID>.self, forKey: .disabledFolderIDs)) ?? []
         self.isArtworkRounded = (try? container.decodeIfPresent(Bool.self, forKey: .isArtworkRounded)) ?? true
+        self.usePlayerIcons = (try? container.decodeIfPresent(Bool.self, forKey: .usePlayerIcons)) ?? false
         self.trackIDSchemeVersion = (try? container.decodeIfPresent(Int.self, forKey: .trackIDSchemeVersion)) ?? 1
         self.serverSources = (try? container.decodeIfPresent([ServerSourceLink].self, forKey: .serverSources)) ?? []
         self.downloadNextSongOnWiFi = (try? container.decodeIfPresent(Bool.self, forKey: .downloadNextSongOnWiFi)) ?? true
         self.autoDownloadOnPlay = (try? container.decodeIfPresent(Bool.self, forKey: .autoDownloadOnPlay)) ?? false
         self.downloadOnCellular = (try? container.decodeIfPresent(Bool.self, forKey: .downloadOnCellular)) ?? true
         self.downloadOverCellular = (try? container.decodeIfPresent(Bool.self, forKey: .downloadOverCellular)) ?? false
+        self.cacheInAdvanceEnabled = (try? container.decodeIfPresent(Bool.self, forKey: .cacheInAdvanceEnabled)) ?? false
+        self.cacheInAdvanceCount = min(max((try? container.decodeIfPresent(Int.self, forKey: .cacheInAdvanceCount)) ?? 3, 0), 25)
         self.removedJellyfinItemIDs = (try? container.decodeIfPresent(Set<String>.self, forKey: .removedJellyfinItemIDs)) ?? []
     }
 
@@ -611,12 +628,15 @@ public struct AppSettings: Codable, Sendable {
         try container.encode(originalAlbumArtistsByTrackID, forKey: .originalAlbumArtistsByTrackID)
         try container.encode(disabledFolderIDs, forKey: .disabledFolderIDs)
         try container.encode(isArtworkRounded, forKey: .isArtworkRounded)
+        try container.encode(usePlayerIcons, forKey: .usePlayerIcons)
         try container.encode(trackIDSchemeVersion, forKey: .trackIDSchemeVersion)
         try container.encode(serverSources, forKey: .serverSources)
         try container.encode(downloadNextSongOnWiFi, forKey: .downloadNextSongOnWiFi)
         try container.encode(autoDownloadOnPlay, forKey: .autoDownloadOnPlay)
         try container.encode(downloadOnCellular, forKey: .downloadOnCellular)
         try container.encode(downloadOverCellular, forKey: .downloadOverCellular)
+        try container.encode(cacheInAdvanceEnabled, forKey: .cacheInAdvanceEnabled)
+        try container.encode(cacheInAdvanceCount, forKey: .cacheInAdvanceCount)
         try container.encode(removedJellyfinItemIDs, forKey: .removedJellyfinItemIDs)
     }
 }

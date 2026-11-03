@@ -96,22 +96,7 @@ public struct PlaylistsListView: View {
                             }
                         }
                         .buttonStyle(.plain)
-                        .contextMenu {
-                            Button(action: {
-                                HapticFeedback.lightImpact()
-                                withAnimation(.spring(response: 0.28, dampingFraction: 0.8)) {
-                                    libraryStore.togglePinPlaylist(id: playlist.id)
-                                }
-                            }) {
-                                Text(playlist.isPinned ? "UNPIN" : "PIN")
-                            }
-
-                            Button(role: .destructive, action: {
-                                libraryStore.deletePlaylist(id: playlist.id)
-                            }) {
-                                Text("DELETE PLAYLIST")
-                            }
-                        }
+                        .playlistContextMenu(playlist: playlist, libraryStore: libraryStore, playerService: playerService)
                     }
                 }
                 .padding(.horizontal, 16)
@@ -120,7 +105,7 @@ public struct PlaylistsListView: View {
         .padding(.top, 4)
         // Modal presentation sheet
         .sheet(isPresented: $showingCreateSheet) {
-            CreatePlaylistSheet(libraryStore: libraryStore)
+            EditPlaylistModalView(newPlaylistWith: libraryStore)
         }
         .navigationDestination(item: $selectedPlaylistID) { playlistID in
             PlaylistDetailView(playlistID: playlistID, libraryStore: libraryStore, playerService: playerService)

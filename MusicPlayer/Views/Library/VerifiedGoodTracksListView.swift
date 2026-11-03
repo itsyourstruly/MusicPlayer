@@ -36,7 +36,9 @@ public struct VerifiedGoodTracksListView: View {
                 } else {
                     ScrollView(.vertical, showsIndicators: true) {
                         LazyVStack(spacing: 20) {
-                            searchBar
+                            #if os(macOS)
+                            searchBar // iOS uses the native search field
+                            #endif
 
                             headerCard
 
@@ -81,6 +83,7 @@ public struct VerifiedGoodTracksListView: View {
                         .padding(.horizontal, 16)
                         .padding(.vertical, 14)
                     }
+                    .nativeSearchField(text: $searchText, prompt: "SEARCH VERIFIED TRACKS...")
                 }
             }
             .background(appTheme.backgroundColor.ignoresSafeArea())

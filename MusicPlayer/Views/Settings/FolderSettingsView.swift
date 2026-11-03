@@ -32,6 +32,7 @@ public struct FolderSettingsView: View {
     @State private var pendingLayout: FolderHierarchyLayout? = nil
     @State private var isSavingOrganization: Bool = false
     @State private var storageTarget: StorageClearTarget = .metadata
+    @State private var isHiddenExpanded: Bool = false
 
     public init(libraryStore: LibraryStore) {
         self.libraryStore = libraryStore
@@ -75,6 +76,14 @@ public struct FolderSettingsView: View {
 
                 // MARK: - 6. Cache Management (CLEAR METADATA CACHE & CLEAR ARTWORK CACHE)
                 cacheManagementSection
+
+                // MARK: - 7. Hidden (only when something is hidden)
+                if !libraryStore.hiddenItems.isEmpty {
+                    Divider()
+                        .overlay(appTheme.separatorColor.opacity(0.4))
+
+                    hiddenItemsSection
+                }
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 20)
@@ -218,6 +227,13 @@ public struct FolderSettingsView: View {
             if artworkCacheSizeBytes == 0 {
                 await refreshArtworkCacheSize()
             }
+        }
+        .task {
+            // Lists items hidden before the HIDDEN list existed (tags read off the main thread, once per session)
+            libraryStore.resolveLegacyHiddenTracksIfNeeded()
+        }
+        .onChange(of: libraryStore.hiddenItems.isEmpty) { _, isEmpty in
+            if isEmpty { isHiddenExpanded = false }
         }
     }
 
@@ -490,6 +506,51 @@ public struct FolderSettingsView: View {
                 ),
                 onLongPress: { activeDetail = SettingOptionCatalog.autoDownloadOnPlay }
             )
+            TypographicToggleRow(
+                title: "CACHE IN ADVANCE",
+                isOn: Binding(
+                    get: { libraryStore.settings.cacheInAdvanceEnabled },
+                    set: { newValue in
+                        withAnimation(.easeInOut(duration: 0.25)) {
+                            libraryStore.settings.cacheInAdvanceEnabled = newValue
+                        }
+                        libraryStore.saveSettings()
+                    }
+                ),
+                onLongPress: { activeDetail = SettingOptionCatalog.cacheInAdvance }
+            )
+            if libraryStore.settings.cacheInAdvanceEnabled {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text("SONGS TO CACHE")
+                            .font(.system(size: 13, weight: .bold, design: .monospaced))
+                            .foregroundStyle(.secondary)
+
+                        Spacer()
+
+                        Text("\(libraryStore.settings.cacheInAdvanceCount)")
+                            .font(.system(size: 13, weight: .bold, design: .monospaced))
+                            .foregroundStyle(libraryStore.settings.appTheme.accentColor)
+                    }
+
+                    Slider(
+                        value: Binding(
+                            get: { Double(libraryStore.settings.cacheInAdvanceCount) },
+                            set: { newValue in
+                                let count = Int(newValue.rounded())
+                                guard count != libraryStore.settings.cacheInAdvanceCount else { return }
+                                libraryStore.settings.cacheInAdvanceCount = count
+                                libraryStore.saveSettings()
+                            }
+                        ),
+                        in: 0.0...25.0,
+                        step: 1.0
+                    )
+                    .tint(libraryStore.settings.appTheme.accentColor)
+                }
+                .padding(.top, 4)
+                .transition(.opacity)
+            }
             TypographicToggleRow(
                 title: "DOWNLOAD OVER CELLULAR",
                 isOn: Binding(
@@ -789,6 +850,45 @@ public struct FolderSettingsView: View {
         .padding(.vertical, 4)
     }
 
+    // MARK: - 7. Hidden Items Section
+    private var hiddenItemsSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Button {
+                HapticFeedback.selectionChanged()
+                withAnimation(.spring(response: 0.28, dampingFraction: 0.8)) {
+                    isHiddenExpanded.toggle()
+                }
+            } label: {
+                HStack(spacing: 8) {
+                    Text("HIDDEN (\(libraryStore.hiddenItems.count))")
+                        .font(.system(size: 13, weight: .bold, design: .monospaced))
+                    Spacer(minLength: 0)
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 11, weight: .bold))
+                        .rotationEffect(.degrees(isHiddenExpanded ? 180 : 0))
+                }
+                .foregroundStyle(.secondary)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            if isHiddenExpanded {
+                LazyVStack(spacing: 2) {
+                    ForEach(libraryStore.hiddenItems) { item in
+                        HiddenItemRow(item: item) {
+                            HapticFeedback.notificationSuccess()
+                            withAnimation(.spring(response: 0.28, dampingFraction: 0.8)) {
+                                libraryStore.returnHiddenItem(item)
+                            }
+                        }
+                    }
+                }
+                .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
     private func refreshArtworkCacheSize() async {
         let size = await Task.detached(priority: .utility) {
             await ArtworkCacheService.shared.calculateDiskSize()
@@ -796,5 +896,56 @@ public struct FolderSettingsView: View {
         await MainActor.run {
             self.artworkCacheSizeBytes = size
         }
+    }
+}
+
+// MARK: - Hidden Item Row (styled like TrackRowView)
+private struct HiddenItemRow: View {
+    let item: HiddenLibraryItem
+    let onReturn: () -> Void
+    @Environment(\.appTheme) private var appTheme
+
+    private var subtitle: String {
+        if item.kind == .album {
+            let count = item.records.count
+            return "\(item.subtitle) • \(count) \(count == 1 ? "TRACK" : "TRACKS")"
+        }
+        return item.subtitle
+    }
+
+    var body: some View {
+        HStack(spacing: 12) {
+            AlbumArtworkView(
+                artworkKey: item.artworkKey,
+                title: item.kind == .album ? item.title : (item.records.first?.track.album ?? item.title),
+                subtitle: item.subtitle,
+                cornerRadius: 6
+            )
+            .frame(width: 42, height: 42)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(item.title)
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(Color.primary)
+                    .lineLimit(1)
+                Text(subtitle)
+                    .font(.system(size: 12, weight: .regular))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+
+            Spacer(minLength: 8)
+
+            Button(action: onReturn) {
+                Text("RETURN")
+                    .font(.system(size: 13, weight: .bold, design: .monospaced))
+                    .foregroundStyle(appTheme.accentColor)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.vertical, 6)
+        .padding(.horizontal, 8)
+        .background(appTheme.backgroundColor)
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 }

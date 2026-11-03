@@ -12,6 +12,8 @@ public struct ArtistSectionFullListView: View {
     @Bindable var playerService: AudioPlayerService
 
     @State private var searchQuery: String = ""
+    @State private var selectedArtistForNavigation: Artist? = nil
+    @State private var selectedAlbumForNavigation: Album? = nil
     @FocusState private var isSearchFocused: Bool
 
     // Columns
@@ -132,7 +134,8 @@ public struct ArtistSectionFullListView: View {
                                 }
                             }
                             .buttonStyle(.plain)
-                            .albumContextMenu(album: album, libraryStore: libraryStore, playerService: playerService)
+                            .albumSelectModeTap(album: album) { selectedAlbumForNavigation = album }
+                            .albumContextMenu(album: album, libraryStore: libraryStore, playerService: playerService, onGoToArtist: { selectedArtistForNavigation = $0 }, hidingArtistNamed: artistName)
                         }
                     }
                     .padding(.horizontal, 16)
@@ -142,6 +145,12 @@ public struct ArtistSectionFullListView: View {
         }
         .dismissKeyboardOnDrag()
         .enableInteractivePopGesture()
+        .navigationDestination(item: $selectedArtistForNavigation) { artist in
+            ArtistDetailView(artist: artist, libraryStore: libraryStore, playerService: playerService)
+        }
+        .navigationDestination(item: $selectedAlbumForNavigation) { album in
+            AlbumDetailView(album: album, libraryStore: libraryStore, playerService: playerService)
+        }
         .background(libraryStore.settings.appTheme.backgroundColor.ignoresSafeArea())
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.large)

@@ -889,7 +889,7 @@ public struct FullScreenPlayerView: View {
                         HStack(spacing: 16) {
                             Button(action: {
                                 guard canTriggerButtonPress else { return }
-                                HapticFeedback.trackSkip(forward: false)
+                                HapticFeedback.transport(.back)
                                 playerService.previous()
                             }) {
                                 Image(systemName: "chevron.left.chevron.left.dotted")
@@ -900,7 +900,7 @@ public struct FullScreenPlayerView: View {
 
                             Button(action: {
                                 guard canTriggerButtonPress else { return }
-                                HapticFeedback.playPause(isPlaying: !playerService.playbackStatus.isPlaying)
+                                HapticFeedback.transport(playerService.willPauseOnToggle ? .pause : .play)
                                 playerService.togglePlayPause()
                             }) {
                                 Image(systemName: playerService.playbackStatus.isPlaying ? "pause.fill" : "play.fill")
@@ -911,7 +911,7 @@ public struct FullScreenPlayerView: View {
 
                             Button(action: {
                                 guard canTriggerButtonPress else { return }
-                                HapticFeedback.trackSkip(forward: true)
+                                HapticFeedback.transport(.next)
                                 playerService.next()
                             }) {
                                 Image(systemName: "chevron.right.dotted.chevron.right")
@@ -1007,7 +1007,7 @@ public struct FullScreenPlayerView: View {
     // MARK: - Playlist Picker Sheet
 
     private func playlistPickerSheet(for track: Track) -> some View {
-        PlaylistPickerSheet(libraryStore: libraryStore) { playlist in
+        PlaylistPickerSheet(libraryStore: libraryStore, previewArtworkKey: track.artworkKey) { playlist in
             libraryStore.addTrack(track, toPlaylistID: playlist.id)
             HapticFeedback.notificationSuccess()
             showingPlaylistPicker = false

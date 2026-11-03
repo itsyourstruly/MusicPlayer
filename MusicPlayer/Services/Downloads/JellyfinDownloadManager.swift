@@ -738,6 +738,28 @@ public final class JellyfinDownloadManager: NSObject, @unchecked Sendable {
         NotificationCenter.default.post(name: OfflineMode.downloadedTracksChanged, object: nil)
     }
 
+    /// Deletes several downloaded tracks at once (one index save and one change notification).
+    /// Tracks without a finished download are ignored; in-flight downloads are not touched.
+    public func deleteDownloads(trackIds: [UUID]) {
+        var fileURLs: [URL] = []
+        for trackId in trackIds {
+            guard let record = downloadRecords.removeValue(forKey: trackId) else { continue }
+            fileURLs.append(downloadsDirectoryURL.appendingPathComponent(record.localFileName))
+            downloadStates.removeValue(forKey: trackId)
+            downloadProgress.removeValue(forKey: trackId)
+            perTrackStates[trackId]?.state = .notDownloaded
+            perTrackStates[trackId]?.progress = 0.0
+            totalDownloadedBytes = max(0, totalDownloadedBytes - record.fileSizeBytes)
+        }
+        guard !fileURLs.isEmpty else { return }
+        Task.detached(priority: .utility) {
+            for url in fileURLs { try? FileManager.default.removeItem(at: url) }
+        }
+        invalidateSummaries()
+        saveIndex()
+        NotificationCenter.default.post(name: OfflineMode.downloadedTracksChanged, object: nil)
+    }
+
     /// Deletes all downloaded Jellyfin tracks from disk.
     public func deleteAllDownloads() {
         for task in activeTasks.values {

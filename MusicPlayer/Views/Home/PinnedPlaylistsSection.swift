@@ -8,6 +8,8 @@ public struct PinnedSection: View {
     public let onSelectPlaylist: (Playlist) -> Void
     // On select album
     public let onSelectAlbum: (Album) -> Void
+    // Album menu GO TO ARTIST
+    public let onSelectArtist: ((Artist) -> Void)?
 
     @State private var draggedItem: PinnedItem? = nil
 
@@ -21,12 +23,14 @@ public struct PinnedSection: View {
         libraryStore: LibraryStore,
         playerService: AudioPlayerService,
         onSelectPlaylist: @escaping (Playlist) -> Void,
-        onSelectAlbum: @escaping (Album) -> Void
+        onSelectAlbum: @escaping (Album) -> Void,
+        onSelectArtist: ((Artist) -> Void)? = nil
     ) {
         self.libraryStore = libraryStore
         self.playerService = playerService
         self.onSelectPlaylist = onSelectPlaylist
         self.onSelectAlbum = onSelectAlbum
+        self.onSelectArtist = onSelectArtist
     }
 
     // Main view layout structure
@@ -108,44 +112,7 @@ public struct PinnedSection: View {
                 }
             }
             .buttonStyle(.plain)
-            .contextMenu {
-                Button(action: {
-                    HapticFeedback.lightImpact()
-                    withAnimation(.spring(response: 0.28, dampingFraction: 0.8)) {
-                        libraryStore.togglePinPlaylist(id: playlist.id)
-                    }
-                }) {
-                    Text("UNPIN")
-                }
-
-                Divider()
-
-                Button(action: {
-                    // Tracks
-                    let tracks = libraryStore.tracks(for: playlist)
-                    if let first = tracks.first {
-                        playerService.play(track: first, inQueue: tracks)
-                    }
-                }) {
-                    Text("PLAY")
-                }
-
-                Button(action: {
-                    // Tracks
-                    let tracks = libraryStore.tracks(for: playlist)
-                    playerService.playNext(tracks: tracks)
-                }) {
-                    Text("PLAY NEXT")
-                }
-
-                Button(action: {
-                    // Tracks
-                    let tracks = libraryStore.tracks(for: playlist)
-                    playerService.appendToQueue(tracks: tracks)
-                }) {
-                    Text("ADD TO QUEUE")
-                }
-            }
+            .playlistContextMenu(playlist: playlist, libraryStore: libraryStore, playerService: playerService)
 
         // Album or release title
         case .album(let album):
@@ -186,7 +153,7 @@ public struct PinnedSection: View {
                 }
             }
             .buttonStyle(.plain)
-            .albumContextMenu(album: album, libraryStore: libraryStore, playerService: playerService)
+            .albumContextMenu(album: album, libraryStore: libraryStore, playerService: playerService, onGoToArtist: onSelectArtist)
         }
     }
 }

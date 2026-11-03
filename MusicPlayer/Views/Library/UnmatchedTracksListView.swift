@@ -34,7 +34,9 @@ public struct UnmatchedTracksListView: View {
                 } else {
                     ScrollView(.vertical, showsIndicators: true) {
                         LazyVStack(spacing: 20) {
-                            searchBar
+                            #if os(macOS)
+                            searchBar // iOS uses the native search field
+                            #endif
 
                             UnmatchedHeaderCardView(
                                 count: libraryStore.unmatchedTracks.count,
@@ -87,6 +89,7 @@ public struct UnmatchedTracksListView: View {
                         .padding(.horizontal, 16)
                         .padding(.vertical, 14)
                     }
+                    .nativeSearchField(text: $searchText, prompt: "SEARCH TRACK, ALBUM, OR ARTIST...")
                 }
             }
             .background(appTheme.backgroundColor.ignoresSafeArea())

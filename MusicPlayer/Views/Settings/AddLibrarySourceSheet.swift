@@ -18,7 +18,16 @@ public struct AddLibrarySourceSheet: View {
     }
 
     public var body: some View {
-        NavigationStack {
+        VStack(spacing: 0) {
+            // Sheet header (same style as EDIT PLAYLIST / ADD TO PLAYLIST)
+            Text("ADD SOURCE")
+                .font(.system(size: 13, weight: .bold, design: .monospaced))
+                .foregroundStyle(Color.primary)
+                .frame(maxWidth: .infinity)
+                .padding(.horizontal, 20)
+                .padding(.top, 22)
+                .padding(.bottom, 12)
+
             VStack(alignment: .leading, spacing: 20) {
                 Text("CHOOSE A SOURCE TYPE TO ADD TO YOUR MUSIC LIBRARY.")
                     .font(.system(size: 11, weight: .bold, design: .monospaced))
@@ -91,19 +100,7 @@ public struct AddLibrarySourceSheet: View {
                 Spacer()
             }
             .padding(.horizontal, 20)
-            .padding(.vertical, 20)
-            .background(appTheme.backgroundColor.ignoresSafeArea())
-            .navigationTitle("ADD SOURCE")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("CANCEL") {
-                        dismiss()
-                    }
-                    .font(.system(size: 13, weight: .bold, design: .monospaced))
-                    .foregroundStyle(appTheme.accentColor)
-                }
-            }
+            .padding(.bottom, 20)
             .sheet(isPresented: $showingServerSignIn) {
                 ServerSignInSheet { serverLink in
                     dismiss()
@@ -112,5 +109,9 @@ public struct AddLibrarySourceSheet: View {
                 .environment(\.appTheme, appTheme)
             }
         }
+        .background(appTheme.backgroundColor.ignoresSafeArea())
+        .presentationDetents([.large])
+        .presentationDragIndicator(.visible)
+        .presentationBackground(appTheme.backgroundColor)
     }
 }

@@ -893,6 +893,11 @@ final class GlobalSearchModel {
 
 // MARK: - Main Global Search View
 
+public extension Notification.Name {
+    /// Posted by the Home tab when it is about to pop the Search Library page.
+    static let globalSearchShouldLeave = Notification.Name("GlobalSearchShouldLeave")
+}
+
 public struct GlobalSearchView: View {
     @Bindable var libraryStore: LibraryStore
     @Bindable var playerService: AudioPlayerService
@@ -902,6 +907,17 @@ public struct GlobalSearchView: View {
     @State private var searchQuery: String = ""
     @State private var searchModel = GlobalSearchModel()
     @State private var isSearchPresented: Bool = false
+    /// Search field focus. The field is focused on open and the restored query is selected once.
+    @FocusState private var isSearchFieldFocused: Bool
+    /// Set after the first time the search field starts editing on this page, so select-all happens once per opening.
+    @State private var didHandleInitialEditing: Bool = false
+    /// The query-driven task below also runs once on open; that first run searches immediately (no debounce)
+    /// so the restored query is searched exactly once, then typing goes through the normal debounce.
+    @State private var didRunInitialQueryTask: Bool = false
+    /// Set once the page starts leaving (back, swipe or Home tab) so nothing re-presents the search.
+    @State private var isLeaving: Bool = false
+    /// True while this page is the visible top of its stack (not covered by a pushed detail page).
+    @State private var isVisible: Bool = false
 
     // Results, expansion sets, filters and flattened rows live in GlobalSearchModel.
     private var results: GlobalSearchResults { searchModel.presentation.results }
@@ -933,14 +949,55 @@ public struct GlobalSearchView: View {
         searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private func goBack() {
-        HapticFeedback.lightImpact()
+    /// Closes the search before the page leaves: focus off, search off, selection cleared, keyboard dismissed.
+    private func leaveSearch() {
+        isLeaving = true
+        isSearchFieldFocused = false
         isSearchPresented = false
         #if os(iOS)
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
         #endif
-        dismiss()
     }
+
+    /// When the search bar was last closed with Cancel/X (not by leaving). iOS ignores a back pop that
+    /// starts while the search bar is still animating closed, so leaving waits out the rest of that animation.
+    @MainActor static var lastSearchCloseTime: Date = .distantPast
+
+    /// How long a back pop must wait so it does not land inside the search bar's close animation (0 if none).
+    @MainActor static var popDelayAfterSearchClose: TimeInterval {
+        max(0, 0.45 - Date().timeIntervalSince(lastSearchCloseTime))
+    }
+
+    private func goBack() {
+        guard !isLeaving else { return }
+        HapticFeedback.lightImpact()
+        let delay = Self.popDelayAfterSearchClose
+        leaveSearch()
+        // Pop on the next run loop so the search is fully closed first (or right after a Cancel/X close animation).
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+            dismiss()
+        }
+        // Safety: if the page is somehow still showing afterwards, let back work again instead of staying stuck.
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay + 0.8) {
+            if isVisible { isLeaving = false }
+        }
+    }
+
+    #if os(iOS)
+    /// Selects the whole restored query the first time this page's search field starts editing,
+    /// so typing replaces it. Later taps into the field place the cursor normally.
+    private func handleSearchFieldBeganEditing(_ notification: Notification) {
+        guard isVisible, !isLeaving, !didHandleInitialEditing,
+              let field = notification.object as? UISearchTextField else { return }
+        didHandleInitialEditing = true
+        guard !searchQuery.isEmpty, field.text == searchQuery else { return }
+        // Next run loop: UIKit places the cursor at the end while beginning editing.
+        DispatchQueue.main.async {
+            guard field.isFirstResponder, field.text == searchQuery else { return }
+            field.selectedTextRange = field.textRange(from: field.beginningOfDocument, to: field.endOfDocument)
+        }
+    }
+    #endif
 
     public var body: some View {
         Group {
@@ -953,6 +1010,8 @@ public struct GlobalSearchView: View {
             DragGesture(minimumDistance: 20)
                 .onEnded { value in
                     // Allow pulling right from any empty space on the page to go back
+                    // The left-edge swipe is handled by the system back gesture.
+                    guard value.startLocation.x > 20 else { return }
                     let isHorizontalPull = abs(value.translation.height) < max(value.translation.width, 1) * 0.65
                     let isSignificantRightwardDrag = value.translation.width > 60 || (value.translation.width > 25 && value.predictedEndTranslation.width > 90)
 
@@ -969,6 +1028,11 @@ public struct GlobalSearchView: View {
             placement: .navigationBarDrawer(displayMode: .always),
             prompt: Text("SEARCH TRACKS, ARTISTS, ALBUMS...")
         )
+        .searchFocused($isSearchFieldFocused)
+        .onChange(of: isSearchPresented) { _, presented in
+            // Record a Cancel/X close (not a close done by leaving) so back can wait out its animation.
+            if !presented && !isLeaving { Self.lastSearchCloseTime = Date() }
+        }
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
                 Button(action: goBack) {
@@ -996,31 +1060,71 @@ public struct GlobalSearchView: View {
             playlistPickerSheet(for: track)
         }
         .task {
-            let initial = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !initial.isEmpty {
-                dispatchSearch(for: initial)
-            } else {
-                isSearchPresented = true
-            }
+            // Always focus the search field on open. A restored query is searched once by the
+            // query-driven task below and its results stay visible.
+            guard !isLeaving else { return }
+            isSearchFieldFocused = true
+            // Fallback: if focus did not take while the page was still sliding in, ask for focus once more
+            // after the push finishes. This only uses focus (never isPresented, which can reset the field text).
+            try? await Task.sleep(for: .milliseconds(600))
+            guard !Task.isCancelled, isVisible, !isLeaving, !isSearchFieldFocused, !didHandleInitialEditing else { return }
+            isSearchFieldFocused = true
         }
         .task(id: searchQuery) {
+            let isInitialRun = !didRunInitialQueryTask
+            didRunInitialQueryTask = true
             let clean = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !clean.isEmpty else {
                 clearAllSearchState()
                 return
             }
 
-            // Debounce (130 ms), stale-query guard and single publish are handled by the search model.
-            searchModel.submit(clean)
+            if isInitialRun {
+                // Restored query on open: search immediately (no debounce), exactly once.
+                dispatchSearch(for: clean)
+            } else {
+                // Debounce (130 ms), stale-query guard and single publish are handled by the search model.
+                searchModel.submit(clean)
+            }
         }
+        .onAppear {
+            isVisible = true
+            // Returning from a pushed album/artist page: restore the query if the field was cleared
+            // while covered, and re-run the search if no results are showing for it.
+            guard !isLeaving, didRunInitialQueryTask else { return }
+            if trimmedQuery.isEmpty && !libraryStore.globalSearchQuery.isEmpty {
+                searchQuery = libraryStore.globalSearchQuery
+            } else if !trimmedQuery.isEmpty, !results.hasResults, !isSearching {
+                dispatchSearch(for: trimmedQuery)
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .globalSearchShouldLeave)) { _ in
+            guard isVisible else { return }
+            leaveSearch()
+        }
+        #if os(iOS)
+        .onReceive(NotificationCenter.default.publisher(for: .interactivePopWillBegin)) { _ in
+            guard isVisible else { return }
+            leaveSearch()
+        }
+        // Subscription lives only while this page is in the hierarchy; SwiftUI cancels it when the page goes away.
+        .onReceive(NotificationCenter.default.publisher(for: UITextField.textDidBeginEditingNotification)) { notification in
+            handleSearchFieldBeganEditing(notification)
+        }
+        #endif
         .onDisappear {
-            isSearchPresented = false
-            activeSearchTask?.cancel()
-            activeSearchTask = nil
-            inFlightQuery = nil
-            pendingSearchQuery = nil
-            searchModel.cancel()
+            isVisible = false
             libraryStore.globalSearchQuery = searchQuery
+            // Only tear the search down when this page is actually leaving. When an album/artist page is
+            // pushed on top, keep the search presented so its text and results survive the round trip.
+            if isLeaving {
+                isSearchPresented = false
+                activeSearchTask?.cancel()
+                activeSearchTask = nil
+                inFlightQuery = nil
+                pendingSearchQuery = nil
+                searchModel.cancel()
+            }
             #if os(iOS)
             UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
             #endif
@@ -1162,16 +1266,10 @@ public struct GlobalSearchView: View {
                             onShowInfo: {
                                 selectedTrackForInfo = track
                             },
-                            onSelectArtist: { artistName in
-                                if let artistObj = libraryStore.findArtist(name: artistName) {
-                                    selectedArtistForNavigation = artistObj
-                                }
-                            },
-                            onSelectAlbum: {
-                                if let albumObj = libraryStore.findAlbum(title: track.album, artist: track.artist) {
-                                    selectedAlbumForNavigation = albumObj
-                                }
-                            }
+                            // Search track menus omit GO TO ARTIST / GO TO ALBUM
+                            onSelectArtist: nil,
+                            onSelectAlbum: nil,
+                            quickAddLibraryStore: libraryStore
                         )
                     }
                 }
@@ -1197,7 +1295,7 @@ public struct GlobalSearchView: View {
     // MARK: - Playlist Picker Sheet
 
     private func playlistPickerSheet(for track: Track) -> some View {
-        PlaylistPickerSheet(libraryStore: libraryStore) { playlist in
+        PlaylistPickerSheet(libraryStore: libraryStore, previewArtworkKey: track.artworkKey) { playlist in
             libraryStore.addTrack(track, toPlaylistID: playlist.id)
             HapticFeedback.notificationSuccess()
             selectedTrackForPlaylist = nil
@@ -1354,18 +1452,12 @@ public struct SearchTreeTrackRowView: View {
             .offset(x: dragOffset)
         }
         .contextMenu {
-            Button(action: {
-                playFromQueue()
-            }) {
-                Text("PLAY")
-            }
-
             Button(action: triggerPlayNext) {
                 Text("PLAY NEXT")
             }
 
             Button(action: triggerQueueNext) {
-                Text("QUEUE NEXT")
+                Text("QUEUE")
             }
 
             Button(action: {
@@ -1374,26 +1466,19 @@ public struct SearchTreeTrackRowView: View {
                 Text("ADD TO PLAYLIST")
             }
 
+            QuickAddToPlaylistMenu(tracks: [track], libraryStore: libraryStore)
+
+            TrackDownloadMenuItems(track: track, isPlayingOrNext: isCurrent || playerService.nextTrack?.id == track.id, removeDownloadAtBottom: true)
+
             Button(action: {
                 onShowInfo(track)
             }) {
-                Text("GET INFO")
+                Text("FILE INFO")
             }
 
-            Button(action: {
-                if let artistObj = libraryStore.findArtist(name: track.artist) {
-                    onSelectArtist(artistObj)
-                }
-            }) {
-                Text("GO TO ARTIST")
-            }
-
-            Button(action: {
-                if let albumObj = libraryStore.findAlbum(title: track.album, artist: track.artist) {
-                    onSelectAlbum(albumObj)
-                }
-            }) {
-                Text("GO TO ALBUM")
+            TrackMenuBottomItem(track: track, isPlayingOrNext: isCurrent || playerService.nextTrack?.id == track.id) {
+                HapticFeedback.notificationWarning()
+                NotificationCenter.default.post(name: .hideTrackRequested, object: nil, userInfo: ["track": track])
             }
         }
     }
@@ -1418,7 +1503,7 @@ public struct SearchTreeTrackRowView: View {
 
     private func triggerQueueNext() {
         HapticFeedback.notificationSuccess()
-        playerService.playNext(track: track)
+        playerService.appendToQueue(track: track)
         showQueueNextSuccess = true
 
         withAnimation(.spring(response: 0.26, dampingFraction: 0.85)) {
@@ -1444,6 +1529,8 @@ public struct SearchAlbumTreeNodeRow: View {
     @Bindable var libraryStore: LibraryStore
     @Bindable var playerService: AudioPlayerService
     public let onSelectAlbum: (Album) -> Void
+    // Album menu GO TO ARTIST
+    public var onSelectArtist: ((Artist) -> Void)? = nil
 
     public var body: some View {
         let resolvedAlbumArt = albumNode.album.artworkKey ?? albumNode.album.tracks.first(where: { $0.artworkKey != nil })?.artworkKey
@@ -1501,7 +1588,7 @@ public struct SearchAlbumTreeNodeRow: View {
         .onTapGesture {
             onToggleExpand()
         }
-        .albumContextMenu(album: albumNode.album, libraryStore: libraryStore, playerService: playerService)
+        .albumContextMenu(album: albumNode.album, libraryStore: libraryStore, playerService: playerService, onGoToArtist: onSelectArtist)
     }
 }
 
@@ -1721,7 +1808,8 @@ public struct SearchResultRowView: View, Equatable {
                 onToggleExpand: { onToggleAlbumExpansion(node.id, artistID) },
                 libraryStore: libraryStore,
                 playerService: playerService,
-                onSelectAlbum: selectAlbum
+                onSelectAlbum: selectAlbum,
+                onSelectArtist: onSelectArtist
             )
         case let .albumTrack(trackNode, albumTracks, index):
             SearchTreeTrackRowView(
@@ -1889,7 +1977,7 @@ public struct SearchResultRowView: View, Equatable {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .albumContextMenu(album: album, libraryStore: libraryStore, playerService: playerService)
+        .albumContextMenu(album: album, libraryStore: libraryStore, playerService: playerService, onGoToArtist: onSelectArtist)
     }
 
     /// Non-lazy adaptive grid (same geometry as GridItem(.adaptive(minimum: 155), spacing: 14)) so the

@@ -14,6 +14,14 @@ public struct PlaylistDetailView: View {
     @State private var isSearching: Bool = false
     @State private var searchQuery: String = ""
     @FocusState private var isSearchFocused: Bool
+    #if os(iOS)
+    // Native search state: lets one tap on the close (X) button end search even while the keyboard is up
+    @State private var isSearchPresented: Bool = false
+    @FocusState private var isSearchFieldFocused: Bool
+    @State private var isScrollingContent: Bool = false
+    @State private var lastScrollActivity: Date = .distantPast
+    @State private var didJustSubmitSearch: Bool = false
+    #endif
     @State private var isEditMode: Bool = false
     @State private var selectedSortCriteria: PlaylistTrackSortCriteria = .custom
     @State private var draggedTrack: Track? = nil
@@ -114,7 +122,8 @@ public struct PlaylistDetailView: View {
             let queue = sortedTracks(libraryStore.tracks(for: playlist))
             let rows = Self.displayRows(for: queue, query: searchQuery)
             VStack(spacing: 0) {
-                // Smooth Top Search Bar (Decoupled from ScrollView, zero layout jitter)
+                #if os(macOS)
+                // Smooth Top Search Bar (Decoupled from ScrollView, zero layout jitter). iOS uses the native search field.
                 if isSearching {
                     HStack(spacing: 8) {
                         Image(systemName: "magnifyingglass")
@@ -144,6 +153,7 @@ public struct PlaylistDetailView: View {
                     .padding(.bottom, 8)
                     .transition(.opacity)
                 }
+                #endif
 
                 ScrollView(.vertical, showsIndicators: false) {
                     VStack(alignment: .leading, spacing: 20) {
@@ -353,12 +363,49 @@ public struct PlaylistDetailView: View {
                     .padding(.bottom, 64)
                 }
                 .dismissKeyboardOnDrag()
+                #if os(iOS)
+                // Track scrolling (including the drag that pulls the keyboard down) so hiding the keyboard keeps search open
+                .onScrollPhaseChange { _, newPhase in
+                    isScrollingContent = newPhase.isScrolling
+                    lastScrollActivity = Date()
+                }
+                #endif
             }
             .enableInteractivePopGesture()
             .background(libraryStore.settings.appTheme.backgroundColor.ignoresSafeArea())
             .navigationTitle(playlist.name)
             .navigationBarTitleDisplayMode(.inline)
+            #if os(iOS)
+            // iOS 26 toolbar search: always-attached search button in the top bar that expands into a field
+            // (no conditional modifier, so opening/closing search doesn't reset the scroll position)
+            .searchable(text: $searchQuery, isPresented: $isSearchPresented, placement: .toolbar, prompt: Text("SEARCH TRACKS IN PLAYLIST"))
+            .searchToolbarBehavior(.minimize)
+            .searchFocused($isSearchFieldFocused)
+            // Close search (and the keyboard) in one tap: when the field loses focus without a scroll, end search
+            .onChange(of: isSearchFieldFocused) { _, focused in
+                // The keyboard Search key also drops focus: skip that one so search stays open with results
+                if !focused && didJustSubmitSearch {
+                    didJustSubmitSearch = false
+                    return
+                }
+                // Keyboard pulled down by a drag: focus drops as (or just after) the scroll ends, so allow a short grace window
+                let recentlyScrolled = isScrollingContent || Date().timeIntervalSince(lastScrollActivity) < 0.6
+                if !focused && isSearchPresented && !recentlyScrolled {
+                    isSearchPresented = false
+                }
+            }
+            .onSubmit(of: .search) {
+                didJustSubmitSearch = true
+                // Safety reset in case focus doesn't change, so the next X tap still closes in one tap
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { didJustSubmitSearch = false }
+            }
+            #endif
             .toolbar {
+                #if os(iOS)
+                DefaultToolbarItem(kind: .search, placement: .topBarTrailing)
+                    // Try to show the search button without the Liquid Glass background
+                    .sharedBackgroundVisibility(.hidden)
+                #else
                 ToolbarItem(placement: .topBarTrailing) {
                     Button(action: toggleSearch) {
                         Image(systemName: isSearching ? "xmark" : "magnifyingglass")
@@ -366,6 +413,7 @@ public struct PlaylistDetailView: View {
                             .foregroundStyle(Color.primary)
                     }
                 }
+                #endif
             }
             // Modal presentation sheet
             .sheet(isPresented: $showingAddTracksSheet) {
@@ -477,21 +525,14 @@ public struct PlaylistDetailView: View {
     private func headerView(for playlist: Playlist, tracks: [Track]) -> some View {
         HStack(alignment: .top, spacing: 16) {
             Button(action: { showingEditSheet = true }) {
-                ZStack(alignment: .bottomTrailing) {
-                    AlbumArtworkView(
-                        artworkKey: libraryStore.artworkKey(for: playlist),
-                        title: playlist.name,
-                        subtitle: "Playlist",
-                        cornerRadius: 10
-                    )
-                    .frame(width: 124, height: 124)
-                    .shadow(color: Color.black.opacity(0.12), radius: 8, x: 0, y: 4)
-
-                    Image(systemName: "pencil.circle.fill")
-                        .font(.system(size: 20))
-                        .foregroundStyle(Color.white, Color.black.opacity(0.65))
-                        .padding(4)
-                }
+                AlbumArtworkView(
+                    artworkKey: libraryStore.artworkKey(for: playlist),
+                    title: playlist.name,
+                    subtitle: "Playlist",
+                    cornerRadius: 10
+                )
+                .frame(width: 124, height: 124)
+                .shadow(color: Color.black.opacity(0.12), radius: 8, x: 0, y: 4)
             }
             .buttonStyle(.plain)
 
@@ -613,7 +654,9 @@ public struct PlaylistDetailView: View {
                     if let albumObj = libraryStore.findAlbum(title: track.album, artist: track.artist) {
                         selectedAlbumForNavigation = albumObj
                     }
-                }
+                },
+                quickAddLibraryStore: libraryStore,
+                quickAddExcludedPlaylistID: playlist.id
             )
 
             if isEditMode && selectedSortCriteria == .custom {
@@ -662,7 +705,7 @@ public struct PlaylistDetailView: View {
 
     // Playlist picker sheet
     private func playlistPickerSheet(for tracks: [Track]) -> some View {
-        PlaylistPickerSheet(libraryStore: libraryStore) { targetPlaylist in
+        PlaylistPickerSheet(libraryStore: libraryStore, previewArtworkKey: tracks.lazy.compactMap(\.artworkKey).first) { targetPlaylist in
             for track in tracks {
                 libraryStore.addTrack(track, toPlaylistID: targetPlaylist.id)
             }
@@ -782,7 +825,7 @@ private struct PlaylistDownloadButton: View {
     }
 }
 
-/// Modal view to edit playlist name, description, and cover artwork
+/// Sheet to edit a playlist's name, description and cover. Tap the cover for Photos / Files. Swipe down discards.
 struct EditPlaylistModalView: View {
     // Playlist
     let playlist: Playlist
@@ -793,227 +836,189 @@ struct EditPlaylistModalView: View {
     @State private var description: String
     @State private var selectedArtworkKey: String?
     @State private var selectedPhotoItem: PhotosPickerItem? = nil
+    @State private var showingPhotosPicker: Bool = false
     @State private var showingFileImporter: Bool = false
     @State private var isProcessingImage: Bool = false
+    // NEW PLAYLIST mode: SAVE creates the playlist (then `onCreated`, if any) instead of updating `playlist`
+    private let isNew: Bool
+    private let previewArtworkKey: String?
+    private let onCreated: ((Playlist) -> Void)?
 
     // Initialize with configured properties
     init(playlist: Playlist, libraryStore: LibraryStore) {
         self.playlist = playlist
         self.libraryStore = libraryStore
+        self.isNew = false
+        self.previewArtworkKey = nil
+        self.onCreated = nil
         _name = State(initialValue: playlist.name)
         _description = State(initialValue: playlist.description)
         _selectedArtworkKey = State(initialValue: playlist.customArtworkKey)
     }
 
-    private var availableArtworkKeys: [String] {
-        // Pl tracks
-        let plTracks = libraryStore.tracks(for: playlist)
-        // Pl keys
-        let plKeys = plTracks.compactMap { $0.artworkKey }
-        // All keys
-        let allKeys = libraryStore.tracks.compactMap { $0.artworkKey }
-        // Unique
-        var unique: [String] = []
-        for k in plKeys + allKeys {
-            if !unique.contains(k) {
-                unique.append(k)
-            }
-        }
-        return unique
+    /// NEW PLAYLIST: blank fields; the picture previews `previewArtworkKey` (the automatic cover once songs are added).
+    init(newPlaylistWith libraryStore: LibraryStore, previewArtworkKey: String? = nil, onCreated: ((Playlist) -> Void)? = nil) {
+        self.playlist = Playlist(name: "")
+        self.libraryStore = libraryStore
+        self.isNew = true
+        self.previewArtworkKey = previewArtworkKey
+        self.onCreated = onCreated
+        _name = State(initialValue: "")
+        _description = State(initialValue: "")
+        _selectedArtworkKey = State(initialValue: nil)
+    }
+
+    private var isSaveDisabled: Bool {
+        name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isProcessingImage
     }
 
     // Body
     var body: some View {
-        NavigationStack {
-            Form {
-                // Live Artwork Preview
-                Section {
-                    HStack {
-                        Spacer()
-                        ZStack {
-                            AlbumArtworkView(
-                                artworkKey: selectedArtworkKey ?? libraryStore.artworkKey(for: playlist),
-                                title: name.isEmpty ? "Playlist" : name,
-                                subtitle: "Preview",
-                                cornerRadius: 10
-                            )
-                            .frame(width: 96, height: 96)
-                            .shadow(color: Color.black.opacity(0.12), radius: 6, x: 0, y: 3)
+        let theme = libraryStore.settings.appTheme
+        VStack(spacing: 0) {
+            // Header: title centered, SAVE on the right
+            ZStack {
+                Text(isNew ? "NEW PLAYLIST" : "EDIT PLAYLIST")
+                    .font(.system(size: 13, weight: .bold, design: .monospaced))
+                    .foregroundStyle(Color.primary)
 
-                            if isProcessingImage {
-                                ProgressView()
-                                    .padding(8)
-                                    .background(.ultraThinMaterial)
-                                    .clipShape(Circle())
-                            }
-                        }
-                        Spacer()
+                HStack {
+                    Spacer()
+                    Button(action: saveAndDismiss) {
+                        Text("SAVE")
+                            .font(.system(size: 13, weight: .bold, design: .monospaced))
+                            .foregroundStyle(isSaveDisabled ? Color.secondary : theme.accentColor)
                     }
-                    .padding(.vertical, 4)
-                    .listRowBackground(Color.clear)
+                    .buttonStyle(.plain)
+                    .disabled(isSaveDisabled)
                 }
+            }
+            .padding(.horizontal, 20)
+            .padding(.top, 22)
+            .padding(.bottom, 12)
 
-                Section("PLAYLIST NAME") {
+            HStack(alignment: .top, spacing: 14) {
+                // Cover: tap for Photos / Files
+                Menu {
+                    Button(action: { showingPhotosPicker = true }) {
+                        Text("CHOOSE FROM PHOTOS")
+                    }
+                    Button(action: { showingFileImporter = true }) {
+                        Text("CHOOSE FROM FILES")
+                    }
+                } label: {
+                    ZStack {
+                        AlbumArtworkView(
+                            artworkKey: selectedArtworkKey ?? (isNew ? previewArtworkKey : libraryStore.artworkKey(for: playlist)),
+                            title: name.isEmpty ? "Playlist" : name,
+                            subtitle: "Playlist",
+                            cornerRadius: 10
+                        )
+                        .frame(width: 96, height: 96)
+                        .shadow(color: Color.black.opacity(0.12), radius: 6, x: 0, y: 3)
+
+                        if isProcessingImage {
+                            ProgressView()
+                                .padding(8)
+                                .background(.ultraThinMaterial)
+                                .clipShape(Circle())
+                        }
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+
+                VStack(spacing: 8) {
                     TextField("NAME", text: $name)
-                        .font(.system(size: 15, weight: .medium))
+                        .font(.system(size: 14, weight: .semibold, design: .monospaced))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 9)
+                        .background(Color.primary.opacity(0.06))
+                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
 
                     TextField("DESCRIPTION (OPTIONAL)", text: $description, axis: .vertical)
-                        .font(.system(size: 14))
+                        .font(.system(size: 13, design: .monospaced))
                         .lineLimit(2...4)
-                }
-
-                Section("PLAYLIST COVER ARTWORK") {
-                    Button(action: {
-                        selectedArtworkKey = nil
-                    }) {
-                        HStack {
-                            Text("USE DEFAULT (AUTOMATIC)")
-                                .font(.system(size: 13, weight: .medium))
-                                .foregroundStyle(Color.primary)
-                            Spacer()
-                            if selectedArtworkKey == nil {
-                                Image(systemName: "checkmark")
-                                    .font(.system(size: 12, weight: .bold))
-                                    .foregroundStyle(Color.primary)
-                            }
-                        }
-                    }
-                    .buttonStyle(.plain)
-
-                    if !availableArtworkKeys.isEmpty {
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(spacing: 12) {
-                                ForEach(availableArtworkKeys.prefix(20), id: \.self) { artKey in
-                                    Button(action: {
-                                        selectedArtworkKey = artKey
-                                    }) {
-                                        ZStack(alignment: .topTrailing) {
-                                            AlbumArtworkView(
-                                                artworkKey: artKey,
-                                                title: "Cover",
-                                                subtitle: "",
-                                                cornerRadius: 8
-                                            )
-                                            .frame(width: 64, height: 64)
-
-                                            if selectedArtworkKey == artKey {
-                                                Image(systemName: "checkmark.circle.fill")
-                                                    .font(.system(size: 18))
-                                                    .foregroundStyle(Color.white, Color.blue)
-                                                    .padding(2)
-                                            }
-                                        }
-                                    }
-                                    .buttonStyle(.plain)
-                                }
-                            }
-                            .padding(.vertical, 4)
-                        }
-                    }
-                }
-
-                Section("ADD IMAGE FROM DEVICE") {
-                    PhotosPicker(selection: $selectedPhotoItem, matching: .images) {
-                        HStack {
-                            Label("CHOOSE FROM PHOTOS", systemImage: "photo.on.rectangle")
-                                .font(.system(size: 13, weight: .medium))
-                                .foregroundStyle(Color.primary)
-                            Spacer()
-                            Image(systemName: "chevron.right")
-                                .font(.system(size: 11, weight: .semibold))
-                                .foregroundStyle(.tertiary)
-                        }
-                    }
-                    .buttonStyle(.plain)
-
-                    Button(action: { showingFileImporter = true }) {
-                        HStack {
-                            Label("CHOOSE FROM FILES", systemImage: "folder")
-                                .font(.system(size: 13, weight: .medium))
-                                .foregroundStyle(Color.primary)
-                            Spacer()
-                            Image(systemName: "chevron.right")
-                                .font(.system(size: 11, weight: .semibold))
-                                .foregroundStyle(.tertiary)
-                        }
-                    }
-                    .buttonStyle(.plain)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 9)
+                        .background(Color.primary.opacity(0.06))
+                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                 }
             }
-            .navigationTitle("EDIT PLAYLIST")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button("CANCEL") {
-                        dismiss()
-                    }
-                    .font(.system(size: 13, weight: .bold, design: .monospaced))
+            .padding(.horizontal, 20)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .photosPicker(isPresented: $showingPhotosPicker, selection: $selectedPhotoItem, matching: .images)
+        // React to state changes
+        .onChange(of: selectedPhotoItem) { _, newItem in
+            // Ensure preconditions are met before proceeding
+            guard let newItem = newItem else { return }
+            Task {
+                isProcessingImage = true
+                if let data = try? await newItem.loadTransferable(type: Data.self) {
+                    // Custom key
+                    let customKey = "custom_playlist_\(playlist.id.uuidString)_\(UUID().uuidString)"
+                    await ArtworkCacheService.shared.saveArtwork(data: data, key: customKey)
+                    selectedArtworkKey = customKey
                 }
-
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("SAVE") {
-                        saveAndDismiss()
-                    }
-                    .font(.system(size: 13, weight: .bold, design: .monospaced))
-                    .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                }
+                isProcessingImage = false
+                selectedPhotoItem = nil
             }
-            // React to state changes
-            .onChange(of: selectedPhotoItem) { _, newItem in
+        }
+        .fileImporter(
+            isPresented: $showingFileImporter,
+            allowedContentTypes: [.image],
+            allowsMultipleSelection: false
+        ) { result in
+            switch result {
+            case .success(let urls):
                 // Ensure preconditions are met before proceeding
-                guard let newItem = newItem else { return }
+                guard let url = urls.first else { return }
+                let playlistID = playlist.id
                 Task {
                     isProcessingImage = true
-                    if let data = try? await newItem.loadTransferable(type: Data.self) {
-                        // Custom key
-                        let customKey = "custom_playlist_\(playlist.id.uuidString)_\(UUID().uuidString)"
-                        await ArtworkCacheService.shared.saveArtwork(data: data, key: customKey)
-                        await MainActor.run {
-                            selectedArtworkKey = customKey
-                            isProcessingImage = false
-                        }
-                    } else {
-                        await MainActor.run {
-                            isProcessingImage = false
-                        }
-                    }
-                }
-            }
-            .fileImporter(
-                isPresented: $showingFileImporter,
-                allowedContentTypes: [.image],
-                allowsMultipleSelection: false
-            ) { result in
-                switch result {
-                case .success(let urls):
-                    // Ensure preconditions are met before proceeding
-                    guard let url = urls.first else { return }
-                    if url.startAccessingSecurityScopedResource() {
-                        // Cleanup upon exiting scope
+                    // Read the file off the main thread
+                    let data: Data? = await Task.detached(priority: .userInitiated) {
+                        guard url.startAccessingSecurityScopedResource() else { return nil }
                         defer { url.stopAccessingSecurityScopedResource() }
-                        if let data = try? Data(contentsOf: url) {
-                            // Custom key
-                            let customKey = "custom_playlist_\(playlist.id.uuidString)_\(UUID().uuidString)"
-                            Task {
-                                isProcessingImage = true
-                                await ArtworkCacheService.shared.saveArtwork(data: data, key: customKey)
-                                await MainActor.run {
-                                    selectedArtworkKey = customKey
-                                    isProcessingImage = false
-                                }
-                            }
-                        }
+                        return try? Data(contentsOf: url)
+                    }.value
+                    if let data {
+                        // Custom key
+                        let customKey = "custom_playlist_\(playlistID.uuidString)_\(UUID().uuidString)"
+                        await ArtworkCacheService.shared.saveArtwork(data: data, key: customKey)
+                        selectedArtworkKey = customKey
                     }
-                case .failure(let error):
-                    AppLogger.library.error("Failed to import image from file: \(error.localizedDescription)")
+                    isProcessingImage = false
                 }
+            case .failure(let error):
+                AppLogger.library.error("Failed to import image from file: \(error.localizedDescription)")
             }
         }
         .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
+        .presentationBackground(theme.backgroundColor)
+        .tint(theme.accentColor)
+        .environment(\.appTheme, theme)
     }
 
     // Save and dismiss
     private func saveAndDismiss() {
+        if isNew {
+            let created = libraryStore.createPlaylist(name: name, description: description)
+            // Custom picture only if one was picked; otherwise the automatic cover (first song's artwork)
+            if let selectedArtworkKey {
+                libraryStore.updatePlaylist(
+                    id: created.id,
+                    name: created.name,
+                    description: created.description,
+                    customArtworkKey: selectedArtworkKey
+                )
+            }
+            dismiss()
+            onCreated?(created)
+            return
+        }
         libraryStore.updatePlaylist(
             id: playlist.id,
             name: name,

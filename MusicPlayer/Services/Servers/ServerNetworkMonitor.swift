@@ -1,5 +1,6 @@
 import Foundation
 import Network
+import os
 
 /// Reports meaningful network path changes (connectivity restored, or the active interface changed, e.g.
 /// Wi-Fi to cellular / VPN up or down) so server sources can recover without user action. React-only: it never
@@ -8,11 +9,16 @@ nonisolated final class ServerNetworkMonitor: @unchecked Sendable {
     private let monitor = NWPathMonitor()
     private let queue = DispatchQueue(label: "ServerNetworkMonitor")
     private var lastSignature: String?
+    private static let pathSatisfied = OSAllocatedUnfairLock<Bool>(initialState: true)
+
+    /// Last reported path state (true until the first update). Used to tell network failures from file errors.
+    static var isPathSatisfied: Bool { pathSatisfied.withLock { $0 } }
 
     /// `onChange` runs on the main actor after the path settles as satisfied with a new interface set.
     func start(onChange: @escaping @MainActor @Sendable () -> Void) {
         monitor.pathUpdateHandler = { [weak self] path in
             guard let self else { return }
+            Self.pathSatisfied.withLock { $0 = path.status == .satisfied }
             let signature = path.status == .satisfied
                 ? path.availableInterfaces.map { "\($0.type)" }.joined(separator: ",") + (path.usesInterfaceType(.other) ? "+vpn" : "")
                 : "offline"

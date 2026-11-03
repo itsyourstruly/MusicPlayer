@@ -153,7 +153,9 @@ public struct MetadataComparisonListView: View {
     private var diffListScrollView: some View {
         ScrollView(.vertical, showsIndicators: true) {
             LazyVStack(spacing: 20) {
-                searchBar
+                #if os(macOS)
+                searchBar // iOS uses the native search field
+                #endif
 
                 EnrichHeaderCardView(
                     diffsCount: activeDiffs.count,
@@ -214,6 +216,7 @@ public struct MetadataComparisonListView: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 14)
         }
+        .nativeSearchField(text: $searchText, prompt: "SEARCH TRACK, ALBUM, OR ARTIST...")
     }
 
     private var searchBar: some View {

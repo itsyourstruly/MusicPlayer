@@ -67,7 +67,16 @@ public struct ServerSignInSheet: View {
     }
 
     public var body: some View {
-        NavigationStack {
+        VStack(spacing: 0) {
+            // Sheet header (same style as EDIT PLAYLIST / ADD TO PLAYLIST)
+            Text("CONNECT SERVER")
+                .font(.system(size: 13, weight: .bold, design: .monospaced))
+                .foregroundStyle(Color.primary)
+                .frame(maxWidth: .infinity)
+                .padding(.horizontal, 20)
+                .padding(.top, 22)
+                .padding(.bottom, 12)
+
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
                     if let error = errorMessage {
@@ -135,15 +144,6 @@ public struct ServerSignInSheet: View {
                 .padding(.vertical, 20)
             }
             .background(appTheme.backgroundColor.ignoresSafeArea())
-            .navigationTitle("CONNECT SERVER")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("CANCEL") { dismiss() }
-                        .font(.system(size: 13, weight: .bold, design: .monospaced))
-                        .foregroundStyle(appTheme.accentColor)
-                }
-            }
             .task(id: trimmedURL) {
                 // Debounced background probe while typing (auto mode only).
                 guard typeChoice == .auto, !trimmedURL.isEmpty else { return }
@@ -161,6 +161,10 @@ public struct ServerSignInSheet: View {
             }
             .onDisappear { cancelAttempt() }
         }
+        .background(appTheme.backgroundColor.ignoresSafeArea())
+        .presentationDetents([.large])
+        .presentationDragIndicator(.visible)
+        .presentationBackground(appTheme.backgroundColor)
     }
 
     // MARK: - Plex

@@ -10,6 +10,14 @@ public struct AlbumDetailView: View {
     @State private var isSearching: Bool = false
     @State private var searchQuery: String = ""
     @FocusState private var isSearchFocused: Bool
+    #if os(iOS)
+    // Native search state: lets one tap on the close (X) button end search even while the keyboard is up
+    @State private var isSearchPresented: Bool = false
+    @FocusState private var isSearchFieldFocused: Bool
+    @State private var isScrollingContent: Bool = false
+    @State private var lastScrollActivity: Date = .distantPast
+    @State private var didJustSubmitSearch: Bool = false
+    #endif
     @State private var selectedArtistForNavigation: Artist? = nil
     @State private var showingPlaylistPicker: Bool = false
     @State private var selectedTrackForInfo: Track? = nil
@@ -17,6 +25,7 @@ public struct AlbumDetailView: View {
     @State private var showingAlbumMetadataSheet: Bool = false
     @State private var serverDescription: ServerDescription? = nil
     @Environment(\.appTheme) private var appTheme
+    @Environment(LibrarySelectionStore.self) private var librarySelection: LibrarySelectionStore?
 
     // Initialize with configured properties
     public init(
@@ -89,7 +98,8 @@ public struct AlbumDetailView: View {
         let altTracks = displayedAlternateTracks(for: activeAlbum)
 
         VStack(spacing: 0) {
-            // Smooth Top Search Bar (Decoupled from ScrollView, zero layout jitter)
+            #if os(macOS)
+            // Smooth Top Search Bar (Decoupled from ScrollView, zero layout jitter). iOS uses the native search field.
             if isSearching {
                 HStack(spacing: 8) {
                     Image(systemName: "magnifyingglass")
@@ -119,6 +129,7 @@ public struct AlbumDetailView: View {
                 .padding(.bottom, 6)
                 .transition(.move(edge: .top).combined(with: .opacity))
             }
+            #endif
 
             ScrollView(.vertical, showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 20) {
@@ -150,52 +161,28 @@ public struct AlbumDetailView: View {
 
                         Spacer()
 
-                        let summary = JellyfinDownloadManager.shared.albumSummary(for: activeAlbum)
-                        let isJellyfinAlbum = summary.total > 0
-                        let isAllDownloaded = summary.isAllDownloaded
-                        let isAnyDownloading = summary.isAnyDownloading
 
                         // Music note icon button with Album Metadata, Search Online & Playlist Actions
                         Menu {
-                            if isJellyfinAlbum {
-                                let jellyfinTracks = activeAlbum.tracks.filter { $0.isJellyfinItem || $0.metadataSource == .server }
-                                if isAllDownloaded {
-                                    Button(role: .destructive) {
-                                        HapticFeedback.selectionChanged()
-                                        for track in jellyfinTracks {
-                                            JellyfinDownloadManager.shared.deleteDownload(trackId: track.id)
-                                        }
-                                    } label: {
-                                        Text("REMOVE ALBUM DOWNLOADS")
-                                    }
-                                } else if isAnyDownloading {
-                                    if JellyfinDownloadManager.shared.isWaitingForWiFi {
-                                        Button {} label: {
-                                            Text("WAITING FOR WI-FI")
-                                        }
-                                        .disabled(true)
-                                    }
-                                    Button {
-                                        HapticFeedback.selectionChanged()
-                                        for track in jellyfinTracks {
-                                            JellyfinDownloadManager.shared.cancelDownload(trackId: track.id)
-                                        }
-                                    } label: {
-                                        Text("CANCEL DOWNLOADS")
-                                    }
-                                } else {
-                                    Button {
-                                        HapticFeedback.selectionChanged()
-                                        JellyfinDownloadManager.shared.download(tracks: jellyfinTracks)
-                                    } label: {
-                                        Text(summary.failed > 0 ? "DOWNLOAD FAILED, TAP TO RETRY" : "DOWNLOAD ALBUM")
-                                    }
-                                }
-
-                                Divider()
+                            Button(action: {
+                                HapticFeedback.notificationSuccess()
+                                playerService.insertPlayNextFront(tracks: activeAlbum.tracks)
+                            }) {
+                                Text("PLAY NEXT")
                             }
 
-                            if activeAlbum.tracks.contains(where: { $0.supportsMetadataLookup }) {
+                            Button(action: {
+                                HapticFeedback.notificationSuccess()
+                                playerService.appendToQueue(tracks: activeAlbum.tracks)
+                            }) {
+                                Text("QUEUE")
+                            }
+
+                            Divider()
+
+                            // Local-source albums only
+                            let isLocalAlbum = activeAlbum.tracks.contains(where: { !OfflineMode.isServerTrack($0) })
+                            if isLocalAlbum && activeAlbum.tracks.contains(where: { $0.supportsMetadataLookup }) {
                                 Button(action: {
                                     showingAlbumMetadataSheet = true
                                 }) {
@@ -204,20 +191,13 @@ public struct AlbumDetailView: View {
                             }
 
                             // Local albums only; an album that is already collaborative can still be reverted.
-                            if libraryStore.isCollaborativeAlbum(activeAlbum) || activeAlbum.tracks.contains(where: { !OfflineMode.isServerTrack($0) }) {
+                            if libraryStore.isCollaborativeAlbum(activeAlbum) || isLocalAlbum {
                                 Button(action: {
                                     HapticFeedback.notificationSuccess()
                                     libraryStore.toggleCollaborativeAlbum(activeAlbum)
                                 }) {
                                     Text(libraryStore.isCollaborativeAlbum(activeAlbum) ? "REVERT COLLABORATIVE ALBUM" : "MAKE COLLABORATIVE ALBUM")
                                 }
-                            }
-
-                            Button(action: {
-                                HapticFeedback.lightImpact()
-                                libraryStore.togglePinAlbum(activeAlbum)
-                            }) {
-                                Text(libraryStore.isAlbumPinned(activeAlbum) ? "UNPIN ALBUM" : "PIN ALBUM")
                             }
 
                             Divider()
@@ -228,19 +208,18 @@ public struct AlbumDetailView: View {
                                 Text("ADD TO PLAYLIST")
                             }
 
-                            if !libraryStore.playlists.isEmpty {
-                                Menu {
-                                    ForEach(libraryStore.playlists) { playlist in
-                                        Button(action: {
-                                            HapticFeedback.notificationSuccess()
-                                            libraryStore.addTracks(activeAlbum.tracks, toPlaylistID: playlist.id)
-                                        }) {
-                                            Text(playlist.name)
-                                        }
-                                    }
-                                } label: {
-                                    Text("QUICK ADD TO...")
-                                }
+                            QuickAddToPlaylistMenu(tracks: activeAlbum.tracks, libraryStore: libraryStore)
+
+                            Divider()
+
+                            // Server albums only
+                            AlbumDownloadMenuItems(album: activeAlbum)
+
+                            Button(action: {
+                                HapticFeedback.lightImpact()
+                                libraryStore.togglePinAlbum(activeAlbum)
+                            }) {
+                                Text(libraryStore.isAlbumPinned(activeAlbum) ? "UNPIN ALBUM" : "PIN ALBUM")
                             }
                         } label: {
                             Image(systemName: "music.note")
@@ -306,7 +285,11 @@ public struct AlbumDetailView: View {
                                                 selectedArtistForNavigation = artistObj
                                             }
                                         },
-                                        onSelectAlbum: nil
+                                        onSelectAlbum: nil,
+                                        quickAddLibraryStore: libraryStore,
+                                        isSelected: librarySelection?.contains(track.id) ?? false,
+                                        isSelectMode: librarySelection?.isActive ?? false,
+                                        onToggleSelect: librarySelection?.toggler(for: track)
                                     )
                                 }
                             }
@@ -361,7 +344,11 @@ public struct AlbumDetailView: View {
                                                 selectedArtistForNavigation = artistObj
                                             }
                                         },
-                                        onSelectAlbum: nil
+                                        onSelectAlbum: nil,
+                                        quickAddLibraryStore: libraryStore,
+                                        isSelected: librarySelection?.contains(track.id) ?? false,
+                                        isSelectMode: librarySelection?.isActive ?? false,
+                                        onToggleSelect: librarySelection?.toggler(for: track)
                                     )
                                 }
                             }
@@ -374,11 +361,48 @@ public struct AlbumDetailView: View {
                 .padding(.bottom, 64)
             }
             .dismissKeyboardOnDrag()
+            #if os(iOS)
+            // Track scrolling (including the drag that pulls the keyboard down) so hiding the keyboard keeps search open
+            .onScrollPhaseChange { _, newPhase in
+                isScrollingContent = newPhase.isScrolling
+                lastScrollActivity = Date()
+            }
+            #endif
         }
         .background(libraryStore.settings.appTheme.backgroundColor.ignoresSafeArea())
         .navigationTitle(activeAlbum.releaseTypeDisplayTitle)
         .navigationBarTitleDisplayMode(.inline)
+        #if os(iOS)
+        // iOS 26 toolbar search: always-attached search button in the top bar that expands into a field
+        // (no conditional modifier, so opening/closing search doesn't reset the scroll position)
+        .searchable(text: $searchQuery, isPresented: $isSearchPresented, placement: .toolbar, prompt: Text("SEARCH TRACKS IN ALBUM"))
+        .searchToolbarBehavior(.minimize)
+        .searchFocused($isSearchFieldFocused)
+        // Close search (and the keyboard) in one tap: when the field loses focus without a scroll, end search
+        .onChange(of: isSearchFieldFocused) { _, focused in
+            // The keyboard Search key also drops focus: skip that one so search stays open with results
+            if !focused && didJustSubmitSearch {
+                didJustSubmitSearch = false
+                return
+            }
+            // Keyboard pulled down by a drag: focus drops as (or just after) the scroll ends, so allow a short grace window
+            let recentlyScrolled = isScrollingContent || Date().timeIntervalSince(lastScrollActivity) < 0.6
+            if !focused && isSearchPresented && !recentlyScrolled {
+                isSearchPresented = false
+            }
+        }
+        .onSubmit(of: .search) {
+            didJustSubmitSearch = true
+            // Safety reset in case focus doesn't change, so the next X tap still closes in one tap
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { didJustSubmitSearch = false }
+        }
+        #endif
         .toolbar {
+            #if os(iOS)
+            DefaultToolbarItem(kind: .search, placement: .topBarTrailing)
+                // Try to show the search button without the Liquid Glass background
+                .sharedBackgroundVisibility(.hidden)
+            #else
             ToolbarItem(placement: .topBarTrailing) {
                 Button(action: toggleSearch) {
                     Image(systemName: "magnifyingglass")
@@ -387,6 +411,7 @@ public struct AlbumDetailView: View {
                 }
                 .buttonStyle(.plain)
             }
+            #endif
         }
         // Modal presentation sheet
         .sheet(item: $selectedTrackForInfo) { track in
@@ -416,7 +441,7 @@ public struct AlbumDetailView: View {
 
     // Playlist picker sheet
     private func playlistPickerSheet(for albumTracks: [Track]) -> some View {
-        PlaylistPickerSheet(libraryStore: libraryStore) { playlist in
+        PlaylistPickerSheet(libraryStore: libraryStore, previewArtworkKey: albumTracks.lazy.compactMap(\.artworkKey).first) { playlist in
             HapticFeedback.notificationSuccess()
             libraryStore.addTracks(albumTracks, toPlaylistID: playlist.id)
             showingPlaylistPicker = false

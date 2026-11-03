@@ -31,8 +31,10 @@ public struct OnlineMetadataMatchSheet: View {
         NavigationStack {
             ScrollView(.vertical, showsIndicators: true) {
                 VStack(spacing: 16) {
-                    // Top Custom Search Bar (Always fixed at top)
+                    #if os(macOS)
+                    // Top Custom Search Bar (Always fixed at top). iOS uses the native search field.
                     customSearchBar
+                    #endif
 
                     // API Provider Selector (Always fixed at top)
                     sourceSelectorBar
@@ -58,6 +60,14 @@ public struct OnlineMetadataMatchSheet: View {
             .background(appTheme.backgroundColor.ignoresSafeArea())
             .navigationTitle("ONLINE METADATA")
             .navigationBarTitleDisplayMode(.inline)
+            .nativeSearchField(text: $searchQuery, prompt: "CUSTOM SEARCH QUERY...")
+            // Keyboard Search key runs the search (empty queries are ignored)
+            .onSubmit(of: .search) {
+                guard !isSearching, !searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+                Task {
+                    await performSearchWithCurrentSource()
+                }
+            }
             // Async lifecycle task
             .task {
                 let sig = MetadataSanitizer.sanitize(track: track)

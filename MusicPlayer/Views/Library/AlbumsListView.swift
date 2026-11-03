@@ -11,6 +11,7 @@ public struct AlbumsListView: View {
     ]
 
     @State private var selectedAlbum: Album? = nil
+    @State private var selectedArtistForNavigation: Artist? = nil
     @State private var displayLimit: Int = 80
 
     // Initialize with configured properties
@@ -88,7 +89,8 @@ public struct AlbumsListView: View {
                             }
                         }
                         .buttonStyle(.plain)
-                        .albumContextMenu(album: album, libraryStore: libraryStore, playerService: playerService)
+                        .albumSelectModeTap(album: album) { selectedAlbum = album }
+                        .albumContextMenu(album: album, libraryStore: libraryStore, playerService: playerService, onGoToArtist: { selectedArtistForNavigation = $0 })
                         .onAppear {
                             if index >= visibleAlbums.count - 20 && visibleAlbums.count < albums.count {
                                 displayLimit = min(albums.count, displayLimit + 80)
@@ -111,6 +113,9 @@ public struct AlbumsListView: View {
         }
         .navigationDestination(item: $selectedAlbum) { album in
             AlbumDetailView(album: album, libraryStore: libraryStore, playerService: playerService)
+        }
+        .navigationDestination(item: $selectedArtistForNavigation) { artist in
+            ArtistDetailView(artist: artist, libraryStore: libraryStore, playerService: playerService)
         }
     }
 }

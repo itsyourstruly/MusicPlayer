@@ -39,10 +39,21 @@ public struct TrackRowView: View {
     public let onRemoveFromPlaylist: (() -> Void)?
     // On hide track
     public let onHideTrack: (() -> Void)?
+    // Library store used only by the QUICK ADD TO... submenu (read inside the submenu, not the row)
+    public let quickAddLibraryStore: LibraryStore?
+    // Playlist hidden from QUICK ADD TO... (the playlist currently being viewed)
+    public let quickAddExcludedPlaylistID: UUID?
     // Flag indicating if swipe disabled
     public let isSwipeDisabled: Bool
     // Trailing text
     public let trailingText: String?
+    // Library select mode: selected badge, tap toggles, swipes off
+    public let isSelected: Bool
+    public let isSelectMode: Bool
+    // SELECT / DESELECT in the long-press menu (nil hides it)
+    public let onToggleSelect: (() -> Void)?
+    // Leaves the long-press menu off (e.g. rows in a drag-to-reorder list)
+    public let isContextMenuDisabled: Bool
 
     @Environment(\.appTheme) private var appTheme
     @GestureState private var gestureDragOffset: CGFloat = 0
@@ -86,7 +97,13 @@ public struct TrackRowView: View {
         onShowInfo: @escaping () -> Void = {},
         onSelectArtist: ((String) -> Void)? = nil,
         onSelectAlbum: (() -> Void)? = nil,
-        onHideTrack: (() -> Void)? = nil
+        onHideTrack: (() -> Void)? = nil,
+        quickAddLibraryStore: LibraryStore? = nil,
+        quickAddExcludedPlaylistID: UUID? = nil,
+        isSelected: Bool = false,
+        isSelectMode: Bool = false,
+        onToggleSelect: (() -> Void)? = nil,
+        isContextMenuDisabled: Bool = false
     ) {
         self.track = track
         self.indexNumber = indexNumber
@@ -108,6 +125,12 @@ public struct TrackRowView: View {
         self.onSelectArtist = onSelectArtist
         self.onSelectAlbum = onSelectAlbum
         self.onHideTrack = onHideTrack
+        self.quickAddLibraryStore = quickAddLibraryStore
+        self.quickAddExcludedPlaylistID = quickAddExcludedPlaylistID
+        self.isSelected = isSelected
+        self.isSelectMode = isSelectMode
+        self.onToggleSelect = onToggleSelect
+        self.isContextMenuDisabled = isContextMenuDisabled
     }
 
     private var currentOffset: CGFloat {
@@ -169,7 +192,7 @@ public struct TrackRowView: View {
     }
 
     // Main view layout structure
-    public var body: some View {
+    private var rowContent: some View {
         ZStack {
             // Leading "PLAY NEXT" / "PLAY NOW" / "PLAYING" Action Surface Revealed on Swipe Right or Tap-to-Play-Next
             if isLeadingSurfaceVisible {
@@ -232,6 +255,10 @@ public struct TrackRowView: View {
                                 resetOffset()
                                 return
                             }
+                            if isSelectMode {
+                                toggleSelection()
+                                return
+                            }
                             HapticFeedback.lightImpact()
                             onSelectAlbum()
                         }
@@ -283,6 +310,10 @@ public struct TrackRowView: View {
                     resetOffset()
                     return
                 }
+                if isSelectMode {
+                    toggleSelection()
+                    return
+                }
                 if isTapToPlayNextEnabled {
                     triggerTapPlayNext()
                 } else {
@@ -292,7 +323,7 @@ public struct TrackRowView: View {
             .offset(x: currentOffset)
             // Interactive drag and touch gesture handling
             .simultaneousGesture(
-                isSwipeDisabled ? nil : DragGesture(minimumDistance: 24, coordinateSpace: .global)
+                (isSwipeDisabled || isSelectMode) ? nil : DragGesture(minimumDistance: 24, coordinateSpace: .global)
                     .updating($gestureDragOffset) { value, state, _ in
                         let translationX = value.translation.width
                         let translationY = value.translation.height
@@ -370,16 +401,24 @@ public struct TrackRowView: View {
                 resetOffset()
             }
         }
-        .contextMenu {
-            if isTapToPlayNextEnabled {
-                Button(action: onPlay) {
-                    Text("PLAY NOW")
-                }
-            }
+    }
+
+    // Main view layout structure
+    public var body: some View {
+        if isContextMenuDisabled {
+            rowContent
+        } else {
+            rowContent.contextMenu { contextMenuItems }
+        }
+    }
+
+    // Long-press menu items
+    @ViewBuilder
+    private var contextMenuItems: some View {
             Button(action: triggerPlayNext) {
                 Text("PLAY NEXT")
             }
-            Button(action: triggerQueue) {
+            Button(action: { triggerQueue(appendToEnd: true) }) {
                 Text("QUEUE")
             }
 
@@ -417,82 +456,53 @@ public struct TrackRowView: View {
                 Text("ADD TO PLAYLIST")
             }
 
-            if let onRemove = onRemoveFromPlaylist {
-                Button(role: .destructive, action: onRemove) {
-                    Text("REMOVE FROM PLAYLIST")
-                }
+            if let quickAddLibraryStore {
+                QuickAddToPlaylistMenu(tracks: [track], libraryStore: quickAddLibraryStore, excludedPlaylistID: quickAddExcludedPlaylistID)
+            }
+
+            // Playlist rows (the only rows with REMOVE FROM PLAYLIST) skip download, SELECT and HIDE TRACK.
+            if onRemoveFromPlaylist == nil {
+                // Current/next state comes in as values so rows don't observe the player during render.
+                TrackDownloadMenuItems(track: track, isPlayingOrNext: isCurrentTrack || isNextTrack, removeDownloadAtBottom: true)
             }
 
             Button(action: onShowInfo) {
                 Text("FILE INFO")
             }
 
-            if track.canReadLocalBytes && track.metadataSource != .server {
-                let isUbiquitous = (try? track.url.resourceValues(forKeys: [.isUbiquitousItemKey]))?.isUbiquitousItem == true
-                // Current/next state comes in as values so rows don't observe the player during render.
-                let isPlayingOrNext = isCurrentTrack || isNextTrack
-                if isUbiquitous && !isPlayingOrNext {
-                    Button(role: .destructive) {
-                        // Re-check live player state at tap time (callers that omit the flags stay safe).
-                        let player = AudioPlayerService.shared
-                        guard player?.currentTrack?.id != track.id, player?.nextTrack?.id != track.id else { return }
-                        try? FileManager.default.evictUbiquitousItem(at: track.url)
-                    } label: {
-                        Text("REMOVE DOWNLOAD")
-                    }
+            if let onRemove = onRemoveFromPlaylist {
+                Button(role: .destructive, action: onRemove) {
+                    Text("REMOVE FROM PLAYLIST")
                 }
-            } else if track.isJellyfinItem || track.metadataSource == .server {
-                if JellyfinDownloadManager.shared.isDownloaded(trackId: track.id) {
-                    Button(role: .destructive) {
-                        HapticFeedback.selectionChanged()
-                        JellyfinDownloadManager.shared.deleteDownload(trackId: track.id)
-                    } label: {
-                        Text("REMOVE DOWNLOAD")
-                    }
-                } else {
-                    let state = JellyfinDownloadManager.shared.downloadStates[track.id, default: .notDownloaded]
-                    if state.isDownloading {
-                        if JellyfinDownloadManager.shared.isWaitingForWiFi {
-                            Button {} label: {
-                                Text("WAITING FOR WI-FI")
-                            }
-                            .disabled(true)
-                        }
-                        Button {
-                            HapticFeedback.selectionChanged()
-                            JellyfinDownloadManager.shared.cancelDownload(trackId: track.id)
-                        } label: {
-                            Text("CANCEL DOWNLOAD")
-                        }
-                    } else if state.isFailed {
-                        Button {
-                            HapticFeedback.selectionChanged()
-                            JellyfinDownloadManager.shared.download(track: track)
-                        } label: {
-                            Text("DOWNLOAD FAILED, TAP TO RETRY")
-                        }
-                    } else {
-                        Button {
-                            HapticFeedback.selectionChanged()
-                            JellyfinDownloadManager.shared.download(track: track)
-                        } label: {
-                            Text("DOWNLOAD TRACK")
-                        }
-                    }
+            } else {
+                libraryOnlyMenuItems
+            }
+    }
+
+    // SELECT / HIDE TRACK or REMOVE DOWNLOAD (not shown in playlists)
+    @ViewBuilder
+    private var libraryOnlyMenuItems: some View {
+            if let onToggleSelect {
+                Button(action: onToggleSelect) {
+                    Text(isSelected ? "DESELECT" : "SELECT")
                 }
             }
 
-            Button(role: .destructive) {
+            TrackMenuBottomItem(track: track, isPlayingOrNext: isCurrentTrack || isNextTrack) {
                 HapticFeedback.notificationWarning()
                 if let onHideTrack = onHideTrack {
                     onHideTrack()
                 } else {
                     NotificationCenter.default.post(name: .hideTrackRequested, object: nil, userInfo: ["track": track])
                 }
-            } label: {
-                Text("HIDE TRACK")
             }
-        }
+    }
+
+    // Select-mode tap: toggle this track in the Library selection
+    private func toggleSelection() {
+        resetOffset()
+        HapticFeedback.selectionChanged()
+        onToggleSelect?()
     }
 
     // Trigger tap play next (used when tap-to-play-next is enabled and track is tapped)
@@ -571,11 +581,15 @@ public struct TrackRowView: View {
         }
     }
 
-    // Trigger queue (swipe left)
-    private func triggerQueue() {
+    // Trigger queue (swipe left uses onQueueNext; the context menu appends to the end of the queue)
+    private func triggerQueue(appendToEnd: Bool = false) {
         dismissTask?.cancel()
         HapticFeedback.notificationSuccess()
-        onQueueNext()
+        if appendToEnd {
+            onAddToQueue()
+        } else {
+            onQueueNext()
+        }
         showQueueSuccess = true
         isTrailingBadgeVisible = true
         showQueueAgain = false
@@ -635,7 +649,17 @@ public struct TrackRowView: View {
             )
             .frame(width: 42, height: 42)
 
-            if isCurrentTrack {
+            if isSelected {
+                Text("SELECTED")
+                    .font(.system(size: 6.5, weight: .black, design: .monospaced))
+                    .foregroundStyle(Color.appInvertedBackground)
+                    .padding(.horizontal, 3.5)
+                    .padding(.vertical, 1.5)
+                    .background(appTheme.accentColor)
+                    .clipShape(RoundedRectangle(cornerRadius: 2.5, style: .continuous))
+                    .offset(x: 2, y: 2)
+                    .contentTransition(.opacity)
+            } else if isCurrentTrack {
                 Text(isPlaying ? "PLAYING" : "PAUSED")
                     .font(.system(size: 6.5, weight: .black, design: .monospaced))
                     .foregroundStyle(Color.appInvertedBackground)
@@ -679,5 +703,141 @@ public struct TrackRowView: View {
     }
 }
 
+/// Shared download menu items for a single track (server downloads, or evicting a downloaded iCloud file).
+/// A separate view so the download state is only read when the menu content renders.
+public struct TrackDownloadMenuItems: View {
+    public let track: Track
+    public let isPlayingOrNext: Bool
+    /// When true, REMOVE DOWNLOAD is left out here because the menu shows it at the bottom (TrackMenuBottomItem).
+    public let removeDownloadAtBottom: Bool
 
+    public init(track: Track, isPlayingOrNext: Bool, removeDownloadAtBottom: Bool = false) {
+        self.track = track
+        self.isPlayingOrNext = isPlayingOrNext
+        self.removeDownloadAtBottom = removeDownloadAtBottom
+    }
 
+    public var body: some View {
+        let removeShownAtBottom = removeDownloadAtBottom
+            && trackMenuBottomAction(for: track, isPlayingOrNext: isPlayingOrNext) == .removeDownload
+        if track.canReadLocalBytes && track.metadataSource != .server {
+            let isUbiquitous = (try? track.url.resourceValues(forKeys: [.isUbiquitousItemKey]))?.isUbiquitousItem == true
+            if isUbiquitous && !isPlayingOrNext && !removeShownAtBottom {
+                Button(role: .destructive) {
+                    removeTrackDownload(track)
+                } label: {
+                    Text("REMOVE DOWNLOAD")
+                }
+            }
+        } else if track.isJellyfinItem || track.metadataSource == .server {
+            if JellyfinDownloadManager.shared.isDownloaded(trackId: track.id) {
+                if !removeShownAtBottom {
+                    Button(role: .destructive) {
+                        removeTrackDownload(track)
+                    } label: {
+                        Text("REMOVE DOWNLOAD")
+                    }
+                }
+            } else {
+                let state = JellyfinDownloadManager.shared.downloadStates[track.id, default: .notDownloaded]
+                if state.isDownloading {
+                    if JellyfinDownloadManager.shared.isWaitingForWiFi {
+                        Button {} label: {
+                            Text("WAITING FOR WI-FI")
+                        }
+                        .disabled(true)
+                    }
+                    Button {
+                        HapticFeedback.selectionChanged()
+                        JellyfinDownloadManager.shared.cancelDownload(trackId: track.id)
+                    } label: {
+                        Text("CANCEL DOWNLOAD")
+                    }
+                } else if state.isFailed {
+                    Button {
+                        HapticFeedback.selectionChanged()
+                        JellyfinDownloadManager.shared.download(track: track)
+                    } label: {
+                        Text("DOWNLOAD FAILED, TAP TO RETRY")
+                    }
+                } else {
+                    Button {
+                        HapticFeedback.selectionChanged()
+                        JellyfinDownloadManager.shared.download(track: track)
+                    } label: {
+                        Text("DOWNLOAD TRACK")
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// What a track menu shows in its bottom (red) slot.
+public enum TrackMenuBottomAction: Equatable {
+    case hide
+    case removeDownload
+    case none
+}
+
+/// Downloaded tracks (server download, or an iCloud file stored on the phone) show REMOVE DOWNLOAD instead of HIDE TRACK;
+/// a server track that is downloading shows neither; an iCloud track playing or up next (can't be removed) and plain local files show HIDE.
+@MainActor public func trackMenuBottomAction(for track: Track, isPlayingOrNext: Bool) -> TrackMenuBottomAction {
+    #if os(macOS)
+    return .hide
+    #else
+    if track.canReadLocalBytes && track.metadataSource != .server {
+        let isUbiquitous = (try? track.url.resourceValues(forKeys: [.isUbiquitousItemKey]))?.isUbiquitousItem == true
+        return isUbiquitous && !isPlayingOrNext ? .removeDownload : .hide
+    }
+    if track.isJellyfinItem || track.metadataSource == .server {
+        if JellyfinDownloadManager.shared.isDownloaded(trackId: track.id) { return .removeDownload }
+        let state = JellyfinDownloadManager.shared.downloadStates[track.id, default: .notDownloaded]
+        return state.isDownloading ? .none : .hide
+    }
+    return .hide
+    #endif
+}
+
+/// Removes a track's local download: deletes a server download, or evicts a downloaded iCloud file (never the playing/next track).
+@MainActor public func removeTrackDownload(_ track: Track) {
+    if track.isJellyfinItem || track.metadataSource == .server {
+        HapticFeedback.selectionChanged()
+        JellyfinDownloadManager.shared.deleteDownload(trackId: track.id)
+    } else {
+        // Re-check live player state at tap time (callers that omit the flags stay safe).
+        let player = AudioPlayerService.shared
+        guard player?.currentTrack?.id != track.id, player?.nextTrack?.id != track.id else { return }
+        try? FileManager.default.evictUbiquitousItem(at: track.url)
+    }
+}
+
+/// Bottom item of a track's long-press menu: REMOVE DOWNLOAD, HIDE TRACK, or nothing (see `trackMenuBottomAction`).
+public struct TrackMenuBottomItem: View {
+    public let track: Track
+    public let isPlayingOrNext: Bool
+    public let onHide: () -> Void
+
+    public init(track: Track, isPlayingOrNext: Bool, onHide: @escaping () -> Void) {
+        self.track = track
+        self.isPlayingOrNext = isPlayingOrNext
+        self.onHide = onHide
+    }
+
+    public var body: some View {
+        switch trackMenuBottomAction(for: track, isPlayingOrNext: isPlayingOrNext) {
+        case .removeDownload:
+            Button(role: .destructive) {
+                removeTrackDownload(track)
+            } label: {
+                Text("REMOVE DOWNLOAD")
+            }
+        case .hide:
+            Button(role: .destructive, action: onHide) {
+                Text("HIDE TRACK")
+            }
+        case .none:
+            EmptyView()
+        }
+    }
+}

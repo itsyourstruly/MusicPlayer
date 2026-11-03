@@ -367,6 +367,7 @@ public final class LibraryStore {
         libraryView = view
         invalidateSortedCaches()
         libraryViewRevision &+= 1
+        prewarmTrackSort()
     }
 
     /// Observed counter bumped each time a new Library view is published. The sorted-list getters below
@@ -531,6 +532,16 @@ public final class LibraryStore {
     public private(set) var jellyfinServerErrors: [UUID: String] = [:]
     // Last successful sync date per Jellyfin server ID
     public private(set) var jellyfinLastSyncDates: [UUID: Date] = [:]
+    // Hidden tracks/albums listed under Settings > Sources > HIDDEN, newest first (UNKNOWN ITEM rows last, not persisted)
+    public private(set) var hiddenItems: [HiddenLibraryItem] = []
+    // True once `hidden_items.json` has been read (loaded off the main thread after launch)
+    @ObservationIgnored var hiddenItemsLoaded: Bool = false
+    // Server item IDs blocked because they were deleted, not hidden; never listed under HIDDEN
+    @ObservationIgnored var hiddenDeletedServerItemIDs: Set<String> = []
+    // Legacy hidden local files (hidden before saved copies existed) are read at most once per session
+    @ObservationIgnored var hiddenLegacyResolveStarted: Bool = false
+    // Debounced full server resync after returning UNKNOWN ITEM rows
+    @ObservationIgnored var hiddenResyncTask: Task<Void, Never>? = nil
     /// Server sources whose stored tracks predate the current server credits format. Shown as a
     /// "RESCAN RECOMMENDED" note; never triggers a sync on its own. Not persisted (recomputed from tracks).
     public private(set) var serverRescanRecommended: Set<UUID> = []
@@ -778,6 +789,7 @@ public final class LibraryStore {
         self.albumsByNormalizedKey = byKey
 
         self.invalidateSortedCaches()
+        self.prewarmTrackSort()
         self.isInitialLoading = false
 
         self.reconcileRecentAndPinnedItems(previousAlbumsByID: previousAlbumsByID)
@@ -884,6 +896,8 @@ public final class LibraryStore {
 
         // 1. Instant sync load of lightweight preferences for immediate frame 1 paint
         loadLightweightPreferences()
+        // Hidden items list (Settings > Sources > HIDDEN) loads off the main thread so launch is not slowed
+        loadHiddenItemsInBackground()
 
         // Offload security-scoped bookmark resolution and server pre-warming to background task so main thread/init is zero latency
         let folders = self.settings.linkedFolders
@@ -980,13 +994,7 @@ public final class LibraryStore {
             if let cached = cachedSortedTracks {
                 return cached
             }
-            let sourceList: [Track]
-            if settings.autoHideDuplicates && !duplicateGroups.isEmpty {
-                let hiddenTrackIDs = Set(duplicateGroups.flatMap { $0.duplicateCandidates.map { $0.track.id } })
-                sourceList = activeTracks.filter { !hiddenTrackIDs.contains($0.id) }
-            } else {
-                sourceList = activeTracks
-            }
+            let sourceList = trackSortSource()
             // Never sort on the main thread inside a getter that SwiftUI bodies read: sort in the
             // background and show the previous (or unsorted) list until the result lands.
             scheduleBackgroundTrackSort(sourceList)
@@ -1802,6 +1810,7 @@ public final class LibraryStore {
 
         Task { await ServerSyncCoordinator.shared.cancel(sourceID: id) }
         Task { await ServerTranscodeCache.shared.removeAll(for: id) }
+        Task { await SessionStreamCache.shared.removeAll(for: id) }
         for track in sourceTracks { JellyfinDownloadManager.shared.deleteDownload(trackId: track.id) }
         ServerArtworkRegistry.shared.removeAll(for: id)
         ServerCatalogStore.shared.remove(sourceID: id)
@@ -1842,6 +1851,7 @@ public final class LibraryStore {
     /// Network path changed (connectivity back, Wi-Fi <-> cellular, VPN up/down): re-select Plex connections
     /// (local / remote / relay) so playback uses a reachable address. Never syncs: sync is manual (RESCAN).
     private func handleNetworkChange() {
+        AudioPlayerService.shared?.networkDidReconnect()
         for server in settings.serverSources where server.kind == .plex {
             guard let provider = ServerProviderRegistry.provider(for: server) else { continue }
             Task.detached(priority: .utility) { try? await ServerDeadline.run(seconds: 15) { try await provider.prepareSession() } }
@@ -3644,6 +3654,22 @@ public final class LibraryStore {
         return sorted
     }
 
+    /// Unsorted Library track list (current source selection, duplicates hidden when enabled) that the track sort runs on.
+    private func trackSortSource() -> [Track] {
+        if settings.autoHideDuplicates && !duplicateGroups.isEmpty {
+            let hiddenTrackIDs = Set(duplicateGroups.flatMap { $0.duplicateCandidates.map { $0.track.id } })
+            return activeTracks.filter { !hiddenTrackIDs.contains($0.id) }
+        }
+        return activeTracks
+    }
+
+    /// Starts the background track sort as soon as the library changes, instead of lazily on the first
+    /// read of `filteredTracks`, so the Tracks list is already sorted when the Library is opened.
+    private func prewarmTrackSort() {
+        guard cachedSortedTracks == nil else { return }
+        scheduleBackgroundTrackSort(trackSortSource())
+    }
+
     private func scheduleBackgroundTrackSort(_ sourceList: [Track]) {
         let token = trackSortInvalidation
         guard pendingTrackSortToken != token else { return }
@@ -3832,6 +3858,8 @@ public final class LibraryStore {
             if track.isJellyfinItem || track.metadataSource == .server {
                 if let itemId = track.jellyfinItemId ?? JellyfinPlaybackReporter.extractItemId(from: track) {
                     self.settings.removedJellyfinItemIDs.insert(itemId)
+                    // Deleted copies are not "hidden": keep them out of the HIDDEN list
+                    self.recordDeletedServerItemID(itemId)
                 }
                 JellyfinDownloadManager.shared.deleteDownload(trackId: track.id)
                 deletedIDs.insert(track.id)
@@ -3888,6 +3916,7 @@ public final class LibraryStore {
             saveLibrary()
             savePlaylists()
             saveSettings()
+            hiddenItemsDidChange()
         }
 
         return (successCount, failedCount)
@@ -3902,6 +3931,8 @@ public final class LibraryStore {
 
     /// Removes a track from the app's library and hides it, while leaving the audio file intact on disk or server.
     public func removeTrackFromLibrary(track: Track) {
+        // Keep a copy (metadata + playlist slots) so it can be listed and returned from Settings > Sources > HIDDEN
+        recordHiddenTracks([track], album: nil)
         if track.isJellyfinItem || track.metadataSource == .server {
             if let itemId = track.jellyfinItemId ?? JellyfinPlaybackReporter.extractItemId(from: track) {
                 self.settings.removedJellyfinItemIDs.insert(itemId)
@@ -3930,6 +3961,38 @@ public final class LibraryStore {
         removeTrackFromLibrary(track: track)
     }
 
+    /// Hides every track of an album in one pass (single rebuild and save), persisting the exclusions like `hideTrack`.
+    public func hideAlbum(_ album: Album) {
+        let albumTracks = album.tracks
+        guard !albumTracks.isEmpty else { return }
+        // One HIDDEN row for the whole album (RETURN brings back all its tracks)
+        recordHiddenTracks(albumTracks, album: album)
+        var removedIDs = Set<UUID>()
+        for track in albumTracks {
+            removedIDs.insert(track.id)
+            if track.isJellyfinItem || track.metadataSource == .server {
+                if let itemId = track.jellyfinItemId ?? JellyfinPlaybackReporter.extractItemId(from: track) {
+                    self.settings.removedJellyfinItemIDs.insert(itemId)
+                }
+                JellyfinDownloadManager.shared.deleteDownload(trackId: track.id)
+            } else {
+                self.settings.removedTrackPaths.insert(track.url.standardizedFileURL.path)
+            }
+        }
+        self.tracks.removeAll { removedIDs.contains($0.id) }
+        for i in 0..<playlists.count {
+            playlists[i].trackIDs.removeAll { removedIDs.contains($0) }
+        }
+        rebuildAlbumsAndArtists()
+        Task {
+            await recalculateDuplicates()
+        }
+        self.settings.totalScannedFiles = self.tracks.count
+        saveLibrary()
+        savePlaylists()
+        saveSettings()
+    }
+
     /// Permanently deletes a track from the remote Jellyfin server, removes local downloads, and purges it from the library.
     public func deleteJellyfinTrack(_ track: Track) async throws {
         // The song's own server only (folderID = source ID); never another linked server.
@@ -3940,6 +4003,14 @@ public final class LibraryStore {
                 try await JellyfinClient.shared.deleteItem(itemId: itemId, serverLink: server)
             }
             self.settings.removedJellyfinItemIDs.insert(itemId)
+            if let server, server.kind == .jellyfin {
+                // Really deleted on the server: never listed under HIDDEN
+                recordDeletedServerItemID(itemId)
+                hiddenItemsDidChange()
+            } else {
+                // Other servers keep the file, so this is a hide: list it under HIDDEN
+                recordHiddenTracks([track], album: nil)
+            }
         }
         JellyfinDownloadManager.shared.deleteDownload(trackId: track.id)
         self.tracks.removeAll { $0.id == track.id }
@@ -6134,6 +6205,7 @@ public final class LibraryStore {
         for server in serversToDrop {
             Task { await ServerSyncCoordinator.shared.cancel(sourceID: server.id) }
             Task { await ServerTranscodeCache.shared.removeAll(for: server.id) }
+            Task { await SessionStreamCache.shared.removeAll(for: server.id) }
             Task {
                 await ServerProviderRegistry.provider(for: server)?.signOut()
                 _ = ServerCredentialStore.deleteCredentials(for: server)
@@ -6194,6 +6266,7 @@ public final class LibraryStore {
         self.settings.removedJellyfinItemIDs = []
         self.settings.removedTrackPaths = []
         self.settings.manualCollaborativeAlbumIDs = []
+        clearHiddenItems()
         self.settings.originalAlbumArtistsByTrackID = [:]
         saveSettings()
 
@@ -7466,8 +7539,465 @@ public final class LibraryStore {
                     }, uniquingKeysWith: { first, _ in first })
                 }
                 self.invalidateSortedCaches()
+                self.prewarmTrackSort()
             }
         }
     }
 }
 
+
+// MARK: - Hidden Library Items (Settings > Sources > HIDDEN)
+
+/// A playlist position a track held when it was hidden, so RETURN can put it back in place.
+nonisolated public struct HiddenPlaylistSlot: Codable, Sendable, Hashable {
+    public let playlistID: UUID
+    public let index: Int
+}
+
+/// Saved copy of one hidden track. Hiding removes the track from the library, so this is the only copy of its metadata.
+nonisolated public struct HiddenTrackRecord: Codable, Sendable, Hashable {
+    public let track: Track
+    public let playlistSlots: [HiddenPlaylistSlot]
+    /// Exact path stored in `removedTrackPaths` (local files only).
+    public let blockedPath: String?
+}
+
+/// One HIDDEN row: a hidden track, a hidden album (RETURN brings back all its tracks),
+/// or a server item hidden before saved copies existed (shown as UNKNOWN ITEM, never persisted).
+nonisolated public struct HiddenLibraryItem: Codable, Sendable, Hashable, Identifiable {
+    public enum Kind: String, Codable, Sendable {
+        case track
+        case album
+        case unknownServerItem
+    }
+
+    public let id: String
+    public let kind: Kind
+    public let hiddenDate: Date
+    public let title: String
+    public let subtitle: String
+    public let artworkKey: String?
+    public var records: [HiddenTrackRecord]
+    public let serverItemID: String?
+}
+
+/// On-disk contents of `hidden_items.json`.
+nonisolated struct HiddenItemsFileContents: Codable, Sendable {
+    var items: [HiddenLibraryItem]
+    /// Server item IDs blocked because they were deleted (not hidden); never listed under HIDDEN.
+    var deletedServerItemIDs: Set<String>
+}
+
+/// A legacy hidden local file waiting to have its tags read.
+nonisolated struct HiddenLegacyJob: Sendable {
+    let blockedPath: String
+    let folderID: UUID
+    let rootURL: URL
+    /// Path relative to the folder root, used when the stored absolute path moved (sandbox container change).
+    let relativePath: String?
+}
+
+extension LibraryStore {
+    var hiddenItemsFileURL: URL {
+        storageDirectoryURL.appendingPathComponent("hidden_items.json")
+    }
+
+    /// Server tracks are blocked by item ID; local tracks by file path.
+    func isHiddenServerTrack(_ track: Track) -> Bool {
+        track.isJellyfinItem || track.metadataSource == .server
+    }
+
+    func hiddenServerItemID(for track: Track) -> String? {
+        guard isHiddenServerTrack(track) else { return nil }
+        return track.jellyfinItemId ?? JellyfinPlaybackReporter.extractItemId(from: track)
+    }
+
+    // MARK: Load / Save
+
+    func loadHiddenItemsInBackground() {
+        let url = hiddenItemsFileURL
+        Task.detached(priority: .utility) { [weak self] in
+            let contents = LibraryStore.readHiddenItemsFile(at: url)
+            await self?.applyLoadedHiddenItems(contents)
+        }
+    }
+
+    nonisolated static func readHiddenItemsFile(at url: URL) -> HiddenItemsFileContents? {
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        return try? JSONDecoder().decode(HiddenItemsFileContents.self, from: data)
+    }
+
+    func applyLoadedHiddenItems(_ contents: HiddenItemsFileContents?) {
+        guard !hiddenItemsLoaded else { return }
+        hiddenItemsLoaded = true
+        hiddenDeletedServerItemIDs = contents?.deletedServerItemIDs ?? []
+        hiddenItems = contents?.items ?? []
+        recomputeUnknownHiddenItems()
+    }
+
+    /// Synchronous fallback so a hide right after launch never overwrites a list that has not loaded yet.
+    func ensureHiddenItemsLoaded() {
+        guard !hiddenItemsLoaded else { return }
+        applyLoadedHiddenItems(Self.readHiddenItemsFile(at: hiddenItemsFileURL))
+    }
+
+    func saveHiddenItems() {
+        let contents = HiddenItemsFileContents(
+            items: hiddenItems.filter { $0.kind != .unknownServerItem },
+            deletedServerItemIDs: hiddenDeletedServerItemIDs
+        )
+        let url = hiddenItemsFileURL
+        let gen = bumpGeneration(for: url)
+        Task.detached(priority: .utility) {
+            if let data = try? JSONEncoder().encode(contents) {
+                _ = await PersistenceWriter.shared.write(data: data, to: url, generation: gen)
+            }
+        }
+    }
+
+    func hiddenItemsDidChange() {
+        recomputeUnknownHiddenItems()
+        saveHiddenItems()
+    }
+
+    /// Sorts newest first and rebuilds the UNKNOWN ITEM rows for server IDs hidden before saved copies existed.
+    func recomputeUnknownHiddenItems() {
+        var known = hiddenItems.filter { $0.kind != .unknownServerItem }
+        var covered = Set<String>()
+        for item in known {
+            for record in item.records {
+                if let itemID = hiddenServerItemID(for: record.track) { covered.insert(itemID) }
+            }
+        }
+        let unknownIDs = settings.removedJellyfinItemIDs
+            .subtracting(covered)
+            .subtracting(hiddenDeletedServerItemIDs)
+            .sorted()
+        known.sort { a, b in
+            if a.hiddenDate != b.hiddenDate { return a.hiddenDate > b.hiddenDate }
+            return a.title.localizedStandardCompare(b.title) == .orderedAscending
+        }
+        let servers = settings.serverSources
+        let hint = servers.count == 1 ? servers[0].serverName.uppercased() : "SERVER ITEM"
+        let unknown = unknownIDs.map { itemID in
+            HiddenLibraryItem(
+                id: "server:\(itemID)",
+                kind: .unknownServerItem,
+                hiddenDate: .distantPast,
+                title: "UNKNOWN ITEM",
+                subtitle: "\(hint) • ID \(itemID.prefix(8).uppercased())",
+                artworkKey: nil,
+                records: [],
+                serverItemID: itemID
+            )
+        }
+        hiddenItems = known + unknown
+    }
+
+    // MARK: Record
+
+    /// Saves copies of tracks about to be hidden, with their playlist positions. Call BEFORE they leave
+    /// `tracks` and playlists. An album becomes one row; single tracks become one row each.
+    func recordHiddenTracks(_ hiddenTracks: [Track], album: Album?) {
+        guard !hiddenTracks.isEmpty else { return }
+        ensureHiddenItemsLoaded()
+        let ids = Set(hiddenTracks.map(\.id))
+
+        // One pass over playlists: where each hidden track sat.
+        var slots: [UUID: [HiddenPlaylistSlot]] = [:]
+        for playlist in playlists {
+            for (index, trackID) in playlist.trackIDs.enumerated() where ids.contains(trackID) {
+                slots[trackID, default: []].append(HiddenPlaylistSlot(playlistID: playlist.id, index: index))
+            }
+        }
+
+        let records = hiddenTracks.map { track in
+            HiddenTrackRecord(
+                track: track,
+                playlistSlots: slots[track.id] ?? [],
+                blockedPath: isHiddenServerTrack(track) ? nil : track.url.standardizedFileURL.path
+            )
+        }
+        pruneHiddenRecords(trackIDs: ids)
+
+        let now = Date()
+        if let album {
+            let item = HiddenLibraryItem(
+                id: "album:\(album.id):\(UUID().uuidString)",
+                kind: .album,
+                hiddenDate: now,
+                title: album.title,
+                subtitle: album.artist,
+                artworkKey: album.effectiveArtworkKey ?? hiddenTracks.first?.artworkKey,
+                records: records,
+                serverItemID: nil
+            )
+            hiddenItems.insert(item, at: 0)
+        } else {
+            let items = records.map { record in
+                HiddenLibraryItem(
+                    id: "track:\(record.track.id.uuidString)",
+                    kind: .track,
+                    hiddenDate: now,
+                    title: record.track.title,
+                    subtitle: record.track.artist,
+                    artworkKey: record.track.artworkKey,
+                    records: [record],
+                    serverItemID: nil
+                )
+            }
+            hiddenItems.insert(contentsOf: items, at: 0)
+        }
+        hiddenItemsDidChange()
+    }
+
+    /// Drops older saved copies of the same tracks (a track hidden twice keeps only its newest row).
+    func pruneHiddenRecords(trackIDs: Set<UUID>) {
+        guard !trackIDs.isEmpty, !hiddenItems.isEmpty else { return }
+        var changed = false
+        var updated: [HiddenLibraryItem] = []
+        updated.reserveCapacity(hiddenItems.count)
+        for var item in hiddenItems {
+            if item.kind != .unknownServerItem {
+                let before = item.records.count
+                item.records.removeAll { trackIDs.contains($0.track.id) }
+                if item.records.count != before {
+                    changed = true
+                    if item.records.isEmpty { continue }
+                }
+            }
+            updated.append(item)
+        }
+        if changed { hiddenItems = updated }
+    }
+
+    /// Marks a server item ID as really deleted (blocked, but never listed under HIDDEN).
+    /// Caller saves with `hiddenItemsDidChange()`.
+    func recordDeletedServerItemID(_ itemID: String) {
+        ensureHiddenItemsLoaded()
+        hiddenDeletedServerItemIDs.insert(itemID)
+    }
+
+    /// Clear Everything: empties the HIDDEN list.
+    func clearHiddenItems() {
+        hiddenResyncTask?.cancel()
+        hiddenResyncTask = nil
+        hiddenItemsLoaded = true
+        hiddenLegacyResolveStarted = false
+        hiddenDeletedServerItemIDs = []
+        hiddenItems = []
+        saveHiddenItems()
+    }
+
+    // MARK: Return
+
+    /// RETURN: puts the row's tracks back into the library and the playlists they were in.
+    public func returnHiddenItem(_ item: HiddenLibraryItem) {
+        ensureHiddenItemsLoaded()
+        hiddenItems.removeAll { $0.id == item.id }
+        if item.kind == .unknownServerItem {
+            if let itemID = item.serverItemID {
+                settings.removedJellyfinItemIDs.remove(itemID)
+            }
+            saveSettings()
+            hiddenItemsDidChange()
+            // No saved copy exists, so the item can only come back through a full server sync.
+            scheduleHiddenServerResync()
+            return
+        }
+        restoreHiddenRecords(item.records)
+        hiddenItemsDidChange()
+    }
+
+    func restoreHiddenRecords(_ records: [HiddenTrackRecord]) {
+        guard !records.isEmpty else { return }
+        let existingIDs = Set(tracks.map(\.id))
+        let linkedFolderIDs = Set(settings.linkedFolders.map(\.id))
+        let serverIDs = Set(settings.serverSources.map(\.id))
+        var toInsert: [Track] = []
+        var restored: [HiddenTrackRecord] = []
+
+        for record in records {
+            let track = record.track
+            if isHiddenServerTrack(track) {
+                if let itemID = hiddenServerItemID(for: track) {
+                    settings.removedJellyfinItemIDs.remove(itemID)
+                }
+                // Its server was unlinked since: nothing to return it to.
+                guard let folderID = track.folderID, serverIDs.contains(folderID) else { continue }
+            } else {
+                if let path = record.blockedPath { settings.removedTrackPaths.remove(path) }
+                settings.removedTrackPaths.remove(track.url.standardizedFileURL.path)
+                // Its folder was unlinked since.
+                if let folderID = track.folderID, !linkedFolderIDs.contains(folderID) { continue }
+                // The file was deleted or moved since: unblock it, but don't return a dead track.
+                let accessible = SecurityScopedBookmark.shared.ensureAccess(for: track.url, folderID: track.folderID)
+                guard Self.hiddenFileStillExists(accessible) || Self.hiddenFileStillExists(track.url) else { continue }
+            }
+            restored.append(record)
+            if !existingIDs.contains(track.id) { toInsert.append(track) }
+        }
+
+        if !toInsert.isEmpty { tracks.append(contentsOf: toInsert) }
+        restoreHiddenPlaylistSlots(for: restored)
+        rebuildAlbumsAndArtists()
+        Task { await recalculateDuplicates() }
+        settings.totalScannedFiles = tracks.count
+        saveLibrary()
+        savePlaylists()
+        saveSettings()
+    }
+
+    /// Re-inserts returned tracks at their old playlist positions (end if out of range); deleted playlists are skipped.
+    func restoreHiddenPlaylistSlots(for records: [HiddenTrackRecord]) {
+        var slotsByPlaylist: [UUID: [(trackID: UUID, index: Int)]] = [:]
+        for record in records {
+            for slot in record.playlistSlots {
+                slotsByPlaylist[slot.playlistID, default: []].append((record.track.id, slot.index))
+            }
+        }
+        guard !slotsByPlaylist.isEmpty else { return }
+        var updated = playlists
+        var changed = false
+        for i in updated.indices {
+            guard let entries = slotsByPlaylist[updated[i].id] else { continue }
+            var ids = updated[i].trackIDs
+            let alreadyPresent = Set(ids)
+            for entry in entries.sorted(by: { $0.index < $1.index }) where !alreadyPresent.contains(entry.trackID) {
+                ids.insert(entry.trackID, at: min(max(entry.index, 0), ids.count))
+            }
+            if ids != updated[i].trackIDs {
+                updated[i].trackIDs = ids
+                updated[i].dateModified = Date()
+                changed = true
+            }
+        }
+        if changed { playlists = updated }
+    }
+
+    /// Clears incremental sync dates and resyncs every server (debounced, so several RETURNs cause one resync).
+    func scheduleHiddenServerResync() {
+        hiddenResyncTask?.cancel()
+        hiddenResyncTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            guard let self, !Task.isCancelled else { return }
+            let servers = self.settings.serverSources
+            guard !servers.isEmpty else { return }
+            for server in servers {
+                self.jellyfinLastSyncDates.removeValue(forKey: server.id)
+            }
+            self.saveJellyfinLastSyncDates()
+            for server in servers {
+                if Task.isCancelled { return }
+                await self.syncServer(server)
+            }
+        }
+    }
+
+    nonisolated static func hiddenFileStillExists(_ url: URL) -> Bool {
+        let fileManager = FileManager.default
+        if fileManager.fileExists(atPath: url.path) { return true }
+        // iCloud files that are not downloaded exist only as a ".name.icloud" placeholder.
+        let placeholder = url.deletingLastPathComponent().appendingPathComponent(".\(url.lastPathComponent).icloud")
+        return fileManager.fileExists(atPath: placeholder.path)
+    }
+
+    // MARK: Legacy (hidden before this list existed)
+
+    /// Lists local files hidden before saved copies existed by reading their tags off the main thread
+    /// (once per session, when Sources settings opens). Files that no longer exist, such as deleted
+    /// duplicates, are skipped.
+    public func resolveLegacyHiddenTracksIfNeeded() {
+        ensureHiddenItemsLoaded()
+        guard !hiddenLegacyResolveStarted else { return }
+        hiddenLegacyResolveStarted = true
+
+        var covered = Set<String>()
+        for item in hiddenItems {
+            for record in item.records {
+                covered.insert(record.blockedPath ?? record.track.url.standardizedFileURL.path)
+            }
+        }
+        let pending = settings.removedTrackPaths.subtracting(covered)
+        guard !pending.isEmpty else { return }
+
+        // Folder roots: the resolved bookmark URL plus the stored path (they differ after container moves).
+        struct FolderRoot { let id: UUID; let root: URL; let prefixes: [String] }
+        var roots: [FolderRoot] = []
+        for folder in settings.linkedFolders {
+            let resolved = SecurityScopedBookmark.shared.url(for: folder.id)
+            let stored = folder.path.map { URL(fileURLWithPath: $0) }
+            guard let root = resolved ?? stored else { continue }
+            // Start folder access once per folder here, so the background reads below need no main-actor calls.
+            _ = SecurityScopedBookmark.shared.ensureAccess(for: root, folderID: folder.id)
+            let prefixes = [resolved, stored].compactMap { $0?.standardizedFileURL.path }
+                .map { $0.hasSuffix("/") ? $0 : $0 + "/" }
+            roots.append(FolderRoot(id: folder.id, root: root, prefixes: prefixes))
+        }
+
+        var jobs: [HiddenLegacyJob] = []
+        for path in pending {
+            guard let match = roots.first(where: { r in r.prefixes.contains { path.hasPrefix($0) } }),
+                  let prefix = match.prefixes.first(where: { path.hasPrefix($0) }) else { continue }
+            jobs.append(HiddenLegacyJob(
+                blockedPath: path,
+                folderID: match.id,
+                rootURL: match.root,
+                relativePath: String(path.dropFirst(prefix.count))
+            ))
+        }
+        guard !jobs.isEmpty else { return }
+
+        Task.detached(priority: .utility) { [weak self] in
+            var found: [(String, Track)] = []
+            for job in jobs {
+                if Task.isCancelled { return }
+                var candidates = [URL(fileURLWithPath: job.blockedPath)]
+                if let rel = job.relativePath, !rel.isEmpty {
+                    candidates.append(job.rootURL.appendingPathComponent(rel))
+                }
+                // Skip files that are gone (deleted, or a real duplicate deletion).
+                guard let url = candidates.first(where: { LibraryStore.hiddenFileStillExists($0) }) else { continue }
+                if let track = await AudioScannerService.shared.parseAudioTrack(
+                    at: url, folderID: job.folderID, rootFolderURL: job.rootURL
+                ) {
+                    found.append((job.blockedPath, track))
+                }
+            }
+            guard !found.isEmpty else { return }
+            let results = found
+            await self?.addLegacyHiddenTracks(results)
+        }
+    }
+
+    func addLegacyHiddenTracks(_ found: [(String, Track)]) {
+        var covered = Set<String>()
+        var usedIDs = Set<String>()
+        for item in hiddenItems {
+            usedIDs.insert(item.id)
+            for record in item.records {
+                covered.insert(record.blockedPath ?? record.track.url.standardizedFileURL.path)
+            }
+        }
+        var newItems: [HiddenLibraryItem] = []
+        for (path, track) in found {
+            // Still hidden, not already listed (e.g. returned or re-hidden while tags were read).
+            guard settings.removedTrackPaths.contains(path), !covered.contains(path) else { continue }
+            let itemID = "legacy:\(path)"
+            guard usedIDs.insert(itemID).inserted else { continue }
+            newItems.append(HiddenLibraryItem(
+                id: itemID,
+                kind: .track,
+                hiddenDate: .distantPast,
+                title: track.title,
+                subtitle: track.artist,
+                artworkKey: track.artworkKey,
+                records: [HiddenTrackRecord(track: track, playlistSlots: [], blockedPath: path)],
+                serverItemID: nil
+            ))
+        }
+        guard !newItems.isEmpty else { return }
+        hiddenItems.append(contentsOf: newItems)
+        hiddenItemsDidChange()
+    }
+}

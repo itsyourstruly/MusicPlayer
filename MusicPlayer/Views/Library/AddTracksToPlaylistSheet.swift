@@ -45,7 +45,8 @@ public struct AddTracksToPlaylistSheet: View {
     public var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                // Search Input Bar
+                #if os(macOS)
+                // Search Input Bar (iOS uses the native search field)
                 HStack(spacing: 8) {
                     Image(systemName: "magnifyingglass")
                         .font(.system(size: 13, weight: .medium))
@@ -70,6 +71,7 @@ public struct AddTracksToPlaylistSheet: View {
                 .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                 .padding(.horizontal, 16)
                 .padding(.vertical, 8)
+                #endif
 
                 if filteredTracks.isEmpty {
                     EmptyStateView(
@@ -163,6 +165,7 @@ public struct AddTracksToPlaylistSheet: View {
             .background(appTheme.backgroundColor.ignoresSafeArea())
             .navigationTitle("ADD TO PLAYLIST")
             .navigationBarTitleDisplayMode(.inline)
+            .nativeSearchField(text: $searchQuery, prompt: "SEARCH ALL TRACKS")
         }
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)

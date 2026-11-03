@@ -89,6 +89,9 @@ struct FolderPlaylistFinderSheet: View {
             index = built
             isLoading = false
         }
+        .presentationDetents([.large])
+        .presentationDragIndicator(.visible)
+        .presentationBackground(appTheme.backgroundColor)
     }
 
     // MARK: - Folder Level
@@ -140,18 +143,6 @@ struct FolderPlaylistFinderSheet: View {
         .background(appTheme.backgroundColor.ignoresSafeArea())
         .navigationTitle(title.uppercased())
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            if path.isEmpty {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button {
-                        dismiss()
-                    } label: {
-                        Text("CLOSE")
-                            .font(.system(size: 13, weight: .bold, design: .monospaced))
-                    }
-                }
-            }
-        }
         .safeAreaInset(edge: .bottom) {
             Button {
                 makePlaylist(folderPath: path, name: title)

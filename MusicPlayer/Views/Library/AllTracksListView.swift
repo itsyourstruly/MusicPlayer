@@ -10,6 +10,7 @@ public struct AllTracksListView: View {
     @State private var selectedArtistForNavigation: Artist? = nil
     @State private var selectedAlbumForNavigation: Album? = nil
     @State private var displayLimit: Int = 120
+    @Environment(LibrarySelectionStore.self) private var librarySelection: LibrarySelectionStore?
 
     // Initialize with configured properties
     public init(libraryStore: LibraryStore, playerService: AudioPlayerService) {
@@ -42,6 +43,7 @@ public struct AllTracksListView: View {
                 let nextTrackID = playerService.queueBadges.nextTrackID
                 let playNextSet = playerService.queueBadges.playNextTrackIDs
                 let isTapToPlayNext = libraryStore.settings.tapToPlayNext
+                let isSelectMode = librarySelection?.isActive ?? false
                 let visibleTracks = Array(tracks.prefix(displayLimit))
                 let visibleCount = visibleTracks.count
 
@@ -55,6 +57,8 @@ public struct AllTracksListView: View {
                             isNextTrack: track.id == nextTrackID,
                             isInPlayNext: playNextSet.contains(track.id),
                             isTapToPlayNext: isTapToPlayNext,
+                            isSelected: librarySelection?.contains(track.id) ?? false,
+                            isSelectMode: isSelectMode,
                             onPlay: {
                                 playerService.play(track: track, inQueue: tracks, startIndex: index)
                             },
@@ -82,7 +86,9 @@ public struct AllTracksListView: View {
                                 if let albumObj = libraryStore.findAlbum(title: track.album, artist: track.artist) {
                                     selectedAlbumForNavigation = albumObj
                                 }
-                            }
+                            },
+                            onToggleSelect: librarySelection?.toggler(for: track),
+                            libraryStore: libraryStore
                         )
                         .onAppear {
                             if index >= visibleCount - 30 && visibleCount < tracks.count {
@@ -124,7 +130,7 @@ public struct AllTracksListView: View {
 
     // Playlist picker sheet
     private func playlistPickerSheet(for track: Track) -> some View {
-        PlaylistPickerSheet(libraryStore: libraryStore) { playlist in
+        PlaylistPickerSheet(libraryStore: libraryStore, previewArtworkKey: track.artworkKey) { playlist in
             libraryStore.addTrack(track, toPlaylistID: playlist.id)
             selectedTrackForPlaylist = nil
         }
@@ -141,6 +147,8 @@ private struct AllTracksRowItem: View, Equatable {
     let isNextTrack: Bool
     let isInPlayNext: Bool
     let isTapToPlayNext: Bool
+    let isSelected: Bool
+    let isSelectMode: Bool
     let onPlay: () -> Void
     let onPlayNext: () -> Void
     let onQueueNext: () -> Void
@@ -149,6 +157,9 @@ private struct AllTracksRowItem: View, Equatable {
     let onShowInfo: () -> Void
     let onSelectArtist: (String) -> Void
     let onSelectAlbum: () -> Void
+    let onToggleSelect: (() -> Void)?
+    // Used only by QUICK ADD TO... inside the menu; not part of equality
+    let libraryStore: LibraryStore
 
     static func == (lhs: AllTracksRowItem, rhs: AllTracksRowItem) -> Bool {
         lhs.track.id == rhs.track.id &&
@@ -157,7 +168,9 @@ private struct AllTracksRowItem: View, Equatable {
         lhs.isPlaying == rhs.isPlaying &&
         lhs.isNextTrack == rhs.isNextTrack &&
         lhs.isInPlayNext == rhs.isInPlayNext &&
-        lhs.isTapToPlayNext == rhs.isTapToPlayNext
+        lhs.isTapToPlayNext == rhs.isTapToPlayNext &&
+        lhs.isSelected == rhs.isSelected &&
+        lhs.isSelectMode == rhs.isSelectMode
     }
 
     var body: some View {
@@ -176,7 +189,11 @@ private struct AllTracksRowItem: View, Equatable {
             onAddToPlaylist: onAddToPlaylist,
             onShowInfo: onShowInfo,
             onSelectArtist: onSelectArtist,
-            onSelectAlbum: onSelectAlbum
+            onSelectAlbum: onSelectAlbum,
+            quickAddLibraryStore: libraryStore,
+            isSelected: isSelected,
+            isSelectMode: isSelectMode,
+            onToggleSelect: onToggleSelect
         )
     }
 }

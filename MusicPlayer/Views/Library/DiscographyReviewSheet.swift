@@ -23,7 +23,16 @@ public struct DiscographyReviewSheet: View {
     }
 
     public var body: some View {
-        NavigationStack {
+        VStack(spacing: 0) {
+            // Sheet header (same style as EDIT PLAYLIST / ADD TO PLAYLIST)
+            Text("DISCOGRAPHY REVIEW")
+                .font(.system(size: 13, weight: .bold, design: .monospaced))
+                .foregroundStyle(Color.primary)
+                .frame(maxWidth: .infinity)
+                .padding(.horizontal, 20)
+                .padding(.top, 22)
+                .padding(.bottom, 12)
+
             VStack(spacing: 0) {
                 // Category Segmented Picker Header
                 categoryHeaderView
@@ -56,33 +65,12 @@ public struct DiscographyReviewSheet: View {
                 bottomActionBar
             }
             .background(appTheme.backgroundColor.ignoresSafeArea())
-            .navigationTitle("DISCOGRAPHY REVIEW")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button("Close") {
-                        dismiss()
-                    }
-                    .font(.system(size: 13, weight: .medium, design: .monospaced))
-                    .foregroundStyle(.secondary)
-                }
-
-                ToolbarItem(placement: .topBarTrailing) {
-                    if isApplyingChanges {
-                        ProgressView()
-                            .scaleEffect(0.8)
-                    } else {
-                        Button(action: applyAllChanges) {
-                            Text("APPLY")
-                                .font(.system(size: 13, weight: .bold, design: .monospaced))
-                                .foregroundStyle(appTheme.accentColor)
-                        }
-                    }
-                }
-            }
         }
         .presentationDetents([.large])
         .presentationDragIndicator(.visible)
+        .presentationBackground(appTheme.backgroundColor)
+        // Swipe-down stays off while the changes are being applied
+        .interactiveDismissDisabled(isApplyingChanges)
     }
 
     // MARK: - Category Header

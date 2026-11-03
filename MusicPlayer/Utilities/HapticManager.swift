@@ -6,6 +6,16 @@ import UIKit
 import CoreHaptics
 #endif
 
+// MARK: - Transport Haptic Kinds
+
+/// On-screen transport buttons that play dedicated, prebuilt Core Haptics patterns.
+public enum TransportHaptic: Sendable, Hashable {
+    case play
+    case pause
+    case next
+    case back
+}
+
 // MARK: - Core Haptics & Feedback Orchestrator
 
 /// High-performance, concurrency-safe haptics orchestrator isolated to the `@MainActor`.
@@ -29,6 +39,14 @@ public final class HapticManager {
     private var continuousPlayer: CHHapticAdvancedPatternPlayer?
     private var isContinuousPlaying: Bool = false
     private var supportsCoreHaptics: Bool = false
+    /// Tracks whether the engine is currently running so it is only (re)started when needed.
+    private var isEngineRunning: Bool = false
+    /// Transport patterns (Play / Pause / Next / Back), built once and reused for every press.
+    private var transportPatterns: [TransportHaptic: CHHapticPattern] = [:]
+    #endif
+
+    #if canImport(UIKit) && canImport(CoreHaptics)
+    private var lifecycleObservers: [NSObjectProtocol] = []
     #endif
 
     private var lastScrubTickTime: TimeInterval = 0
@@ -38,6 +56,9 @@ public final class HapticManager {
         didSet {
             if !isEnabled {
                 stopContinuous()
+                stopEngine()
+            } else if !oldValue {
+                prepare()
             }
         }
     }
@@ -47,8 +68,12 @@ public final class HapticManager {
         let capabilities = CHHapticEngine.capabilitiesForHardware()
         self.supportsCoreHaptics = capabilities.supportsHaptics
         if self.supportsCoreHaptics {
+            self.transportPatterns = Self.buildTransportPatterns()
             setupEngine()
         }
+        #endif
+        #if canImport(UIKit) && canImport(CoreHaptics)
+        observeAppLifecycle()
         #endif
     }
 
@@ -56,28 +81,46 @@ public final class HapticManager {
     private func setupEngine() {
         do {
             let eng = try CHHapticEngine()
-            eng.isAutoShutdownEnabled = true
+            // The engine is kept running while haptics are on; it is stopped explicitly when the
+            // app enters the background or haptics are turned off (see stopEngine()).
+            eng.isAutoShutdownEnabled = false
             eng.playsHapticsOnly = true
 
-            eng.resetHandler = { [weak self] in
+            // Core Haptics calls these handlers off the main thread, so they are @Sendable and hop to the main actor.
+            eng.resetHandler = { @Sendable in
                 Task { @MainActor in
-                    do {
-                        try self?.engine?.start()
-                    } catch {
-                        // Silently fallback to UIKit
-                    }
+                    HapticManager.shared.handleEngineReset()
                 }
             }
 
-            eng.stoppedHandler = { reason in
-                // Engine stopped cleanly or on interruption
+            eng.stoppedHandler = { @Sendable _ in
+                // External stop (audio interruption, app suspension, system error). Restarted on the next haptic.
+                Task { @MainActor in
+                    HapticManager.shared.isEngineRunning = false
+                }
             }
 
             try eng.start()
             self.engine = eng
+            self.isEngineRunning = true
         } catch {
             self.engine = nil
+            self.isEngineRunning = false
             self.supportsCoreHaptics = false
+        }
+    }
+
+    /// Recovers after a haptic server reset: players are invalid, patterns are preserved.
+    private func handleEngineReset() {
+        isEngineRunning = false
+        continuousPlayer = nil
+        isContinuousPlaying = false
+        guard isEnabled, let engine = engine else { return }
+        do {
+            try engine.start()
+            isEngineRunning = true
+        } catch {
+            // Stay silent; the next haptic request will try again.
         }
     }
 
@@ -87,18 +130,101 @@ public final class HapticManager {
             setupEngine()
         }
         guard let engine = engine else { return false }
+        if isEngineRunning { return true }
         do {
             try engine.start()
+            isEngineRunning = true
             return true
         } catch {
             return false
         }
     }
+
+    /// Stops the engine to save power (app backgrounded or haptics turned off). Restarted on demand.
+    private func stopEngine() {
+        guard let engine = engine, isEngineRunning else { return }
+        isEngineRunning = false
+        engine.stop(completionHandler: nil)
+    }
+
+    // MARK: - Transport Patterns
+
+    private static func buildTransportPatterns() -> [TransportHaptic: CHHapticPattern] {
+        // (intensity, sharpness, relativeTime in seconds). First tap at 0 so it fires immediately on press.
+        func makePattern(_ taps: [(Float, Float, TimeInterval)]) -> CHHapticPattern? {
+            let events = taps.map { tap in
+                CHHapticEvent(
+                    eventType: .hapticTransient,
+                    parameters: [
+                        CHHapticEventParameter(parameterID: .hapticIntensity, value: tap.0),
+                        CHHapticEventParameter(parameterID: .hapticSharpness, value: tap.1)
+                    ],
+                    relativeTime: tap.2
+                )
+            }
+            return try? CHHapticPattern(events: events, parameters: [])
+        }
+
+        var patterns: [TransportHaptic: CHHapticPattern] = [:]
+        patterns[.play] = makePattern([(0.58, 0.45, 0)])
+        patterns[.pause] = makePattern([(0.66, 0.29, 0), (0.36, 0.20, 0.20)])
+        patterns[.next] = makePattern([(0.66, 0.00, 0), (0.30, 0.09, 0.11), (0.79, 0.32, 0.21)])
+        patterns[.back] = makePattern([(0.34, 0.43, 0), (0.60, 0.24, 0.11), (0.44, 0.26, 0.21)])
+        return patterns
+    }
     #else
     public func ensureEngineActive() -> Bool {
         return false
     }
+
+    private func stopEngine() {}
     #endif
+
+    // MARK: - App Lifecycle
+
+    #if canImport(UIKit) && canImport(CoreHaptics)
+    private func observeAppLifecycle() {
+        let center = NotificationCenter.default
+        lifecycleObservers.append(center.addObserver(
+            forName: UIApplication.didEnterBackgroundNotification,
+            object: nil,
+            queue: .main
+        ) { _ in
+            MainActor.assumeIsolated {
+                HapticManager.shared.stopContinuous()
+                HapticManager.shared.stopEngine()
+            }
+        })
+        lifecycleObservers.append(center.addObserver(
+            forName: UIApplication.willEnterForegroundNotification,
+            object: nil,
+            queue: .main
+        ) { _ in
+            MainActor.assumeIsolated {
+                // Prewarm so the first press after returning plays without start-up delay.
+                _ = HapticManager.shared.ensureEngineActive()
+            }
+        })
+    }
+    #endif
+
+    // MARK: - Transport Buttons
+
+    /// Plays the prebuilt Core Haptics pattern for an on-screen transport button.
+    /// Does nothing when haptics are off or the device has no haptic hardware (no UIKit fallback).
+    public func playTransport(_ kind: TransportHaptic) {
+        #if canImport(CoreHaptics)
+        guard isEnabled, supportsCoreHaptics, let pattern = transportPatterns[kind] else { return }
+        guard ensureEngineActive(), let engine = engine else { return }
+        do {
+            let player = try engine.makePlayer(with: pattern)
+            try player.start(atTime: CHHapticTimeImmediate)
+        } catch {
+            // Engine may have been stopped externally; mark it so the next press restarts it.
+            isEngineRunning = false
+        }
+        #endif
+    }
 
     // MARK: - Pre-Warming
 
@@ -146,6 +272,7 @@ public final class HapticManager {
                 return
             } catch {
                 // Fall back to UIKit below
+                isEngineRunning = false
             }
         }
         #endif
@@ -402,6 +529,11 @@ public enum HapticFeedback {
     }
 
     // MARK: - Action-Specific Tactile Signatures
+
+    /// Dedicated Core Haptics patterns for the on-screen Play / Pause / Next / Back controls.
+    public static func transport(_ kind: TransportHaptic) {
+        HapticManager.shared.playTransport(kind)
+    }
 
     /// Tactile signature for Play / Pause toggle:
     /// - Play: Instantaneous, crisp, authoritative mechanical switch-on snap (1.0 intensity, 0.92 sharpness).
