@@ -122,25 +122,25 @@ public enum SettingOptionCatalog {
     public static let cacheInAdvance = SettingOptionDetail(
         id: "cacheInAdvance",
         title: "CACHE IN ADVANCE",
-        description: "Saves the set amount of songs to cache in advance in case you lose connection."
+        description: "During playback, automatically save the set amount of queued songs to cache. Past songs are offloaded. This will use your cellular connection when not connected to Wi-Fi, regardless of the 'DOWNLOAD OVER CELLULAR' toggle. Caching uses your devices memory, be wary of set amount depending on your file sizes."
     )
 
     public static let autoDownloadOnPlay = SettingOptionDetail(
         id: "autoDownloadOnPlay",
         title: "AUTO-DOWNLOAD ON PLAY",
-        description: "Automatically downloads song when they're played."
+        description: "Automatically download songs to your device when they're played."
     )
 
     public static let downloadOverCellular = SettingOptionDetail(
         id: "downloadOverCellular",
         title: "DOWNLOAD OVER CELLULAR",
-        description: "Enables downloading songs using Cellular data."
+        description: "Enables downloading songs using Cellular data. Applies to 'AUTO-DOWNLOAD ON PLAY' and manual downloads."
     )
 
     public static let linkFolder = SettingOptionDetail(
         id: "linkFolder",
         title: "LINK FOLDER / CHANGE FOLDER",
-        description: "Connects the app to your offline audio files on your device."
+        description: "Connect the app to the directory containing the local audio files on your device."
     )
 
     public static let rescanFolder = SettingOptionDetail(

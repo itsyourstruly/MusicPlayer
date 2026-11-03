@@ -1,5 +1,5 @@
 ### v0.4 (3)
-- New option to toggle icons in the player controls. Found in Appearance settings, and by tapping the album artwork.
+- New option to toggle icons for the player controls. Found in Appearance settings, and by tapping the album artwork.
 - New option in playback settings to cache tracks from online sources in advance. Cached songs will appear with an icon in the queue. 
 - New Hidden section under sources settings to manage hidden tracks.
 - Long press on tracks or albums 
@@ -11,3 +11,4 @@
 - Losing connection while streaming may interrupt your session and not allow you to resume. This has been fixed. 
 - Cleaned up the Edit, and New Playlist sheets. "NEW" option now also in the "ADD TO PLAYLIST" sheet.
 - Search bars now consistently and use the native search bar. 
+- Altered the "SET SHUFFLE TARGET" sheet to now only show the latest plays by default.
