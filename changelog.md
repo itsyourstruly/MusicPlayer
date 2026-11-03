@@ -1,4 +1,4 @@
-### v0.4 (4)
+### v0.4 (8)
 * New:
   -  Option to toggle icons for the player controls. Found in Appearance settings, and by tapping the album artwork.
   - Option in playback settings to cache tracks from online sources in advance. Cached songs will appear with an icon in the queue. 
