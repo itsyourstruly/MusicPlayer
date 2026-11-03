@@ -53,7 +53,8 @@ public struct ArtistsListView: View {
                                     artworkKey: artist.mostRecentArtworkKey,
                                     title: artist.name,
                                     subtitle: artist.discographySummary,
-                                    cornerRadius: 6
+                                    cornerRadius: 6,
+                                    artistImage: ServerArtistImage.resolve(artist, sources: libraryStore.settings.serverSources)
                                 )
                                 .frame(width: 48, height: 48)
 

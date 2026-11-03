@@ -104,8 +104,11 @@ public struct FoldersListView: View {
 
     private func sourceRow(for source: SourceItem) -> some View {
         let isEnabled = libraryStore.isFolderEnabled(source.id)
+        // A lone source is always enabled and can't be toggled
+        let canToggle = libraryStore.totalSourceCount > 1
 
         return Button {
+            guard canToggle else { return }
             HapticFeedback.selectionChanged()
             withAnimation(.easeInOut(duration: 0.2)) {
                 libraryStore.toggleFolderEnabled(source.id)
@@ -141,11 +144,13 @@ public struct FoldersListView: View {
             }
             .disabled(libraryStore.isScanning)
 
-            Button {
-                HapticFeedback.selectionChanged()
-                libraryStore.toggleFolderEnabled(source.id)
-            } label: {
-                Text(isEnabled ? "DISABLE IN LIBRARY" : "ENABLE IN LIBRARY")
+            if canToggle {
+                Button {
+                    HapticFeedback.selectionChanged()
+                    libraryStore.toggleFolderEnabled(source.id)
+                } label: {
+                    Text(isEnabled ? "DISABLE IN LIBRARY" : "ENABLE IN LIBRARY")
+                }
             }
         }
     }

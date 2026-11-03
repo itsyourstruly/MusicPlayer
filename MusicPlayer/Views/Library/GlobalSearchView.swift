@@ -1610,7 +1610,8 @@ public struct SearchArtistTreeNodeRow: View {
                 artworkKey: artistNode.artist.mostRecentArtworkKey ?? artistNode.albums.first?.album.artworkKey,
                 title: artistNode.artist.name,
                 subtitle: summary,
-                cornerRadius: 8
+                cornerRadius: 8,
+                artistImage: ServerArtistImage.resolve(artistNode.artist, sources: libraryStore.settings.serverSources)
             )
             .frame(width: 38, height: 38)
 
@@ -1894,7 +1895,8 @@ public struct SearchResultRowView: View, Equatable {
                     artworkKey: artistNode.artist.mostRecentArtworkKey ?? artistNode.albums.first?.album.artworkKey,
                     title: artistNode.artist.name,
                     subtitle: summary,
-                    cornerRadius: 8
+                    cornerRadius: 8,
+                    artistImage: ServerArtistImage.resolve(artistNode.artist, sources: libraryStore.settings.serverSources)
                 )
                 .frame(width: 38, height: 38)
 

@@ -1,4 +1,6 @@
 import Foundation
+import CoreGraphics
+import ImageIO
 
 /// Concurrency-safe registry mapping artwork cache keys to a server source and image identifier.
 /// Image URLs are built on demand by the source's provider (Jellyfin item images, Subsonic getCoverArt,
@@ -11,6 +13,8 @@ nonisolated public final class ServerArtworkRegistry: @unchecked Sendable {
         let primaryImageId: String
         let fallbackImageId: String?
         let version: String?
+        /// List-tier requests ask the server for a ~300 px resize (artist photos on Jellyfin/Plex).
+        var resizedThumbnail = false
     }
 
     private let lock = NSLock()
@@ -40,7 +44,7 @@ nonisolated public final class ServerArtworkRegistry: @unchecked Sendable {
     private init() {}
 
     /// Registers a mapping from an artwork key to a server image (with optional fallback image, e.g. track art).
-    public func register(key: String, link: ServerSourceLink, imageId: String, fallbackImageId: String? = nil, version: String? = nil) {
+    public func register(key: String, link: ServerSourceLink, imageId: String, fallbackImageId: String? = nil, version: String? = nil, resizedThumbnail: Bool = false) {
         guard !key.isEmpty, !imageId.isEmpty else { return }
         lock.lock()
         defer { lock.unlock() }
@@ -48,7 +52,8 @@ nonisolated public final class ServerArtworkRegistry: @unchecked Sendable {
         let existingFallback = existing?.fallbackImageId
         let finalFallback = fallbackImageId ?? (existingFallback != imageId ? existingFallback : nil)
         mappings[key] = RegistryEntry(link: link, primaryImageId: imageId, fallbackImageId: finalFallback,
-                                      version: version ?? existing?.version)
+                                      version: version ?? existing?.version,
+                                      resizedThumbnail: resizedThumbnail || (existing?.resizedThumbnail ?? false))
     }
 
     /// Caller must hold `lock`.
@@ -147,7 +152,10 @@ nonisolated public final class ServerArtworkRegistry: @unchecked Sendable {
         var sawNotFound = false
         var sawFailure = false
         for image in images {
-            for request in provider.artworkRequests(imageId: image.id, size: size, version: image.version) {
+            let requests = entry.resizedThumbnail && size == .thumbnail && image.id == entry.primaryImageId
+                ? provider.resizedArtworkRequests(imageId: image.id, maxPixels: ServerArtistImage.listPixels)
+                : provider.artworkRequests(imageId: image.id, size: size, version: image.version)
+            for request in requests {
                 if Task.isCancelled { return .cancelled }
                 ServerRequestLog.log(request, caller: isVisible ? "artwork" : "artworkPrefetch")
                 do {
@@ -162,6 +170,13 @@ nonisolated public final class ServerArtworkRegistry: @unchecked Sendable {
                     // Any other answer means the server is serving again (closes a back-off episode).
                     if http != nil { await ServerArtworkGate.shared.recordSuccess(serverID) }
                     if (200...299).contains(status), !data.isEmpty {
+                        // Navidrome answers an artist with no photo with its grey-star placeholder, not an error:
+                        // treat it as "no image" so the row keeps its album art (and the answer is remembered).
+                        if entry.link.kind == .subsonic, image.id.hasPrefix(ServerArtistImage.subsonicArtistPrefix),
+                           NavidromeArtistPlaceholder.matches(data) {
+                            sawNotFound = true
+                            continue
+                        }
                         return .data(data)
                     }
                     if status == 404 { sawNotFound = true } else { sawFailure = true }
@@ -267,6 +282,120 @@ nonisolated public final class ServerArtworkRegistry: @unchecked Sendable {
     }
 }
 
+// MARK: - ServerArtistImage
+
+/// A server's own artist photo for an artist (Jellyfin artist Primary image, Subsonic/Navidrome `ar-<id>` cover
+/// art, Plex artist thumb), stored under its own artwork key. Resolved from the album-artist id saved with the
+/// artist's server tracks (newest album first); registered with the artwork registry only when a view shows it.
+nonisolated public struct ServerArtistImage: Sendable, Equatable {
+    public let key: String
+    let link: ServerSourceLink
+    let imageId: String
+    /// Artist page header: the stored full-size photo instead of the list tier.
+    public var prefersOriginal = false
+
+    static let subsonicArtistPrefix = "ar-"
+    /// Server-side resize requested for Jellyfin/Plex artist photos in list and search rows.
+    static let listPixels = 300
+
+    /// The same photo at full size (artist page header).
+    public func fullSize() -> ServerArtistImage {
+        var copy = self
+        copy.prefersOriginal = true
+        return copy
+    }
+
+    public static func resolve(_ artist: Artist, sources: [ServerSourceLink]) -> ServerArtistImage? {
+        guard !sources.isEmpty else { return nil }
+        let canonical = artist.id
+        for album in artist.albums {
+            for track in album.tracks where OfflineMode.isServerTrack(track) {
+                if let image = make(track, name: artist.name, canonical: canonical, sources: sources) { return image }
+            }
+        }
+        for track in artist.tracks where OfflineMode.isServerTrack(track) {
+            if let image = make(track, name: artist.name, canonical: canonical, sources: sources) { return image }
+        }
+        return nil
+    }
+
+    private static func make(_ track: Track, name: String, canonical: String, sources: [ServerSourceLink]) -> ServerArtistImage? {
+        guard let credits = track.serverCredits, let ids = credits.albumArtistIDs, !ids.isEmpty,
+              let link = sources.first(where: { $0.id == track.folderID }) else { return nil }
+        // Only the matching album-artist credit (guest appearances on other artists' albums are skipped).
+        let index = credits.albumArtists.firstIndex { $0.caseInsensitiveCompare(name) == .orderedSame }
+            ?? credits.albumArtists.firstIndex { ArtistParser.canonicalArtistKey($0) == canonical }
+        guard let index, ids.indices.contains(index) else { return nil }
+        let id = ids[index]
+        guard !id.isEmpty, !id.contains("|") else { return nil }
+        let imageId: String
+        switch link.kind {
+        case .jellyfin: imageId = id
+        case .subsonic: imageId = id.hasPrefix(subsonicArtistPrefix) ? id : subsonicArtistPrefix + id
+        case .plex: imageId = "/library/metadata/\(id)/thumb"
+        case .emby: return nil
+        }
+        return ServerArtistImage(key: "artist_photo_\(link.id.uuidString)_\(id)", link: link, imageId: imageId)
+    }
+
+    /// Maps the key to the server image (cheap; repeated calls just refresh the mapping).
+    public func register() {
+        ServerArtworkRegistry.shared.register(key: key, link: link, imageId: imageId,
+                                              resizedThumbnail: link.kind == .jellyfin || link.kind == .plex)
+    }
+}
+
+// MARK: - NavidromeArtistPlaceholder
+
+/// Navidrome serves its bundled `artist-placeholder.webp` (a white star on #EAEAEA, unchanged since 2022) from
+/// getCoverArt when it has no artist photo. Recognised by content, so resized or re-encoded copies match too:
+/// every pixel is a light neutral grey AND the 9×8 difference hash is within a few bits of the star's.
+nonisolated enum NavidromeArtistPlaceholder {
+    private static let starHash: UInt64 = 0x1008_0c0f_0e96_1200
+    private static let maxHashDistance = 12
+
+    static func matches(_ data: Data) -> Bool {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return false }
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceThumbnailMaxPixelSize: 64,
+            kCGImageSourceShouldCacheImmediately: true
+        ]
+        guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { return false }
+        guard let rgba = pixels(of: image, width: 16, height: 16, gray: false) else { return false }
+        for i in stride(from: 0, to: rgba.count, by: 4) {
+            let r = Int(rgba[i]), g = Int(rgba[i + 1]), b = Int(rgba[i + 2])
+            let low = min(r, g, b)
+            if low < 200 || max(r, g, b) - low > 12 { return false }
+        }
+        guard let gray = pixels(of: image, width: 9, height: 8, gray: true) else { return false }
+        var hash: UInt64 = 0
+        for y in 0..<8 {
+            for x in 0..<8 {
+                hash = (hash << 1) | (gray[y * 9 + x] > gray[y * 9 + x + 1] ? 1 : 0)
+            }
+        }
+        return (hash ^ starHash).nonzeroBitCount <= maxHashDistance
+    }
+
+    private static func pixels(of image: CGImage, width: Int, height: Int, gray: Bool) -> [UInt8]? {
+        let bytesPerPixel = gray ? 1 : 4
+        var buffer = [UInt8](repeating: 0, count: width * height * bytesPerPixel)
+        let drawn = buffer.withUnsafeMutableBytes { raw -> Bool in
+            guard let context = CGContext(
+                data: raw.baseAddress, width: width, height: height, bitsPerComponent: 8,
+                bytesPerRow: width * bytesPerPixel,
+                space: gray ? CGColorSpaceCreateDeviceGray() : CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: gray ? CGImageAlphaInfo.none.rawValue : CGImageAlphaInfo.noneSkipLast.rawValue
+            ) else { return false }
+            context.interpolationQuality = .high
+            context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+            return true
+        }
+        return drawn ? buffer : nil
+    }
+}
+
 // MARK: - FetchUrgency
 
 /// Whether a shared request currently serves a visible caller. Set when a visible caller joins, or inherited from a
@@ -292,6 +421,14 @@ nonisolated final class FetchUrgency: @unchecked Sendable {
     func promote() {
         lock.lock()
         visible = true
+        lock.unlock()
+    }
+
+    /// Every caller left (rows scrolled away): no longer counts as visible.
+    func demote() {
+        lock.lock()
+        visible = false
+        sources.removeAll()
         lock.unlock()
     }
 
@@ -383,7 +520,7 @@ actor ServerArtworkGate {
         drain(server)
     }
 
-    /// Hands free slots to waiters, visible first. While an episode is open only one probe runs, and only once
+    /// Hands free slots to waiters, newest visible first. While an episode is open only one probe runs, and only once
     /// the waiter's back-off (capped for visible requests) has passed.
     private func drain(_ server: UUID) {
         guard var state = servers[server] else { return }
@@ -395,7 +532,8 @@ actor ServerArtworkGate {
                 guard state.probe == nil else { return false }
                 return now >= (visibleFlags[index] ? (state.visibleUntil ?? until) : until)
             }
-            guard let index = state.waiters.indices.first(where: { visibleFlags[$0] && eligible($0) })
+            // Newest visible request first (the rows on screen now), then background requests in order.
+            guard let index = state.waiters.indices.last(where: { visibleFlags[$0] && eligible($0) })
                     ?? state.waiters.indices.first(where: { !visibleFlags[$0] && eligible($0) }) else { break }
             let waiter = state.waiters.remove(at: index)
             let token = UUID()
@@ -460,7 +598,7 @@ actor ServerArtworkGate {
 
 /// Shares one unstructured task per key between concurrent callers. Each caller waits on its own continuation,
 /// so a cancelled caller returns `cancelledValue` at once; when the last waiting caller is cancelled the shared
-/// task is cancelled and its entry removed, and a later caller starts a fresh task. The task runs with a
+/// task is cancelled (immediately unless a grace period is set) and its entry removed, and a later caller starts a fresh task. The task runs with a
 /// `FetchUrgency` (task-local) that takes the most urgent waiter's level: a visible joiner promotes it.
 actor SharedTaskPool<Value: Sendable> {
     private struct Entry {
@@ -474,11 +612,11 @@ actor SharedTaskPool<Value: Sendable> {
 
     private var entries: [String: Entry] = [:]
     private let cancelledValue: Value
-    /// Grace period before an unwaited task is really cancelled, so a quick re-request (re-render, size
-    /// change, row scrolled back) reuses the running work instead of restarting it.
+    /// Grace period before an unwaited task is really cancelled (0: at once, so requests for rows that scrolled
+    /// away never hold a server slot; a row scrolled back re-requests, finished downloads are already cached).
     private let cancelGraceNanoseconds: UInt64
 
-    init(cancelledValue: Value, cancelGraceSeconds: Double = 2) {
+    init(cancelledValue: Value, cancelGraceSeconds: Double = 0) {
         self.cancelledValue = cancelledValue
         self.cancelGraceNanoseconds = UInt64(cancelGraceSeconds * 1_000_000_000)
     }
@@ -537,6 +675,13 @@ actor SharedTaskPool<Value: Sendable> {
         guard var entry = entries[key], let continuation = entry.waiters.removeValue(forKey: waiterID) else { return }
         continuation.resume(returning: cancelledValue)
         if entry.waiters.isEmpty {
+            // Nobody is waiting any more: drop behind visible work at once (queued requests also leave the queue).
+            entry.urgency.demote()
+            if cancelGraceNanoseconds == 0 {
+                entry.task.cancel()
+                entries[key] = nil
+                return
+            }
             let token = UUID()
             entry.pendingCancel = token
             let generation = entry.generation

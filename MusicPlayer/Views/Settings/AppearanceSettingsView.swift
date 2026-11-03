@@ -126,9 +126,6 @@ public struct AppearanceSettingsView: View {
                 detail: SettingOptionCatalog.fullscreenPlayerSection
             )
 
-            Divider()
-                .overlay(libraryStore.settings.appTheme.separatorColor.opacity(0.4))
-
             TypographicToggleRow(
                 title: "SHOW AUDIO SPECS",
                 isOn: $libraryStore.settings.showAudioSpecsInPlayer,

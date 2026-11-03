@@ -115,6 +115,22 @@ nonisolated public struct JellyfinProvider: MediaServerProvider {
         return [request]
     }
 
+    /// Images/Primary resized by the server (fits in `maxPixels` square), for artist photos in rows.
+    public func resizedArtworkRequests(imageId: String, maxPixels: Int) -> [URLRequest] {
+        artworkRequests(imageId: imageId, size: .thumbnail, version: nil).compactMap { original in
+            guard let url = original.url, var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return nil }
+            components.queryItems = (components.queryItems ?? []) + [
+                URLQueryItem(name: "maxWidth", value: "\(maxPixels)"),
+                URLQueryItem(name: "maxHeight", value: "\(maxPixels)"),
+                URLQueryItem(name: "quality", value: "90")
+            ]
+            guard let resized = components.url else { return nil }
+            var request = original
+            request.url = resized
+            return request
+        }
+    }
+
     // MARK: Reporting
 
     @MainActor public func reportPlayback(_ event: ServerPlaybackEvent, track: Track) {

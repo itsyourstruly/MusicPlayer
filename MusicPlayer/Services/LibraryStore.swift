@@ -1313,8 +1313,32 @@ public final class LibraryStore {
         !settings.disabledFolderIDs.contains(folderID)
     }
 
+    /// Total number of linked sources (local folders + media servers).
+    public var totalSourceCount: Int {
+        settings.linkedFolders.count + settings.serverSources.count
+    }
+
+    /// With only one source it is always enabled: re-enables it and drops disabled IDs of removed sources.
+    /// Returns true if anything changed. Fixes a lone source getting stuck disabled after another source is removed.
+    @discardableResult
+    func enforceSoleSourceEnabled(rebuild: Bool = true) -> Bool {
+        let validIDs = Set(settings.linkedFolders.map(\.id)).union(settings.serverSources.map(\.id))
+        var cleaned = settings.disabledFolderIDs.intersection(validIDs)
+        if totalSourceCount == 1 { cleaned = [] }
+        guard cleaned != settings.disabledFolderIDs else { return false }
+        settings.disabledFolderIDs = cleaned
+        saveSettings()
+        if rebuild {
+            invalidateSortedCaches()
+            scheduleLibraryViewRebuild()
+        }
+        return true
+    }
+
     /// Toggles the enabled state of a linked folder for Library views.
     public func toggleFolderEnabled(_ folderID: UUID) {
+        // A lone source can't be disabled
+        guard totalSourceCount > 1 else { return }
         if settings.disabledFolderIDs.contains(folderID) {
             settings.disabledFolderIDs.remove(folderID)
         } else {
@@ -1733,6 +1757,9 @@ public final class LibraryStore {
         saveLibrary()
         saveDuplicates()
 
+        // If one source is left, make sure it's enabled
+        enforceSoleSourceEnabled()
+
         Task {
             await self.recalculateDuplicates()
         }
@@ -1820,6 +1847,7 @@ public final class LibraryStore {
             Task { for key in keys { await ArtworkCacheService.shared.removeArtwork(key: key) } }
         }
         settings.serverSources.removeAll { $0.id == id }
+        settings.disabledFolderIDs.remove(id)
         jellyfinServerErrors.removeValue(forKey: id)
         jellyfinLastSyncDates.removeValue(forKey: id)
         saveJellyfinLastSyncDates()
@@ -1827,6 +1855,8 @@ public final class LibraryStore {
 
         purgeTracksAndAssociatedState(removedTrackIDs: removedIDs)
         saveLibrary()
+        // If one source is left, make sure it's enabled
+        enforceSoleSourceEnabled()
 
         let sBinURL = self.jellyfinServerCacheURL(for: id)
         let sJSONURL = self.jellyfinServerJSONURL(for: id)
@@ -7289,6 +7319,8 @@ public final class LibraryStore {
            let loaded = try? JSONDecoder().decode(AppSettings.self, from: data) {
             self.settings = loaded
             self.selectedCategory = loaded.defaultLibraryCategory
+            // Repair a lone source left disabled by an earlier removal (before the library view is built)
+            enforceSoleSourceEnabled(rebuild: false)
         }
         HapticManager.shared.isEnabled = self.settings.isHapticsEnabled
         applyOfflineMode()

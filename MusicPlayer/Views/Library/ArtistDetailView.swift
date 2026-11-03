@@ -398,7 +398,8 @@ public struct ArtistDetailView: View {
                     title: activeArtist.name,
                     subtitle: activeArtist.discographySummary,
                     cornerRadius: 12,
-                    targetDimension: 300
+                    targetDimension: 300,
+                    artistImage: ServerArtistImage.resolve(activeArtist, sources: libraryStore.settings.serverSources)?.fullSize()
                 )
                 .frame(width: 88, height: 88)
                 .shadow(color: Color.black.opacity(0.18), radius: 8, x: 0, y: 4)

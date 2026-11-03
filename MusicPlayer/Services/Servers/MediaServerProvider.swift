@@ -63,6 +63,10 @@ nonisolated public protocol MediaServerProvider: Sendable {
     /// `version` is the server's image tag/version where the protocol supports cache-busting.
     func artworkRequests(imageId: String, size: ArtworkFetchSize, version: String?) -> [URLRequest]
 
+    /// List-tier requests with a server-side resize to about `maxPixels` (artist photos in rows). Defaults to the
+    /// normal list tier for servers that already resize it (Subsonic).
+    func resizedArtworkRequests(imageId: String, maxPixels: Int) -> [URLRequest]
+
     /// Server sort names for artists and albums (best effort; empty when the server has none).
     func fetchCatalog() async throws -> ServerCatalog
 
@@ -87,6 +91,9 @@ public extension MediaServerProvider {
     nonisolated func fetchCatalog() async throws -> ServerCatalog { ServerCatalog() }
     nonisolated func fetchLyrics(for track: Track) async -> String? { nil }
     nonisolated func fetchDescription(_ kind: ServerDescriptionKind, itemId: String) async throws -> String? { nil }
+    nonisolated func resizedArtworkRequests(imageId: String, maxPixels: Int) -> [URLRequest] {
+        artworkRequests(imageId: imageId, size: .thumbnail, version: nil)
+    }
 }
 
 /// Which description a page asks for.

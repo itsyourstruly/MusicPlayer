@@ -57,7 +57,7 @@ public actor ArtworkCacheService {
 
     /// Decode tasks in flight, keyed like the decoded-image cache (one task per key and size bucket). The task
     /// records its own result (memory + disk), so a finished download is always cached even if every caller left;
-    /// it is cancelled (with its server request) only after staying unwaited for the pool's grace period.
+    /// it is cancelled (with its server request) as soon as no caller waits for it (the row scrolled away).
     private let inFlightDecodes = SharedTaskPool<DecodeOutcome>(cancelledValue: DecodeOutcome(cancelled: true))
     /// Bucket key -> key the image is actually cached under, when the source was smaller than the bucket
     /// (e.g. the 600 px server tier asked for at 640/1024): one decoded copy instead of identical duplicates.

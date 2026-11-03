@@ -39,14 +39,14 @@ public struct HomeView: View {
         ScrollView(.vertical, showsIndicators: false) {
             VStack(alignment: .leading, spacing: 24) {
                 // Unlinked Source Banner or Quick Action Deck
-                if libraryStore.tracks.isEmpty && !libraryStore.isInitialLoading && libraryStore.settings.linkedFolders.isEmpty && libraryStore.settings.serverSources.isEmpty {
+                if isShowingNoSourceState {
                     emptyLibraryBanner
                 } else {
                     quickActionsDeck
                 }
 
-                // Pinned Items Section (Albums & Playlists with long-press drag reordering)
-                if !libraryStore.pinnedItems.isEmpty {
+                // Pinned Items Section (Albums & Playlists with long-press drag reordering). Hidden while no source is connected.
+                if !isShowingNoSourceState && !libraryStore.pinnedItems.isEmpty {
                     PinnedSection(
                         libraryStore: libraryStore,
                         playerService: playerService,
@@ -66,8 +66,10 @@ public struct HomeView: View {
                     )
                 }
 
-                // Recently Listened To Albums ("LATEST PLAYS")
-                lastAlbumsSection
+                // Recently Listened To Albums ("LATEST PLAYS"). Hidden while no source is connected.
+                if !isShowingNoSourceState {
+                    lastAlbumsSection
+                }
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 16)
@@ -158,26 +160,34 @@ public struct HomeView: View {
         }
     }
 
+    /// No tracks and no linked folders or servers: Home shows only the "NO SOURCE CONNECTED" state.
+    private var isShowingNoSourceState: Bool {
+        libraryStore.tracks.isEmpty && !libraryStore.isInitialLoading && libraryStore.settings.linkedFolders.isEmpty && libraryStore.settings.serverSources.isEmpty
+    }
+
+    /// Centered empty state (no background): title and a large ADD SOURCE button that opens Settings.
     private var emptyLibraryBanner: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("NO MUSIC SOURCE LINKED")
+        VStack(spacing: 20) {
+            Text("NO SOURCE CONNECTED")
                 .font(.system(size: 14, weight: .bold, design: .monospaced))
                 .foregroundStyle(Color.primary)
+                .multilineTextAlignment(.center)
 
-            Text("Link a folder or connect a Jellyfin server to scan and automatically categorize all your audio tracks, albums, and artists.")
-                .font(.system(size: 13))
-                .foregroundStyle(.secondary)
-                .lineSpacing(3)
-
-            HStack(spacing: 8) {
-                Button(action: onOpenSettings) {
-                    Text("ADD SOURCE")
-                }
-                .buttonStyle(TypographicButtonStyle(variant: .primary, size: .small))
+            Button(action: onOpenSettings) {
+                Text("ADD SOURCE")
+                    .font(.system(size: 17, weight: .bold, design: .monospaced))
+                    .foregroundStyle(libraryStore.settings.appTheme.accentColor)
+                    .padding(.horizontal, 22)
+                    .padding(.vertical, 8)
             }
-            .padding(.top, 4)
+            // Opens a sheet, so it gets the system Liquid Glass background
+            .buttonStyle(.glass)
         }
-        .semanticCard(cornerRadius: 12, padding: 16)
+        .frame(maxWidth: .infinity)
+        // Center vertically in the visible Home area
+        .containerRelativeFrame(.vertical, alignment: .center) { length, _ in
+            max(length - 172, 0) // minus the page padding, so the page fits without scrolling
+        }
     }
 
     /// Offline: only tracks on this device join the shuffle.

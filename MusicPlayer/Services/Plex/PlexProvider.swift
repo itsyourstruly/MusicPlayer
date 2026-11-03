@@ -390,6 +390,18 @@ nonisolated public struct PlexProvider: MediaServerProvider {
         [request(url(imageId), timeout: size.requestTimeout)].compactMap { $0 }
     }
 
+    /// The thumb path through Plex's photo transcoder (fits in `maxPixels` square), for artist photos in rows.
+    public func resizedArtworkRequests(imageId: String, maxPixels: Int) -> [URLRequest] {
+        let query = [
+            URLQueryItem(name: "width", value: "\(maxPixels)"),
+            URLQueryItem(name: "height", value: "\(maxPixels)"),
+            URLQueryItem(name: "minSize", value: "1"),
+            URLQueryItem(name: "upscale", value: "0"),
+            URLQueryItem(name: "url", value: imageId)
+        ]
+        return [request(url("/photo/:/transcode", query), timeout: ArtworkFetchSize.thumbnail.requestTimeout)].compactMap { $0 }
+    }
+
     // MARK: Reporting
 
     @MainActor public func reportPlayback(_ event: ServerPlaybackEvent, track: Track) {
