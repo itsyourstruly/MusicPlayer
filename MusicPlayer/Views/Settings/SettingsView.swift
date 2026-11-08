@@ -28,6 +28,12 @@ public enum SettingOptionCatalog {
         description: "Sets the global theme for the app. This changes the background color, and accents."
     )
 
+    public static let homePageSection = SettingOptionDetail(
+        id: "homePageSection",
+        title: "HOME PAGE",
+        description: "Choose which sections appear on Home and drag to reorder them. New library carousels start off. Empty sections still show their header when enabled."
+    )
+
     public static let defaultLibraryPageSection = SettingOptionDetail(
         id: "defaultLibraryPageSection",
         title: "DEFAULT LIBRARY PAGE",
@@ -38,6 +44,12 @@ public enum SettingOptionCatalog {
         id: "fullscreenPlayerSection",
         title: "FULLSCREEN PLAYER",
         description: "Sets the background theme of the Fullscreen Player. Solid matches your theme."
+    )
+
+    public static let albumPageSection = SettingOptionDetail(
+        id: "albumPageSection",
+        title: "ALBUM PAGE",
+        description: "Sets the background of album pages. The backdrop stays fixed behind the page and does not scroll. Solid matches your theme."
     )
 
     // MARK: - Section Info (Sources)

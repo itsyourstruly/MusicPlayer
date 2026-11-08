@@ -1,5 +1,11 @@
 import SwiftUI
 
+/// Pushed from Home carousel headers onto the existing Library list screens (iOS Home).
+public enum HomeLibraryListDestination: String, Identifiable, Hashable {
+    case artists, albums, playlists, tracks
+    public var id: String { rawValue }
+}
+
 /// Main Home screen featuring quick playback triggers, pinned playlists, and library specifications.
 public struct HomeView: View {
     @Bindable var libraryStore: LibraryStore
@@ -10,10 +16,14 @@ public struct HomeView: View {
 
     @Binding var selectedAlbumForNavigation: Album?
     @Binding var selectedPlaylistForNavigation: Playlist?
+    @Binding var selectedArtistForNavigationHome: Artist?
+    @Binding var libraryListDestination: HomeLibraryListDestination?
     @State private var showingShuffleTargetPicker: Bool = false
-    @State private var selectedArtistForNavigationHome: Artist? = nil
 
     @Binding var navigateToSearch: Bool
+
+    /// Cap horizontal carousels so Home stays light.
+    private static let carouselLimit = 24
 
     // Initialize with configured properties
     public init(
@@ -22,6 +32,8 @@ public struct HomeView: View {
         navigateToSearch: Binding<Bool> = .constant(false),
         selectedAlbumForNavigation: Binding<Album?> = .constant(nil),
         selectedPlaylistForNavigation: Binding<Playlist?> = .constant(nil),
+        selectedArtistForNavigationHome: Binding<Artist?> = .constant(nil),
+        libraryListDestination: Binding<HomeLibraryListDestination?> = .constant(nil),
         onNavigateToPlaylist: ((Playlist) -> Void)? = nil,
         onOpenSettings: @escaping () -> Void
     ) {
@@ -30,6 +42,8 @@ public struct HomeView: View {
         self._navigateToSearch = navigateToSearch
         self._selectedAlbumForNavigation = selectedAlbumForNavigation
         self._selectedPlaylistForNavigation = selectedPlaylistForNavigation
+        self._selectedArtistForNavigationHome = selectedArtistForNavigationHome
+        self._libraryListDestination = libraryListDestination
         self.onNavigateToPlaylist = onNavigateToPlaylist
         self.onOpenSettings = onOpenSettings
     }
@@ -38,37 +52,38 @@ public struct HomeView: View {
     public var body: some View {
         ScrollView(.vertical, showsIndicators: false) {
             VStack(alignment: .leading, spacing: 24) {
-                // Unlinked Source Banner or Quick Action Deck
                 if isShowingNoSourceState {
                     emptyLibraryBanner
                 } else {
+#if os(iOS)
+                    ForEach(libraryStore.settings.homeSections.filter(\.isEnabled)) { section in
+                        homeSectionView(for: section.id)
+                    }
+#else
                     quickActionsDeck
-                }
 
-                // Pinned Items Section (Albums & Playlists with long-press drag reordering). Hidden while no source is connected.
-                if !isShowingNoSourceState && !libraryStore.pinnedItems.isEmpty {
-                    PinnedSection(
-                        libraryStore: libraryStore,
-                        playerService: playerService,
-                        onSelectPlaylist: { playlist in
-                            if let customNav = onNavigateToPlaylist {
-                                customNav(playlist)
-                            } else {
-                                selectedPlaylistForNavigation = playlist
+                    if !libraryStore.pinnedItems.isEmpty {
+                        PinnedSection(
+                            libraryStore: libraryStore,
+                            playerService: playerService,
+                            onSelectPlaylist: { playlist in
+                                if let customNav = onNavigateToPlaylist {
+                                    customNav(playlist)
+                                } else {
+                                    selectedPlaylistForNavigation = playlist
+                                }
+                            },
+                            onSelectAlbum: { album in
+                                selectedAlbumForNavigation = album
+                            },
+                            onSelectArtist: { artist in
+                                selectedArtistForNavigationHome = artist
                             }
-                        },
-                        onSelectAlbum: { album in
-                            selectedAlbumForNavigation = album
-                        },
-                        onSelectArtist: { artist in
-                            selectedArtistForNavigationHome = artist
-                        }
-                    )
-                }
+                        )
+                    }
 
-                // Recently Listened To Albums ("LATEST PLAYS"). Hidden while no source is connected.
-                if !isShowingNoSourceState {
                     lastAlbumsSection
+#endif
                 }
             }
             .padding(.horizontal, 16)
@@ -109,11 +124,350 @@ public struct HomeView: View {
                 playerService: playerService
             )
         }
+#if os(iOS)
+        .navigationDestination(item: $libraryListDestination) { destination in
+            switch destination {
+            case .artists:
+                ArtistsListView(libraryStore: libraryStore, playerService: playerService, isStandalone: true)
+                    .navigationTitle("ARTISTS")
+                    .navigationBarTitleDisplayMode(.inline)
+            case .albums:
+                AlbumsListView(libraryStore: libraryStore, playerService: playerService, isStandalone: true)
+                    .navigationTitle("ALBUMS")
+                    .navigationBarTitleDisplayMode(.inline)
+            case .playlists:
+                PlaylistsListView(libraryStore: libraryStore, playerService: playerService, isStandalone: true)
+                    .navigationTitle("PLAYLISTS")
+                    .navigationBarTitleDisplayMode(.inline)
+            case .tracks:
+                AllTracksListView(libraryStore: libraryStore, playerService: playerService, isStandalone: true)
+                    .navigationTitle("TRACKS")
+                    .navigationBarTitleDisplayMode(.inline)
+            }
+        }
+#endif
     }
+
+#if os(iOS)
+    @ViewBuilder
+    private func homeSectionView(for id: HomeSectionID) -> some View {
+        switch id {
+        case .shuffleSearch:
+            quickActionsDeck
+        case .pins:
+            pinsHomeSection
+        case .latestPlays:
+            lastAlbumsSection
+        case .artists:
+            artistsCarouselSection
+        case .albums:
+            albumsCarouselSection
+        case .playlists:
+            playlistsCarouselSection
+        case .tracks:
+            tracksCarouselSection
+        }
+    }
+
+    private var pinsHomeSection: some View {
+        Group {
+            if libraryStore.pinnedItems.isEmpty {
+                homeSectionHeader(title: "PINS", destination: nil)
+            } else {
+                PinnedSection(
+                    libraryStore: libraryStore,
+                    playerService: playerService,
+                    onSelectPlaylist: { playlist in
+                        if let customNav = onNavigateToPlaylist {
+                            customNav(playlist)
+                        } else {
+                            selectedPlaylistForNavigation = playlist
+                        }
+                    },
+                    onSelectAlbum: { album in
+                        selectedAlbumForNavigation = album
+                    },
+                    onSelectArtist: { artist in
+                        selectedArtistForNavigationHome = artist
+                    }
+                )
+            }
+        }
+    }
+
+    private func homeSectionHeader(title: String, destination: HomeLibraryListDestination?) -> some View {
+        Group {
+            if let destination {
+                Button {
+                    HapticFeedback.selectionChanged()
+                    libraryListDestination = destination
+                } label: {
+                    HStack {
+                        Text(title)
+                            .font(.system(size: 13, weight: .black, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.horizontal, 2)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            } else {
+                Text(title)
+                    .font(.system(size: 13, weight: .black, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 2)
+            }
+        }
+    }
+
+    private var artistsCarouselSection: some View {
+        let items = Array(libraryStore.sortedArtistsForBrowsing.prefix(Self.carouselLimit))
+        return VStack(alignment: .leading, spacing: 12) {
+            homeSectionHeader(title: "ARTISTS", destination: .artists)
+            if !items.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    LazyHStack(spacing: 14) {
+                        ForEach(items) { artist in
+                            Button {
+                                selectedArtistForNavigationHome = artist
+                            } label: {
+                                VStack(alignment: .leading, spacing: 6) {
+                                    AlbumArtworkView(
+                                        artworkKey: artist.mostRecentArtworkKey,
+                                        title: artist.name,
+                                        subtitle: artist.discographySummary,
+                                        cornerRadius: 8,
+                                        targetDimension: 350,
+                                        artistImage: ServerArtistImage.resolve(artist, sources: libraryStore.settings.serverSources)
+                                    )
+                                    .frame(width: 130, height: 130)
+
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(artist.name)
+                                            .font(.system(size: 13, weight: .bold))
+                                            .foregroundStyle(Color.primary)
+                                            .lineLimit(1)
+                                        Text(artist.discographySummary)
+                                            .font(.system(size: 11, design: .monospaced))
+                                            .foregroundStyle(.secondary)
+                                            .lineLimit(2)
+                                    }
+                                    .frame(width: 130, alignment: .leading)
+                                }
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .padding(.horizontal, 2)
+                }
+            }
+        }
+    }
+
+    private var albumsCarouselSection: some View {
+        let items = Array(libraryStore.sortedAlbumsForBrowsing.prefix(Self.carouselLimit))
+        return VStack(alignment: .leading, spacing: 12) {
+            homeSectionHeader(title: "ALBUMS", destination: .albums)
+            if !items.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    LazyHStack(spacing: 14) {
+                        ForEach(items) { album in
+                            Button {
+                                selectedAlbumForNavigation = album
+                            } label: {
+                                VStack(alignment: .leading, spacing: 6) {
+                                    AlbumArtworkView(
+                                        artworkKey: album.artworkKey,
+                                        title: album.title,
+                                        subtitle: album.artist,
+                                        cornerRadius: 8
+                                    )
+                                    .frame(width: 130, height: 130)
+
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(album.title)
+                                            .font(.system(size: 13, weight: .bold))
+                                            .foregroundStyle(Color.primary)
+                                            .lineLimit(1)
+                                        Text(album.artist)
+                                            .font(.system(size: 12, weight: .medium))
+                                            .foregroundStyle(.secondary)
+                                            .lineLimit(1)
+                                    }
+                                    .frame(width: 130, alignment: .leading)
+                                }
+                            }
+                            .buttonStyle(.plain)
+                            .albumContextMenu(album: album, libraryStore: libraryStore, playerService: playerService, onGoToArtist: { selectedArtistForNavigationHome = $0 })
+                        }
+                    }
+                    .padding(.horizontal, 2)
+                }
+            }
+        }
+    }
+
+    private var playlistsCarouselSection: some View {
+        let items = Array(libraryStore.sortedPlaylistsForBrowsing.prefix(Self.carouselLimit))
+        return VStack(alignment: .leading, spacing: 12) {
+            homeSectionHeader(title: "PLAYLISTS", destination: .playlists)
+            if !items.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    LazyHStack(spacing: 14) {
+                        ForEach(items) { playlist in
+                            Button {
+                                if let customNav = onNavigateToPlaylist {
+                                    customNav(playlist)
+                                } else {
+                                    selectedPlaylistForNavigation = playlist
+                                }
+                            } label: {
+                                VStack(alignment: .leading, spacing: 6) {
+                                    ZStack(alignment: .topTrailing) {
+                                        AlbumArtworkView(
+                                            artworkKey: libraryStore.artworkKey(for: playlist),
+                                            title: playlist.name,
+                                            subtitle: "Playlist",
+                                            cornerRadius: 8
+                                        )
+                                        .frame(width: 130, height: 130)
+
+                                        if playlist.isPinned {
+                                            Image(systemName: "pin.fill")
+                                                .font(.system(size: 9, weight: .bold))
+                                                .foregroundStyle(Color.appInvertedBackground)
+                                                .padding(4)
+                                                .background(Color.primary.opacity(0.85))
+                                                .clipShape(Circle())
+                                                .padding(6)
+                                        }
+                                    }
+
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(playlist.name)
+                                            .font(.system(size: 13, weight: .bold))
+                                            .foregroundStyle(Color.primary)
+                                            .lineLimit(1)
+                                        Text(playlist.formattedTrackCount)
+                                            .font(.system(size: 11, design: .monospaced))
+                                            .foregroundStyle(.secondary)
+                                            .lineLimit(1)
+                                    }
+                                    .frame(width: 130, alignment: .leading)
+                                }
+                            }
+                            .buttonStyle(.plain)
+                            .playlistContextMenu(playlist: playlist, libraryStore: libraryStore, playerService: playerService)
+                        }
+                    }
+                    .padding(.horizontal, 2)
+                }
+            }
+        }
+    }
+
+    private var tracksCarouselSection: some View {
+        let allTracks = libraryStore.sortedTracksForBrowsing
+        let items = Array(allTracks.prefix(Self.carouselLimit))
+        return VStack(alignment: .leading, spacing: 12) {
+            homeSectionHeader(title: "TRACKS", destination: .tracks)
+            if !items.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    LazyHStack(spacing: 14) {
+                        ForEach(items) { track in
+                            Button {
+                                if let idx = allTracks.firstIndex(where: { $0.id == track.id }) {
+                                    playerService.play(track: track, inQueue: allTracks, startIndex: idx)
+                                } else {
+                                    playerService.play(track: track, inQueue: items)
+                                }
+                            } label: {
+                                VStack(alignment: .leading, spacing: 6) {
+                                    AlbumArtworkView(
+                                        artworkKey: track.artworkKey,
+                                        title: track.title,
+                                        subtitle: track.artist,
+                                        cornerRadius: 8
+                                    )
+                                    .frame(width: 130, height: 130)
+
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(track.title)
+                                            .font(.system(size: 13, weight: .bold))
+                                            .foregroundStyle(Color.primary)
+                                            .lineLimit(1)
+                                        Text(track.artist)
+                                            .font(.system(size: 12, weight: .medium))
+                                            .foregroundStyle(.secondary)
+                                            .lineLimit(1)
+                                    }
+                                    .frame(width: 130, alignment: .leading)
+                                }
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .padding(.horizontal, 2)
+                }
+            }
+        }
+    }
+#endif
 
     @ViewBuilder
     private var lastAlbumsSection: some View {
         let recent = libraryStore.recentAlbums
+#if os(iOS)
+        // Enabled Latest Plays always shows its header, even when empty.
+        VStack(alignment: .leading, spacing: 12) {
+            Text("LATEST PLAYS")
+                .font(.system(size: 13, weight: .black, design: .monospaced))
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 2)
+
+            if !recent.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    LazyHStack(spacing: 14) {
+                        ForEach(recent) { album in
+                            Button(action: {
+                                selectedAlbumForNavigation = album
+                            }) {
+                                VStack(alignment: .leading, spacing: 6) {
+                                    AlbumArtworkView(
+                                        artworkKey: album.artworkKey,
+                                        title: album.title,
+                                        subtitle: album.artist,
+                                        cornerRadius: 8
+                                    )
+                                    .frame(width: 130, height: 130)
+
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(album.title)
+                                            .font(.system(size: 13, weight: .bold))
+                                            .foregroundStyle(Color.primary)
+                                            .lineLimit(1)
+
+                                        Text(album.artist)
+                                            .font(.system(size: 12, weight: .medium))
+                                            .foregroundStyle(.secondary)
+                                            .lineLimit(1)
+                                    }
+                                    .frame(width: 130, alignment: .leading)
+                                }
+                            }
+                            .buttonStyle(.plain)
+                            .albumContextMenu(album: album, libraryStore: libraryStore, playerService: playerService, onGoToArtist: { selectedArtistForNavigationHome = $0 })
+                        }
+                    }
+                    .padding(.horizontal, 2)
+                }
+            }
+        }
+#else
         if !recent.isEmpty {
             VStack(alignment: .leading, spacing: 12) {
                 Text("LATEST PLAYS")
@@ -158,6 +512,7 @@ public struct HomeView: View {
                 }
             }
         }
+#endif
     }
 
     /// No tracks and no linked folders or servers: Home shows only the "NO SOURCE CONNECTED" state.

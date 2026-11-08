@@ -1,10 +1,15 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// Minimal, transparent appearance configuration view for selecting overall app themes,
 /// default library landing tab, and player background rendering styles with direct text color highlighting.
 public struct AppearanceSettingsView: View {
     @Bindable var libraryStore: LibraryStore
     @State private var activeDetail: SettingOptionDetail? = nil
+    #if os(iOS)
+    @State private var isHomePageExpanded: Bool = false
+    @State private var draggedHomeSection: HomeSectionID? = nil
+    #endif
 
     // Initialize with configured properties
     public init(libraryStore: LibraryStore) {
@@ -18,11 +23,26 @@ public struct AppearanceSettingsView: View {
                 // Theme Selection
                 themeSection
 
+                #if os(iOS)
+                Divider()
+                    .overlay(libraryStore.settings.appTheme.separatorColor.opacity(0.4))
+
+                homePageSection
+                #endif
+
                 Divider()
                     .overlay(libraryStore.settings.appTheme.separatorColor.opacity(0.4))
 
                 // Default Library Page
                 defaultLibraryPageSection
+
+                #if os(iOS)
+                Divider()
+                    .overlay(libraryStore.settings.appTheme.separatorColor.opacity(0.4))
+
+                // Album Page Section (iPhone)
+                albumPageSection
+                #endif
 
                 Divider()
                     .overlay(libraryStore.settings.appTheme.separatorColor.opacity(0.4))
@@ -76,6 +96,83 @@ public struct AppearanceSettingsView: View {
         }
     }
 
+    #if os(iOS)
+    // MARK: - Home Page Section (collapsed by default)
+    private var homePageSection: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Button {
+                HapticFeedback.selectionChanged()
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    isHomePageExpanded.toggle()
+                }
+            } label: {
+                HStack {
+                    Text("HOME PAGE")
+                        .font(.system(size: 11, weight: .bold, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .rotationEffect(.degrees(isHomePageExpanded ? 90 : 0))
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .onLongPressGesture(minimumDuration: 0.45) {
+                HapticFeedback.notificationSuccess()
+                activeDetail = SettingOptionCatalog.homePageSection
+            }
+
+            if isHomePageExpanded {
+                VStack(spacing: 0) {
+                    ForEach(Array(libraryStore.settings.homeSections.enumerated()), id: \.element.id) { index, section in
+                        HStack(spacing: 12) {
+                            Image(systemName: "line.3.horizontal")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(.tertiary)
+
+                            Text(section.id.displayName)
+                                .font(.system(size: 13, weight: .bold, design: .monospaced))
+                                .foregroundStyle(Color.primary)
+                                .lineLimit(2)
+                                .minimumScaleFactor(0.85)
+
+                            Spacer(minLength: 8)
+
+                            Text(section.isEnabled ? "ON" : "OFF")
+                                .font(.system(size: 12, weight: .bold, design: .monospaced))
+                                .foregroundStyle(section.isEnabled ? Color.blue : Color.red)
+                                .frame(minWidth: 36, alignment: .trailing)
+                        }
+                        .padding(.vertical, 10)
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            HapticFeedback.selectionChanged()
+                            var sections = libraryStore.settings.homeSections
+                            sections[index].isEnabled.toggle()
+                            libraryStore.settings.homeSections = sections
+                            libraryStore.saveSettings()
+                        }
+                        .onDrag {
+                            draggedHomeSection = section.id
+                            return NSItemProvider(object: section.id.rawValue as NSString)
+                        }
+                        .onDrop(
+                            of: [UTType.text],
+                            delegate: HomeSectionDropDelegate(
+                                targetID: section.id,
+                                draggedID: $draggedHomeSection,
+                                libraryStore: libraryStore
+                            )
+                        )
+                    }
+                }
+            }
+        }
+    }
+    #endif
+
     // MARK: - Theme Section
     private var themeSection: some View {
         pickerRow(
@@ -103,6 +200,32 @@ public struct AppearanceSettingsView: View {
             detail: SettingOptionCatalog.defaultLibraryPageSection
         )
     }
+
+    #if os(iOS)
+    // MARK: - Album Page Section
+    private var albumPageSection: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            Text("ALBUM PAGE")
+                .font(.system(size: 11, weight: .bold, design: .monospaced))
+                .foregroundStyle(.secondary)
+                .onLongPressGesture(minimumDuration: 0.45) {
+                    HapticFeedback.notificationSuccess()
+                    activeDetail = SettingOptionCatalog.albumPageSection
+                }
+
+            pickerRow(
+                "BACKGROUND",
+                selection: Binding(
+                    get: { libraryStore.settings.albumPageBackgroundStyle },
+                    set: { HapticFeedback.selectionChanged(); libraryStore.settings.albumPageBackgroundStyle = $0; libraryStore.saveSettings() }
+                ),
+                options: PlayerBackgroundStyle.allCases,
+                label: { $0.displayName },
+                detail: SettingOptionCatalog.albumPageSection
+            )
+        }
+    }
+    #endif
 
     // MARK: - Fullscreen Player Section
     private var fullscreenPlayerSection: some View {
@@ -156,3 +279,34 @@ public struct AppearanceSettingsView: View {
         }
     }
 }
+
+#if os(iOS)
+/// Long-press drag reordering for Appearance → HOME PAGE rows (same idea as Home Pins).
+private struct HomeSectionDropDelegate: DropDelegate {
+    let targetID: HomeSectionID
+    @Binding var draggedID: HomeSectionID?
+    let libraryStore: LibraryStore
+
+    func dropEntered(info: DropInfo) {
+        guard let draggedID, draggedID != targetID else { return }
+        var sections = libraryStore.settings.homeSections
+        guard let from = sections.firstIndex(where: { $0.id == draggedID }),
+              let to = sections.firstIndex(where: { $0.id == targetID }) else { return }
+        HapticFeedback.lightImpact()
+        withAnimation(.spring(response: 0.28, dampingFraction: 0.8)) {
+            sections.move(fromOffsets: IndexSet(integer: from), toOffset: to > from ? to + 1 : to)
+            libraryStore.settings.homeSections = sections
+            libraryStore.saveSettings()
+        }
+    }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        DropProposal(operation: .move)
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+        draggedID = nil
+        return true
+    }
+}
+#endif

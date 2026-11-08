@@ -1,32 +1,125 @@
 import SwiftUI
 
-/// Grid view displaying indexed artists in a clean 2-column typographic layout.
+/// Grid of artists matching the album tile look (square art, name + stats under, no card fill).
 public struct ArtistsListView: View {
     @Bindable var libraryStore: LibraryStore
     @Bindable var playerService: AudioPlayerService
-    @Environment(\.appTheme) private var appTheme
+    /// When true (Home header push): owns scrolling + album-style toolbar search; ignores Library search drawer.
+    public let isStandalone: Bool
 
-    // Columns
     private let columns = [
-        GridItem(.flexible(), spacing: 10),
-        GridItem(.flexible(), spacing: 10)
+        GridItem(.adaptive(minimum: 155), spacing: 14)
     ]
 
     @State private var selectedArtist: Artist? = nil
     @State private var displayLimit: Int = 80
+#if os(iOS)
+    @State private var localSearchQuery: String = ""
+    @State private var isSearchPresented: Bool = false
+    @FocusState private var isSearchFieldFocused: Bool
+    @State private var isScrollingContent: Bool = false
+    @State private var lastScrollActivity: Date = .distantPast
+    @State private var didJustSubmitSearch: Bool = false
+#endif
 
-    // Initialize with configured properties
-    public init(libraryStore: LibraryStore, playerService: AudioPlayerService) {
+    public init(libraryStore: LibraryStore, playerService: AudioPlayerService, isStandalone: Bool = false) {
         self.libraryStore = libraryStore
         self.playerService = playerService
+        self.isStandalone = isStandalone
     }
 
-    // Main view layout structure
-    public var body: some View {
-        let artists = libraryStore.filteredArtists
+    private var baseArtists: [Artist] {
+        isStandalone ? libraryStore.sortedArtistsForBrowsing : libraryStore.filteredArtists
+    }
 
-        VStack(spacing: 10) {
-            // Sort Selector Bar (NAME, MOST) with enlarged hit target and reverse blue toggle
+    private var artists: [Artist] {
+#if os(iOS)
+        guard isStandalone else { return baseArtists }
+        let cleanQuery = FuzzyMatcher.normalize(localSearchQuery)
+        guard !cleanQuery.isEmpty else { return baseArtists }
+        let scored: [(Artist, Int)] = baseArtists.compactMap { artist in
+            let score = FuzzyMatcher.scoreArtist(name: artist.name, query: localSearchQuery)
+            return score > 0 ? (artist, score) : nil
+        }
+        return scored.sorted {
+            if $0.1 != $1.1 { return $0.1 > $1.1 }
+            return $0.0.name.localizedCaseInsensitiveCompare($1.0.name) == .orderedAscending
+        }.map(\.0)
+#else
+        baseArtists
+#endif
+    }
+
+    public var body: some View {
+        Group {
+            if isStandalone {
+#if os(iOS)
+                ScrollViewReader { proxy in
+                    ScrollView(.vertical, showsIndicators: false) {
+                        listBody
+                            .id("artistsStandaloneTop")
+                    }
+                    .scrollDismissesKeyboard(.interactively)
+                    .onScrollPhaseChange { _, newPhase in
+                        isScrollingContent = newPhase.isScrolling
+                        lastScrollActivity = Date()
+                    }
+                    .onAppear {
+                        proxy.scrollTo("artistsStandaloneTop", anchor: .top)
+                    }
+                }
+                .background(libraryStore.settings.appTheme.backgroundColor.ignoresSafeArea())
+                .searchable(
+                    text: $localSearchQuery,
+                    isPresented: $isSearchPresented,
+                    placement: .toolbar,
+                    prompt: Text("SEARCH ARTISTS")
+                )
+                .searchToolbarBehavior(.minimize)
+                .searchFocused($isSearchFieldFocused)
+                .onChange(of: isSearchFieldFocused) { _, focused in
+                    if !focused && didJustSubmitSearch {
+                        didJustSubmitSearch = false
+                        return
+                    }
+                    let recentlyScrolled = isScrollingContent || Date().timeIntervalSince(lastScrollActivity) < 0.6
+                    if !focused && isSearchPresented && !recentlyScrolled {
+                        isSearchPresented = false
+                    }
+                }
+                .onSubmit(of: .search) {
+                    didJustSubmitSearch = true
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { didJustSubmitSearch = false }
+                }
+#else
+                listBody
+#endif
+            } else {
+                listBody
+            }
+        }
+        .onChange(of: libraryStore.searchQuery) { _, _ in
+            if !isStandalone { displayLimit = 80 }
+        }
+#if os(iOS)
+        .onChange(of: localSearchQuery) { _, _ in
+            displayLimit = 80
+        }
+#endif
+        .onChange(of: libraryStore.artistSortOption) { _, _ in
+            displayLimit = 80
+        }
+        .onChange(of: libraryStore.isArtistSortReversed) { _, _ in
+            displayLimit = 80
+        }
+        .navigationDestination(item: $selectedArtist) { artist in
+            ArtistDetailView(artist: artist, libraryStore: libraryStore, playerService: playerService)
+        }
+    }
+
+    private var listBody: some View {
+        let artists = self.artists
+        return VStack(spacing: 10) {
             SortSelectorBar(
                 options: ArtistSortOption.allCases,
                 selectedOption: $libraryStore.artistSortOption,
@@ -36,47 +129,48 @@ public struct ArtistsListView: View {
 
             if artists.isEmpty {
                 let hasSources = !libraryStore.settings.linkedFolders.isEmpty || !libraryStore.settings.serverSources.isEmpty
-                if (!libraryStore.isInitialLoading || !hasSources) && !libraryStore.searchModel.isSearching {
-                    EmptyStateView(title: "EMPTY", message: "")
-                    .padding(.top, 24)
+                if (!libraryStore.isInitialLoading || !hasSources) {
+#if os(iOS)
+                    let searching = isStandalone ? !localSearchQuery.isEmpty : libraryStore.searchModel.isSearching
+#else
+                    let searching = libraryStore.searchModel.isSearching
+#endif
+                    if !searching {
+                        EmptyStateView(title: "EMPTY", message: "")
+                            .padding(.top, 24)
+                    }
                 }
             } else {
                 let visibleArtists = Array(artists.prefix(displayLimit))
-
-                LazyVGrid(columns: columns, spacing: 10) {
+                LazyVGrid(columns: columns, spacing: 18) {
                     ForEach(Array(visibleArtists.enumerated()), id: \.element.id) { index, artist in
-                        Button(action: {
+                        Button {
                             selectedArtist = artist
-                        }) {
-                            HStack(spacing: 12) {
+                        } label: {
+                            VStack(alignment: .leading, spacing: 6) {
                                 AlbumArtworkView(
                                     artworkKey: artist.mostRecentArtworkKey,
                                     title: artist.name,
                                     subtitle: artist.discographySummary,
-                                    cornerRadius: 6,
+                                    cornerRadius: 8,
+                                    targetDimension: 350,
                                     artistImage: ServerArtistImage.resolve(artist, sources: libraryStore.settings.serverSources)
                                 )
-                                .frame(width: 48, height: 48)
+                                .aspectRatio(1.0, contentMode: .fit)
 
-                                VStack(alignment: .leading, spacing: 3) {
+                                VStack(alignment: .leading, spacing: 2) {
                                     Text(artist.name)
                                         .font(.system(size: 13, weight: .bold))
                                         .foregroundStyle(Color.primary)
-                                        .lineLimit(2)
-                                        .multilineTextAlignment(.leading)
+                                        .lineLimit(1)
 
                                     Text(artist.discographySummary)
-                                        .font(.system(size: 10, design: .monospaced))
+                                        .font(.system(size: 11, design: .monospaced))
                                         .foregroundStyle(.secondary)
-                                        .lineLimit(1)
+                                        .lineLimit(2)
                                 }
-                                Spacer(minLength: 0)
+                                .padding(.horizontal, 2)
                             }
-                            .frame(maxWidth: .infinity, minHeight: 64, alignment: .leading)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 8)
-                            .background(appTheme.secondaryBackgroundColor.opacity(0.6))
-                            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                         }
                         .buttonStyle(.plain)
                         .onAppear {
@@ -90,17 +184,6 @@ public struct ArtistsListView: View {
             }
         }
         .padding(.top, 4)
-        .onChange(of: libraryStore.searchQuery) { _, _ in
-            displayLimit = 80
-        }
-        .onChange(of: libraryStore.artistSortOption) { _, _ in
-            displayLimit = 80
-        }
-        .onChange(of: libraryStore.isArtistSortReversed) { _, _ in
-            displayLimit = 80
-        }
-        .navigationDestination(item: $selectedArtist) { artist in
-            ArtistDetailView(artist: artist, libraryStore: libraryStore, playerService: playerService)
-        }
+        .padding(.bottom, isStandalone ? 140 : 0)
     }
 }

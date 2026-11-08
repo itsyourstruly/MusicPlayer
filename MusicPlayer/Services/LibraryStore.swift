@@ -562,36 +562,63 @@ public final class LibraryStore {
         set { trackSortOption = newValue }
     }
     public var trackSortOption: TrackSortOption = .title {
-        didSet { cachedSortedTracks = nil }
+        didSet {
+            cachedSortedTracks = nil
+            persistLibrarySortSettings()
+        }
     }
     // Controls is track sort reversed
     public var isTrackSortReversed: Bool = false {
-        didSet { cachedSortedTracks = nil }
+        didSet {
+            cachedSortedTracks = nil
+            persistLibrarySortSettings()
+        }
     }
 
     public var artistSortOption: ArtistSortOption = .name {
-        didSet { cachedSortedArtists = nil }
+        didSet {
+            cachedSortedArtists = nil
+            persistLibrarySortSettings()
+        }
     }
     // Controls is artist sort reversed
     public var isArtistSortReversed: Bool = false {
-        didSet { cachedSortedArtists = nil }
+        didSet {
+            cachedSortedArtists = nil
+            persistLibrarySortSettings()
+        }
     }
 
     public var albumSortOption: AlbumSortOption = .title {
-        didSet { cachedSortedAlbums = nil }
+        didSet {
+            cachedSortedAlbums = nil
+            persistLibrarySortSettings()
+        }
     }
     // Controls is album sort reversed
     public var isAlbumSortReversed: Bool = false {
-        didSet { cachedSortedAlbums = nil }
+        didSet {
+            cachedSortedAlbums = nil
+            persistLibrarySortSettings()
+        }
     }
 
     public var playlistSortOption: PlaylistSortOption = .name {
-        didSet { cachedSortedPlaylists = nil }
+        didSet {
+            cachedSortedPlaylists = nil
+            persistLibrarySortSettings()
+        }
     }
     // Controls is playlist sort reversed
     public var isPlaylistSortReversed: Bool = false {
-        didSet { cachedSortedPlaylists = nil }
+        didSet {
+            cachedSortedPlaylists = nil
+            persistLibrarySortSettings()
+        }
     }
+
+    /// Suppresses sort→settings writes while applying a loaded AppSettings snapshot.
+    @ObservationIgnored private var isApplyingLoadedSettings: Bool = false
 
     @ObservationIgnored private var cachedSortedTracks: [Track]? = nil {
         didSet { if cachedSortedTracks == nil { trackSortInvalidation &+= 1 } }
@@ -611,7 +638,8 @@ public final class LibraryStore {
     @ObservationIgnored private var cachedActiveAlbums: [Album]? = nil
     @ObservationIgnored private var cachedActiveArtists: [Artist]? = nil
     @ObservationIgnored public private(set) var albumsByID: [String: Album] = [:]
-    @ObservationIgnored private var albumsByNormalizedKey: [String: Album] = [:]
+    /// Punctuation-preserving identity key -> every album with that artist+title (never collapses distinct ids).
+    @ObservationIgnored private var albumsByIdentityKey: [String: [Album]] = [:]
 
     @ObservationIgnored private var cachedFilteredTracksKey: String? = nil
     @ObservationIgnored private var cachedFilteredTracksResult: [Track]? = nil
@@ -626,18 +654,15 @@ public final class LibraryStore {
     private func rebuildAlbumLookups() {
         var byID: [String: Album] = [:]
         byID.reserveCapacity(albums.count)
-        var byKey: [String: Album] = [:]
+        var byKey: [String: [Album]] = [:]
         byKey.reserveCapacity(albums.count)
 
         for album in albums {
             byID[album.id] = album
-            let key = "\(album.normalizedArtist)_\(album.normalizedTitle)"
-            if byKey[key] == nil {
-                byKey[key] = album
-            }
+            byKey[album.identityKey, default: []].append(album)
         }
         self.albumsByID = byID
-        self.albumsByNormalizedKey = byKey
+        self.albumsByIdentityKey = byKey
 
         var tByID: [UUID: Track] = [:]
         tByID.reserveCapacity(tracks.count)
@@ -778,15 +803,12 @@ public final class LibraryStore {
         self.artistLookupIndex = state.artistLookupIndex
         self.cachedActiveTracks = state.tracks
 
-        var byKey: [String: Album] = [:]
+        var byKey: [String: [Album]] = [:]
         byKey.reserveCapacity(state.albums.count)
         for album in state.albums {
-            let key = "\(album.normalizedArtist)_\(album.normalizedTitle)"
-            if byKey[key] == nil {
-                byKey[key] = album
-            }
+            byKey[album.identityKey, default: []].append(album)
         }
-        self.albumsByNormalizedKey = byKey
+        self.albumsByIdentityKey = byKey
 
         self.invalidateSortedCaches()
         self.prewarmTrackSort()
@@ -816,9 +838,28 @@ public final class LibraryStore {
         libraryView?.albumsByID[id] ?? albumsByID[id]
     }
 
-    /// Fast O(1) indexed lookup for an album by its normalized artist and title.
+    /// Albums that share punctuation-preserving artist+title identity (distinct ids are all returned).
+    public func albumsSharingIdentityKey(_ key: String) -> [Album] {
+        albumsByIdentityKey[key] ?? []
+    }
+
+    /// Preferred single album for an identity key: most tracks, then stable id.
+    public func preferredAlbum(forIdentityKey key: String) -> Album? {
+        let matches = albumsSharingIdentityKey(key)
+        return matches.max(by: { lhs, rhs in
+            if lhs.tracks.count != rhs.tracks.count { return lhs.tracks.count < rhs.tracks.count }
+            return lhs.id < rhs.id
+        })
+    }
+
+    /// Legacy fuzzy-normalized lookup — maps through identity keys when possible; never hides sibling albums.
     public func album(normalizedArtist: String, normalizedTitle: String) -> Album? {
-        albumsByNormalizedKey["\(normalizedArtist)_\(normalizedTitle)"]
+        // Callers that still pass FuzzyMatcher keys: prefer exact identity match among live albums.
+        let matches = albums.filter {
+            $0.normalizedArtist == normalizedArtist && $0.normalizedTitle == normalizedTitle
+        }
+        if let best = matches.max(by: { $0.tracks.count < $1.tracks.count }) { return best }
+        return preferredAlbum(forIdentityKey: "\(ServerCredits.nameKey(normalizedArtist))|\(ServerCredits.nameKey(normalizedTitle))")
     }
 
     /// Invalidates all cached sorted collections
@@ -1052,6 +1093,45 @@ public final class LibraryStore {
         return result
     }
 
+    /// Sorted albums ignoring the Library search drawer (Home carousels / standalone pages).
+    public var sortedAlbumsForBrowsing: [Album] {
+        _ = libraryViewRevision
+        if let cached = cachedSortedAlbums { return cached }
+        let sorted = sortAlbums(activeAlbums, by: albumSortOption, isReversed: isAlbumSortReversed)
+        cachedSortedAlbums = sorted
+        return sorted
+    }
+
+    /// Sorted artists ignoring the Library search drawer (Home carousels / standalone pages).
+    public var sortedArtistsForBrowsing: [Artist] {
+        _ = libraryViewRevision
+        if let cached = cachedSortedArtists { return cached }
+        let sorted = sortArtists(activeArtists, by: artistSortOption, isReversed: isArtistSortReversed)
+        cachedSortedArtists = sorted
+        return sorted
+    }
+
+    /// Sorted playlists ignoring the Library search drawer (Home carousels / standalone pages).
+    public var sortedPlaylistsForBrowsing: [Playlist] {
+        if let cached = cachedSortedPlaylists { return cached }
+        let sorted = sortPlaylists(playlists, by: playlistSortOption, isReversed: isPlaylistSortReversed)
+        cachedSortedPlaylists = sorted
+        return sorted
+    }
+
+    /// Sorted tracks ignoring the Library search drawer (Home carousels / standalone pages).
+    public var sortedTracksForBrowsing: [Track] {
+        _ = libraryViewRevision
+        _ = sortedTracksVersion
+        if let cached = cachedSortedTracks { return cached }
+        let sourceList = trackSortSource()
+        scheduleBackgroundTrackSort(sourceList)
+        if let previous = lastSortedTracks, previous.count == sourceList.count {
+            return previous
+        }
+        return sourceList
+    }
+
     public var filteredAlbums: [Album] {
         _ = libraryViewRevision
         let trimmed = searchQuery.trimmingCharacters(in: .whitespaces)
@@ -1149,17 +1229,43 @@ public final class LibraryStore {
 
     // MARK: - Direct Collection Lookups
 
+    /// Finds the album for a playing track: server album id first, then title + album artist (punctuation-safe).
+    public func findAlbum(for track: Track) -> Album? {
+        if let albumID = track.jellyfinAlbumId, !albumID.isEmpty {
+            if let match = albums.first(where: { album in
+                if let gk = album.groupKey, gk == "srv_" + albumID || gk.contains(albumID) { return true }
+                return album.tracks.contains(where: { $0.jellyfinAlbumId == albumID })
+            }) {
+                return album(forID: match.id) ?? match
+            }
+        }
+        let artistHint = track.albumArtist?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let hint = (artistHint?.isEmpty == false) ? artistHint : track.artist
+        return findAlbum(title: track.album, artist: hint)
+    }
+
     /// Finds an Album matching the specified title and optional artist name.
     public func findAlbum(title: String, artist: String? = nil) -> Album? {
         let cleanTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleanTitle.isEmpty else { return nil }
 
-        // Fast O(1) indexed check by artist + title
-        if let artist = artist {
-            let normArtist = FuzzyMatcher.normalize(artist)
-            let normTitle = FuzzyMatcher.normalize(cleanTitle)
-            if let indexed = album(normalizedArtist: normArtist, normalizedTitle: normTitle) {
-                return indexed
+        // Punctuation-preserving identity index (keeps "?"). Prefer the fullest album among siblings.
+        if let artist = artist, !artist.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            let key = "\(ServerCredits.nameKey(artist))|\(ServerCredits.nameKey(cleanTitle))"
+            if let indexed = preferredAlbum(forIdentityKey: key) {
+                return album(forID: indexed.id) ?? indexed
+            }
+            // Also try album-artist style keys against each album's own identity (display artist may differ).
+            let titleKey = ServerCredits.nameKey(cleanTitle)
+            let artistKey = ServerCredits.nameKey(artist)
+            let siblings = albums.filter {
+                $0.identityTitleKey == titleKey && (
+                    $0.identityArtistKey == artistKey ||
+                    $0.isLeadOrCollaborativeAlbum(for: artist, joinedArtists: settings.joinedArtists)
+                )
+            }
+            if let best = siblings.max(by: { $0.tracks.count < $1.tracks.count }) {
+                return album(forID: best.id) ?? best
             }
         }
 
@@ -1176,22 +1282,21 @@ public final class LibraryStore {
             }
             return true
         }) {
-            return direct
+            return album(forID: direct.id) ?? direct
         }
         if let fallback = albums.first(where: { $0.title.localizedCaseInsensitiveCompare(cleanTitle) == .orderedSame }) {
-            return fallback
+            return album(forID: fallback.id) ?? fallback
         }
         // Norm query
         let normQuery = normalizeAlbumTitleForClustering(cleanTitle)
         if let normMatch = albums.first(where: { normalizeAlbumTitleForClustering($0.title) == normQuery }) {
-            return normMatch
+            return album(forID: normMatch.id) ?? normMatch
         }
         // Synthesize album from matching tracks if not indexed in albums collection
         let matchingTracks = tracks.filter {
             $0.album.localizedCaseInsensitiveCompare(cleanTitle) == .orderedSame ||
             normalizeAlbumTitleForClustering($0.album) == normQuery
         }
-        // Ensure preconditions are met before proceeding
         guard !matchingTracks.isEmpty else { return nil }
         return Album(
             title: cleanTitle,
@@ -2863,7 +2968,8 @@ public final class LibraryStore {
         verifiedGoodDiffs: [MetadataDiff],
         downloadedMetadataCache: PersistentDownloadedMetadataCache,
         scanMethod: LibraryScanMethod = .id3Tags,
-        serverSourceOrder: [UUID] = []
+        serverSourceOrder: [UUID] = [],
+        albumMergeGroups: [AlbumMergeGroup] = []
     ) -> AlbumsAndArtistsResult {
         var localTracks: [Track] = []
         var serverTracks: [Track] = []
@@ -2879,20 +2985,102 @@ public final class LibraryStore {
             downloadedMetadataCache: downloadedMetadataCache,
             scanMethod: scanMethod
         )
-        guard !serverTracks.isEmpty else { return local }
-        let merged = ServerLibraryGrouper.merge(
-            localAlbums: local.albums,
-            localArtists: local.artists,
-            localLookup: local.artistLookupIndex,
-            serverTracks: serverTracks,
-            serverOrder: serverSourceOrder,
-            joinedArtists: joinedArtists
-        )
+        let base: AlbumsAndArtistsResult
+        if serverTracks.isEmpty {
+            base = local
+        } else {
+            let merged = ServerLibraryGrouper.merge(
+                localAlbums: local.albums,
+                localArtists: local.artists,
+                localLookup: local.artistLookupIndex,
+                serverTracks: serverTracks,
+                serverOrder: serverSourceOrder,
+                joinedArtists: joinedArtists
+            )
+            base = AlbumsAndArtistsResult(
+                tracks: local.tracks + serverTracks,
+                albums: merged.albums,
+                artists: merged.artists,
+                artistLookupIndex: merged.lookup
+            )
+        }
+        return applyAlbumMergeGroups(albumMergeGroups, to: base, joinedArtists: joinedArtists)
+    }
+
+    /// Merges persisted album groups into the built library so resync does not split them again.
+    nonisolated public static func applyAlbumMergeGroups(
+        _ groups: [AlbumMergeGroup],
+        to result: AlbumsAndArtistsResult,
+        joinedArtists: [String]
+    ) -> AlbumsAndArtistsResult {
+        guard !groups.isEmpty else { return result }
+        var byID: [String: Album] = [:]
+        byID.reserveCapacity(result.albums.count)
+        for album in result.albums { byID[album.id] = album }
+
+        var absorbedToPrimary: [String: String] = [:]
+        for group in groups {
+            let ids = Array(Set(group.memberIDs + [group.primaryID]))
+            let present = ids.compactMap { byID[$0] }
+            guard present.count >= 2 else { continue }
+            let primary = byID[group.primaryID] ?? present.max(by: { $0.tracks.count < $1.tracks.count })!
+            let primaryID = primary.id
+            var allTracks = primary.tracks
+            var seen = Set(allTracks.map(\.id))
+            for album in present where album.id != primaryID {
+                for track in album.tracks where seen.insert(track.id).inserted {
+                    allTracks.append(track)
+                }
+                absorbedToPrimary[album.id] = primaryID
+                byID.removeValue(forKey: album.id)
+            }
+            byID[primaryID] = primary.withTracks(allTracks)
+        }
+        guard !absorbedToPrimary.isEmpty else { return result }
+
+        let finalAlbums = result.albums.compactMap { album -> Album? in
+            if absorbedToPrimary[album.id] != nil { return nil }
+            return byID[album.id]
+        }
+
+        var remappedArtists: [Artist] = []
+        remappedArtists.reserveCapacity(result.artists.count)
+        for artist in result.artists {
+            var nextAlbums: [Album] = []
+            var seenAlbumIDs = Set<String>()
+            for album in artist.albums {
+                let resolvedID = absorbedToPrimary[album.id] ?? album.id
+                guard let resolved = byID[resolvedID] else { continue }
+                if seenAlbumIDs.insert(resolved.id).inserted {
+                    nextAlbums.append(resolved)
+                }
+            }
+            if nextAlbums.map(\.id) == artist.albums.map(\.id)
+                && zip(nextAlbums, artist.albums).allSatisfy({ $0.tracks.count == $1.tracks.count }) {
+                remappedArtists.append(artist)
+            } else {
+                remappedArtists.append(artist.withContent(albums: nextAlbums, tracks: artist.tracks, joinedArtists: joinedArtists))
+            }
+        }
+
+        var lookup = result.artistLookupIndex
+        let byArtistID = Dictionary(uniqueKeysWithValues: remappedArtists.map { ($0.id, $0) })
+        for (alias, artist) in lookup {
+            if let updated = byArtistID[artist.id] {
+                lookup[alias] = updated
+            }
+        }
+        for artist in remappedArtists {
+            lookup[artist.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()] = artist
+            lookup[ArtistParser.canonicalArtistKey(artist.name)] = artist
+            lookup[artist.id] = artist
+        }
+
         return AlbumsAndArtistsResult(
-            tracks: local.tracks + serverTracks,
-            albums: merged.albums,
-            artists: merged.artists,
-            artistLookupIndex: merged.lookup
+            tracks: result.tracks,
+            albums: finalAlbums.sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending },
+            artists: remappedArtists.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending },
+            artistLookupIndex: lookup
         )
     }
 
@@ -3378,7 +3566,8 @@ public final class LibraryStore {
                         verifiedGoodDiffs: verifiedGoodDiffs,
                         downloadedMetadataCache: downloadedMetadataCache,
                         scanMethod: settingsSnapshot.libraryScanMethod,
-                        serverSourceOrder: settingsSnapshot.serverSources.map(\.id)
+                        serverSourceOrder: settingsSnapshot.serverSources.map(\.id),
+                        albumMergeGroups: settingsSnapshot.albumMergeGroups
                     )
                 }.value
                 res = (built.tracks, built.albums, built.artists, built.artistLookupIndex)
@@ -5848,6 +6037,150 @@ public final class LibraryStore {
         saveSettings()
     }
 
+    // MARK: - Album Merges
+
+    /// Other albums that share punctuation-preserving artist+title with `album` (excludes self / already-merged members).
+    public func mergeCandidates(for album: Album) -> [Album] {
+        let siblings = albumsSharingIdentityKey(album.identityKey).filter { $0.id != album.id }
+        guard !siblings.isEmpty else { return [] }
+        let mergedAway = Set(settings.albumMergeGroups.flatMap { group -> [String] in
+            // Members other than primary are gone from `albums`; still exclude ids already tied to this album's group.
+            if group.primaryID == album.id || group.memberIDs.contains(album.id) {
+                return group.memberIDs.filter { $0 != album.id }
+            }
+            return []
+        })
+        return siblings.filter { !mergedAway.contains($0.id) }
+            .sorted { lhs, rhs in
+                if lhs.tracks.count != rhs.tracks.count { return lhs.tracks.count > rhs.tracks.count }
+                return lhs.id < rhs.id
+            }
+    }
+
+    /// Whether the MERGE ALBUM? pill should show (manual mode only; dismissals ignored in automatic mode).
+    public func shouldSuggestAlbumMerge(for album: Album) -> Bool {
+        guard settings.albumMergeMode == .manually else { return false }
+        let candidates = mergeCandidates(for: album)
+        guard !candidates.isEmpty else { return false }
+        let key = AlbumMergeGroup.suggestionKey(albumIDs: [album.id] + candidates.map(\.id))
+        return !settings.dismissedAlbumMergeKeys.contains(key)
+    }
+
+    /// True when automatic mode should merge this album's candidates on open.
+    public func shouldAutoMergeAlbum(for album: Album) -> Bool {
+        settings.albumMergeMode == .automatically && !mergeCandidates(for: album).isEmpty
+    }
+
+    public func dismissAlbumMergeSuggestion(for album: Album) {
+        let candidates = mergeCandidates(for: album)
+        guard !candidates.isEmpty else { return }
+        let key = AlbumMergeGroup.suggestionKey(albumIDs: [album.id] + candidates.map(\.id))
+        settings.dismissedAlbumMergeKeys.insert(key)
+        saveSettings()
+    }
+
+    /// Merges `otherIDs` into `primary` (current album). Persists so rebuild/resync keeps them together.
+    public func mergeAlbums(into primary: Album, otherIDs: [String]) {
+        let others = Array(Set(otherIDs)).filter { $0 != primary.id }
+        guard !others.isEmpty else { return }
+        var memberIDs = Set(others + [primary.id])
+        // Fold any existing groups that touch these ids into the new primary group.
+        var remaining: [AlbumMergeGroup] = []
+        for group in settings.albumMergeGroups {
+            let overlap = memberIDs.intersection(Set(group.memberIDs + [group.primaryID]))
+            if overlap.isEmpty {
+                remaining.append(group)
+            } else {
+                memberIDs.formUnion(group.memberIDs)
+                memberIDs.insert(group.primaryID)
+            }
+        }
+        let group = AlbumMergeGroup(primaryID: primary.id, memberIDs: Array(memberIDs))
+        remaining.append(group)
+        settings.albumMergeGroups = remaining
+        // Dismiss this suggestion key so pill stays gone after merge.
+        let key = AlbumMergeGroup.suggestionKey(albumIDs: Array(memberIDs))
+        settings.dismissedAlbumMergeKeys.insert(key)
+        saveSettings()
+        // Instant UI: apply merges in-place, then async full rebuild for repository consistency.
+        applyPersistedAlbumMergesLocally()
+        rebuildAlbumsAndArtists()
+        saveLibrary()
+    }
+
+    /// True when this album is the primary of a persisted merge group with at least one other member still relevant.
+    public func hasUndoableAlbumMerge(_ album: Album) -> Bool {
+        settings.albumMergeGroups.contains { $0.primaryID == album.id && $0.memberIDs.count > 1 }
+    }
+
+    public func undoAlbumMerge(for album: Album) {
+        let before = settings.albumMergeGroups.count
+        settings.albumMergeGroups.removeAll { $0.primaryID == album.id }
+        guard settings.albumMergeGroups.count != before else { return }
+        saveSettings()
+        // Instant UI: regroup from tracks with the updated merge list (undo cannot use apply-only).
+        rebuildAlbumStructureLocallyFromTracks()
+        rebuildAlbumsAndArtists()
+        saveLibrary()
+    }
+
+    /// Cheap sync path for merge: apply `settings.albumMergeGroups` onto the live album/artist graphs.
+    private func applyPersistedAlbumMergesLocally() {
+        let base = AlbumsAndArtistsResult(
+            tracks: tracks,
+            albums: albums,
+            artists: artists,
+            artistLookupIndex: artistLookupIndex
+        )
+        let merged = Self.applyAlbumMergeGroups(
+            settings.albumMergeGroups,
+            to: base,
+            joinedArtists: settings.joinedArtists
+        )
+        publishAlbumStructureLocally(
+            albums: merged.albums,
+            artists: merged.artists,
+            lookup: merged.artistLookupIndex
+        )
+    }
+
+    /// Sync regroup from tracks (needed for undo / when merges were removed).
+    private func rebuildAlbumStructureLocallyFromTracks() {
+        let built = Self.buildAlbumsAndArtists(
+            tracks: tracks,
+            joinedArtists: settings.joinedArtists,
+            manualCollaborativeAlbumIDs: settings.manualCollaborativeAlbumIDs,
+            originalAlbumArtistsByTrackID: settings.originalAlbumArtistsByTrackID,
+            verifiedGoodDiffs: verifiedGoodDiffs,
+            downloadedMetadataCache: downloadedMetadataCache,
+            scanMethod: settings.libraryScanMethod,
+            serverSourceOrder: settings.serverSources.map(\.id),
+            albumMergeGroups: settings.albumMergeGroups
+        )
+        publishAlbumStructureLocally(
+            albums: built.albums,
+            artists: built.artists,
+            lookup: built.artistLookupIndex
+        )
+    }
+
+    /// Publishes albums/artists/lookups immediately so album pages refresh without waiting on async rebuild.
+    private func publishAlbumStructureLocally(
+        albums newAlbums: [Album],
+        artists newArtists: [Artist],
+        lookup: [String: Artist]
+    ) {
+        self.albums = newAlbums
+        self.artists = newArtists
+        self.artistLookupIndex = lookup
+        rebuildAlbumLookups()
+        invalidateSortedCaches()
+        // album(forID:) prefers libraryView — patch it now so AlbumDetailView.currentAlbum updates instantly.
+        let snap = LibraryViewBuilder.build(makeLibraryViewInput())
+        publishLibraryView(snap)
+        libraryContentGeneration &+= 1
+    }
+
     /// Re-checks a single verified good track against online database.
     public func recheckVerifiedGoodTrack(_ track: Track) async -> Bool {
         verifiedGoodDiffs.removeAll { $0.id == track.id }
@@ -6039,8 +6372,12 @@ public final class LibraryStore {
         let joinedPart = settings.joinedArtists.sorted().joined(separator: "|")
         let colPart = settings.manualCollaborativeAlbumIDs.sorted().joined(separator: "|")
         let methodPart = settings.libraryScanMethod.rawValue
-        // v3: media-server tracks mirror server organization (credits, album identity, cross-source merge).
-        let input = "v3_\(joinedPart)_\(colPart)_\(methodPart)"
+        let mergePart = settings.albumMergeGroups
+            .map { "\($0.primaryID):\($0.memberIDs.sorted().joined(separator: ","))" }
+            .sorted()
+            .joined(separator: ";")
+        // v4: user album merges persist across rebuild/resync.
+        let input = "v4_\(joinedPart)_\(colPart)_\(methodPart)_\(mergePart)"
         let digest = SHA256.hash(data: Data(input.utf8))
         return digest.compactMap { String(format: "%02x", $0) }.joined()
     }
@@ -6200,6 +6537,153 @@ public final class LibraryStore {
            let loaded = try? JSONDecoder().decode(PersistentDownloadedMetadataCache.self, from: data) {
             self.downloadedMetadataCache = loaded
             AppLogger.storage.info("Loaded \(loaded.recordsByFilePath.count) downloaded metadata records from cache.")
+        }
+    }
+
+    /// Removes every persisted album merge and dismissed MERGE ALBUM? pill, then regroups the library.
+    public func clearAllAlbumMerges() {
+        let hadMerges = !settings.albumMergeGroups.isEmpty
+        let hadDismissals = !settings.dismissedAlbumMergeKeys.isEmpty
+        guard hadMerges || hadDismissals else { return }
+        settings.albumMergeGroups = []
+        settings.dismissedAlbumMergeKeys = []
+        saveSettings()
+        if hadMerges {
+            rebuildAlbumStructureLocallyFromTracks()
+            rebuildAlbumsAndArtists()
+            saveLibrary()
+        }
+        AppLogger.storage.info("Cleared all album merges and dismissed merge suggestions.")
+    }
+
+
+    // MARK: - Server HIDE DUPLICATES (navigate-time track hide — does not merge albums)
+
+    public func setHideServerAlbumDuplicates(_ enabled: Bool) {
+        guard settings.hideServerAlbumDuplicates != enabled else { return }
+        settings.hideServerAlbumDuplicates = enabled
+        if !enabled {
+            settings.hideServerDuplicateExemptAlbumIDs = []
+            clearAutomaticHiddenDuplicates(restoreTracks: true)
+        }
+        saveSettings()
+    }
+
+    /// Among currently visible/loaded tracks, hide server duplicates (same title+artist+album).
+    /// Keeps the best quality/metadata copy. Does not merge albums or rewrite artwork.
+    public func hideVisibleServerDuplicateTracks(among tracks: [Track]) {
+        guard settings.hideServerAlbumDuplicates else { return }
+        let serverTracks = tracks.filter { $0.isJellyfinItem || $0.metadataSource == .server }
+        guard serverTracks.count >= 2 else { return }
+
+        var buckets: [String: [Track]] = [:]
+        for track in serverTracks {
+            buckets[Self.serverDuplicateTrackKey(track), default: []].append(track)
+        }
+
+        var losers: [Track] = []
+        for (_, group) in buckets where group.count >= 2 {
+            let ranked = group.sorted { Self.duplicateTrackQualityScore($0) > Self.duplicateTrackQualityScore($1) }
+            losers.append(contentsOf: ranked.dropFirst())
+        }
+        guard !losers.isEmpty else { return }
+
+        // Skip tracks already exempted via RETURN of an auto-hidden row.
+        let exempt = settings.hideServerDuplicateExemptAlbumIDs
+        let toHide = losers.filter { track in
+            if let aid = track.jellyfinAlbumId, exempt.contains(aid) { return false }
+            return true
+        }
+        guard !toHide.isEmpty else { return }
+        hideAutomaticDuplicateTracks(toHide)
+    }
+
+    nonisolated private static func serverDuplicateTrackKey(_ track: Track) -> String {
+        let title = ServerCredits.nameKey(track.title)
+        let artist = ServerCredits.nameKey(
+            (track.albumArtist?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
+                ? (track.albumArtist ?? track.artist) : track.artist
+        )
+        let album = ServerCredits.nameKey(track.album)
+        return "\(artist)|\(album)|\(title)"
+    }
+
+    nonisolated private static func duplicateTrackQualityScore(_ track: Track) -> Int {
+        var n = 0
+        if track.trackNumber != nil { n += 10 }
+        if track.discNumber != nil { n += 5 }
+        if track.year != nil { n += 5 }
+        if let g = track.genre, !g.isEmpty { n += 5 }
+        if track.artworkKey != nil { n += 15 }
+        if let aa = track.albumArtist, !aa.isEmpty { n += 5 }
+        n += track.serverCredits?.bitDepth ?? 0
+        let info = track.fileInfo
+        let ext = (info?.fileExtension ?? "").uppercased()
+        if ["FLAC", "ALAC", "WAV", "AIFF", "AIF", "APE", "WV"].contains(ext) { n += 100 }
+        n += Int((info?.sampleRate ?? 0) / 1000)
+        n += Int((info?.bitRate ?? 0) / 10)
+        return n
+    }
+
+    /// Persists losers as automatic HIDDEN rows and removes them from the live library (one rebuild).
+    private func hideAutomaticDuplicateTracks(_ tracks: [Track]) {
+        ensureHiddenItemsLoaded()
+        // Already auto-hidden?
+        let already = Set(hiddenItems.filter { $0.kind == .autoDuplicate }.flatMap { $0.records.map(\.track.id) })
+        let fresh = tracks.filter { !already.contains($0.id) }
+        guard !fresh.isEmpty else { return }
+
+        let now = Date()
+        for track in fresh {
+            let item = HiddenLibraryItem(
+                id: "autoDupTrack:\(track.id.uuidString)",
+                kind: .autoDuplicate,
+                hiddenDate: now,
+                title: track.title,
+                subtitle: "\(track.artist) · \(track.album)",
+                artworkKey: track.artworkKey,
+                records: [HiddenTrackRecord(track: track, playlistSlots: [], blockedPath: nil)],
+                serverItemID: hiddenServerItemID(for: track)
+            )
+            hiddenItems.removeAll { $0.id == item.id }
+            hiddenItems.insert(item, at: 0)
+            if let itemId = hiddenServerItemID(for: track) {
+                settings.removedJellyfinItemIDs.insert(itemId)
+            }
+            JellyfinDownloadManager.shared.deleteDownload(trackId: track.id)
+        }
+        let freshIDs = Set(fresh.map(\.id))
+        self.tracks.removeAll { freshIDs.contains($0.id) }
+        for i in 0..<playlists.count {
+            playlists[i].trackIDs.removeAll { freshIDs.contains($0) }
+        }
+        hiddenItemsDidChange()
+        saveSettings()
+        savePlaylists()
+        rebuildAlbumsAndArtists()
+        saveLibrary()
+    }
+
+    private func clearAutomaticHiddenDuplicates(restoreTracks: Bool) {
+        ensureHiddenItemsLoaded()
+        let autos = hiddenItems.filter { $0.kind == .autoDuplicate }
+        guard !autos.isEmpty else { return }
+        if restoreTracks {
+            for item in autos {
+                for record in item.records {
+                    if let itemId = hiddenServerItemID(for: record.track) {
+                        settings.removedJellyfinItemIDs.remove(itemId)
+                    }
+                }
+                restoreHiddenRecords(item.records)
+            }
+            saveSettings()
+        }
+        hiddenItems.removeAll { $0.kind == .autoDuplicate }
+        hiddenItemsDidChange()
+        if restoreTracks {
+            rebuildAlbumsAndArtists()
+            saveLibrary()
         }
     }
 
@@ -6735,6 +7219,30 @@ public final class LibraryStore {
                 try? data.write(to: url, options: .atomic)
             }
         }
+    }
+
+    /// Writes the in-memory Library sort controls into AppSettings (Home + Library share them across launches).
+    private func persistLibrarySortSettings() {
+        guard !isApplyingLoadedSettings else { return }
+        var next = settings
+        next.trackSortOption = trackSortOption
+        next.isTrackSortReversed = isTrackSortReversed
+        next.artistSortOption = artistSortOption
+        next.isArtistSortReversed = isArtistSortReversed
+        next.albumSortOption = albumSortOption
+        next.isAlbumSortReversed = isAlbumSortReversed
+        next.playlistSortOption = playlistSortOption
+        next.isPlaylistSortReversed = isPlaylistSortReversed
+        guard next.trackSortOption != settings.trackSortOption
+            || next.isTrackSortReversed != settings.isTrackSortReversed
+            || next.artistSortOption != settings.artistSortOption
+            || next.isArtistSortReversed != settings.isArtistSortReversed
+            || next.albumSortOption != settings.albumSortOption
+            || next.isAlbumSortReversed != settings.isAlbumSortReversed
+            || next.playlistSortOption != settings.playlistSortOption
+            || next.isPlaylistSortReversed != settings.isPlaylistSortReversed else { return }
+        settings = next
+        saveSettings()
     }
 
     // Save settings asynchronously
@@ -7317,8 +7825,18 @@ public final class LibraryStore {
     private func loadLightweightPreferences() {
         if let data = try? Data(contentsOf: settingsFileURL),
            let loaded = try? JSONDecoder().decode(AppSettings.self, from: data) {
+            self.isApplyingLoadedSettings = true
             self.settings = loaded
             self.selectedCategory = loaded.defaultLibraryCategory
+            self.trackSortOption = loaded.trackSortOption
+            self.isTrackSortReversed = loaded.isTrackSortReversed
+            self.artistSortOption = loaded.artistSortOption
+            self.isArtistSortReversed = loaded.isArtistSortReversed
+            self.albumSortOption = loaded.albumSortOption
+            self.isAlbumSortReversed = loaded.isAlbumSortReversed
+            self.playlistSortOption = loaded.playlistSortOption
+            self.isPlaylistSortReversed = loaded.isPlaylistSortReversed
+            self.isApplyingLoadedSettings = false
             // Repair a lone source left disabled by an earlier removal (before the library view is built)
             enforceSoleSourceEnabled(rebuild: false)
         }
@@ -7601,6 +8119,8 @@ nonisolated public struct HiddenLibraryItem: Codable, Sendable, Hashable, Identi
         case track
         case album
         case unknownServerItem
+        /// Server album discarded by Sources > HIDE DUPLICATES (not a manual hide).
+        case autoDuplicate
     }
 
     public let id: String
@@ -7827,6 +8347,23 @@ extension LibraryStore {
     public func returnHiddenItem(_ item: HiddenLibraryItem) {
         ensureHiddenItemsLoaded()
         hiddenItems.removeAll { $0.id == item.id }
+        if item.kind == .autoDuplicate {
+            // Restore tracks; exempt album id when known so navigate-time hide won't immediately re-hide.
+            for record in item.records {
+                if let itemId = hiddenServerItemID(for: record.track) {
+                    settings.removedJellyfinItemIDs.remove(itemId)
+                }
+                if let albumID = record.track.jellyfinAlbumId, !albumID.isEmpty {
+                    settings.hideServerDuplicateExemptAlbumIDs.insert(albumID)
+                }
+            }
+            saveSettings()
+            restoreHiddenRecords(item.records)
+            hiddenItemsDidChange()
+            rebuildAlbumsAndArtists()
+            saveLibrary()
+            return
+        }
         if item.kind == .unknownServerItem {
             if let itemID = item.serverItemID {
                 settings.removedJellyfinItemIDs.remove(itemID)

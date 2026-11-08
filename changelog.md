@@ -1,3 +1,14 @@
+### v0.4 (9)
+* New:
+  -  Within the Appearance settings, new option to toggle album backgrounds to: match the Album Color, Album Blur, or keep the Solid color from the set theme.
+  - Also in the Appearance settings, expand the 'HOME PAGE' section to reorder, and toggle existing sections and library options. 
+  - Depending on source and organization, you may have a duplicate album, or tracks separated into different albums, or singles. LAP will now find when an album you open has the identical name, and artist as another, and offer to merge them.
+- Modifications:
+  - In albums, the tracklist no longer shows the album artwork, and has been replaced by the track #, or '-' if missing.
+  - In Sources settings, clear options now match the set theme to show they can be selected. Added option for merges to undo all merges. It will now only show options to clear what it's actually using. 
+- Fixes:
+  - 
+
 ### v0.4 (8)
 * New:
   -  Option to toggle icons for the player controls. Found in Appearance settings, and by tapping the album artwork.

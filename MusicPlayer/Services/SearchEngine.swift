@@ -218,8 +218,8 @@ nonisolated public struct SearchContext: Sendable {
 /// never scans the whole library (mirrors LibraryStore.findAlbum resolution order).
 nonisolated struct SearchAlbumLookup: Sendable {
     let generation: UInt64
-    /// "normalizedArtist_normalizedTitle" -> first album (same key as LibraryStore's index).
-    var byNormalizedKey: [String: Album] = [:]
+    /// Punctuation-preserving identity key -> albums (never collapses distinct ids).
+    var byIdentityKey: [String: [Album]] = [:]
     /// Lowercased title -> albums in that title bucket.
     var byLowercasedTitle: [String: [Album]] = [:]
     /// Cluster-normalized title -> first album.
@@ -241,10 +241,9 @@ nonisolated struct SearchAlbumLookup: Sendable {
 
         // Stable album order (dictionary order is arbitrary) so "first match" is deterministic.
         let albums = ctx.albumsByID.values.sorted { $0.id < $1.id }
-        lookup.byNormalizedKey.reserveCapacity(albums.count)
+        lookup.byIdentityKey.reserveCapacity(albums.count)
         for album in albums {
-            let key = "\(album.normalizedArtist)_\(album.normalizedTitle)"
-            if lookup.byNormalizedKey[key] == nil { lookup.byNormalizedKey[key] = album }
+            lookup.byIdentityKey[album.identityKey, default: []].append(album)
             lookup.byLowercasedTitle[album.title.lowercased(), default: []].append(album)
             let clusterKey = cluster(album.title)
             if lookup.byClusterTitle[clusterKey] == nil { lookup.byClusterTitle[clusterKey] = album }
@@ -263,8 +262,10 @@ nonisolated struct SearchAlbumLookup: Sendable {
         let cleanTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleanTitle.isEmpty else { return nil }
         if let artist {
-            let key = "\(FuzzyMatcher.normalize(artist))_\(FuzzyMatcher.normalize(cleanTitle))"
-            if let indexed = byNormalizedKey[key] { return indexed }
+            let key = "\(ServerCredits.nameKey(artist))|\(ServerCredits.nameKey(cleanTitle))"
+            if let matches = byIdentityKey[key], let best = matches.max(by: { $0.tracks.count < $1.tracks.count }) {
+                return best
+            }
         }
         if let direct = ctx.albumsByID[cleanTitle] { return direct }
         let bucket = byLowercasedTitle[cleanTitle.lowercased()] ?? []

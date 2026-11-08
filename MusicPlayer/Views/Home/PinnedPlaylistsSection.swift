@@ -38,17 +38,9 @@ public struct PinnedSection: View {
     public var body: some View {
         if !libraryStore.pinnedItems.isEmpty {
             VStack(alignment: .leading, spacing: 12) {
-                HStack {
-                    Text("PINS")
-                        .font(.system(size: 13, weight: .bold, design: .monospaced))
-                        .foregroundStyle(.secondary)
-
-                    Spacer()
-
-                    Text("\(libraryStore.pinnedItems.count)")
-                        .font(.system(size: 11, weight: .bold, design: .monospaced))
-                        .foregroundStyle(.tertiary)
-                }
+                Text("PINS")
+                    .font(.system(size: 13, weight: .bold, design: .monospaced))
+                    .foregroundStyle(.secondary)
 
                 LazyVGrid(columns: columns, spacing: 14) {
                     ForEach(libraryStore.pinnedItems) { item in

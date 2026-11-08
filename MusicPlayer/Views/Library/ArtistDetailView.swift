@@ -376,6 +376,16 @@ public struct ArtistDetailView: View {
                 playerService: playerService
             )
         }
+        .task(id: currentArtist.id) {
+            if libraryStore.settings.hideServerAlbumDuplicates {
+                libraryStore.hideVisibleServerDuplicateTracks(among: currentArtist.tracks)
+            }
+        }
+        .onChange(of: libraryStore.settings.hideServerAlbumDuplicates) { _, enabled in
+            if enabled {
+                libraryStore.hideVisibleServerDuplicateTracks(among: currentArtist.tracks)
+            }
+        }
         .enableInteractivePopGesture()
     }
 

@@ -19,6 +19,10 @@ public struct TrackRowView: View {
     public let isTapToPlayNextEnabled: Bool
     // Show album subtitle
     public let showAlbumSubtitle: Bool
+    /// When false, the leading artwork is replaced by the list index (or a status label).
+    public let showsArtwork: Bool
+    /// When true, the row fill is clear so the page backdrop shows through (album pages).
+    public let usesClearBackground: Bool
     // On play
     public let onPlay: () -> Void
     // On play next
@@ -86,6 +90,8 @@ public struct TrackRowView: View {
         isInPlayNext: Bool = false,
         isTapToPlayNextEnabled: Bool = false,
         showAlbumSubtitle: Bool = true,
+        showsArtwork: Bool = true,
+        usesClearBackground: Bool = false,
         isSwipeDisabled: Bool = false,
         trailingText: String? = nil,
         onPlay: @escaping () -> Void,
@@ -113,6 +119,8 @@ public struct TrackRowView: View {
         self.isInPlayNext = isInPlayNext
         self.isTapToPlayNextEnabled = isTapToPlayNextEnabled
         self.showAlbumSubtitle = showAlbumSubtitle
+        self.showsArtwork = showsArtwork
+        self.usesClearBackground = usesClearBackground
         self.isSwipeDisabled = isSwipeDisabled
         self.trailingText = trailingText
         self.onPlay = onPlay
@@ -246,9 +254,9 @@ public struct TrackRowView: View {
 
             // Main Row Content
             HStack(spacing: 12) {
-                // Leading Album Cover Thumbnail (Tappable to Open Album)
+                // Leading artwork (default) or list index / status (album pages)
                 if let onSelectAlbum = onSelectAlbum {
-                    albumThumbnailView
+                    leadingAccessoryView
                         .contentShape(Rectangle())
                         .onTapGesture {
                             if abs(currentOffset) > 5 {
@@ -263,7 +271,7 @@ public struct TrackRowView: View {
                             onSelectAlbum()
                         }
                 } else {
-                    albumThumbnailView
+                    leadingAccessoryView
                 }
 
                 // Track Title & Subtitle
@@ -298,11 +306,7 @@ public struct TrackRowView: View {
             }
             .padding(.vertical, 6)
             .padding(.horizontal, 8)
-            .background(
-                isCurrentTrack
-                    ? appTheme.secondaryBackgroundColor.opacity(0.5)
-                    : appTheme.backgroundColor
-            )
+            .background(rowBackgroundColor)
             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
             .contentShape(Rectangle())
             .onTapGesture {
@@ -636,6 +640,57 @@ public struct TrackRowView: View {
                 showPlayNextSuccess = false
                 showQueueSuccess = false
             }
+        }
+    }
+
+    private var rowBackgroundColor: Color {
+        if usesClearBackground {
+            return Color.clear
+        }
+        return isCurrentTrack
+            ? appTheme.secondaryBackgroundColor.opacity(0.5)
+            : appTheme.backgroundColor
+    }
+
+    /// Same priority as the artwork badges: SELECTED, PLAYING/PAUSED, NEXT; otherwise the list index.
+    private var leadingStatusOrIndexText: String {
+        if isSelected {
+            return "SELECTED"
+        }
+        if isCurrentTrack {
+            return isPlaying ? "PLAYING" : "PAUSED"
+        }
+        if isNextTrack {
+            return "NEXT"
+        }
+        if let indexNumber, indexNumber > 0 {
+            return "\(indexNumber)"
+        }
+        return "—"
+    }
+
+    private var leadingStatusOrIndexIsStatus: Bool {
+        isSelected || isCurrentTrack || isNextTrack
+    }
+
+    @ViewBuilder
+    private var leadingAccessoryView: some View {
+        if showsArtwork {
+            albumThumbnailView
+        } else {
+            Text(leadingStatusOrIndexText)
+                .font(.system(
+                    size: leadingStatusOrIndexIsStatus ? 8 : 13,
+                    weight: .bold,
+                    design: .monospaced
+                ))
+                .foregroundStyle(isCurrentTrack || isSelected ? appTheme.accentColor : .secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.65)
+                .frame(width: 42, height: 42)
+                .contentTransition(.opacity)
+                .animation(.easeInOut(duration: 0.22), value: isPlaying)
+                .contentShape(Rectangle())
         }
     }
 

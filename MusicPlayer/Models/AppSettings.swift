@@ -267,6 +267,99 @@ public struct LinkedFolder: Identifiable, Codable, Equatable, Sendable {
     }
 }
 
+// MARK: - Home page sections (iOS)
+
+/// Ordered, toggleable blocks on the Home page.
+public enum HomeSectionID: String, CaseIterable, Identifiable, Codable, Sendable {
+    case shuffleSearch
+    case pins
+    case latestPlays
+    case artists
+    case albums
+    case playlists
+    case tracks
+
+    public var id: String { rawValue }
+
+    public var displayName: String {
+        switch self {
+        case .shuffleSearch: return "SHUFFLE TARGET/SEARCH LIBRARY"
+        case .pins: return "PINS"
+        case .latestPlays: return "LATEST PLAYS"
+        case .artists: return "ARTISTS"
+        case .albums: return "ALBUMS"
+        case .playlists: return "PLAYLISTS"
+        case .tracks: return "TRACKS"
+        }
+    }
+
+    public static let defaultOrder: [HomeSectionID] = [
+        .shuffleSearch, .pins, .latestPlays, .artists, .albums, .playlists, .tracks
+    ]
+
+    /// Sections that ship enabled. Artists/Albums/Playlists/Tracks start off.
+    public static let defaultEnabled: Set<HomeSectionID> = [.shuffleSearch, .pins, .latestPlays]
+}
+
+public struct HomeSectionPreference: Codable, Sendable, Identifiable, Equatable {
+    public var id: HomeSectionID
+    public var isEnabled: Bool
+
+    public init(id: HomeSectionID, isEnabled: Bool) {
+        self.id = id
+        self.isEnabled = isEnabled
+    }
+
+    public static func defaults() -> [HomeSectionPreference] {
+        HomeSectionID.defaultOrder.map {
+            HomeSectionPreference(id: $0, isEnabled: HomeSectionID.defaultEnabled.contains($0))
+        }
+    }
+
+    /// Keeps saved order/toggles, appends any newly introduced section ids with their default enabled state.
+    public static func normalized(_ stored: [HomeSectionPreference]?) -> [HomeSectionPreference] {
+        let fallback = defaults()
+        guard let stored, !stored.isEmpty else { return fallback }
+        var seen = Set<HomeSectionID>()
+        var result: [HomeSectionPreference] = []
+        for item in stored where seen.insert(item.id).inserted {
+            result.append(item)
+        }
+        for item in fallback where !seen.contains(item.id) {
+            result.append(item)
+        }
+        return result
+    }
+}
+
+// MARK: - Album merges
+
+/// One user merge: `primaryID` keeps identity; `memberIDs` lists every album id in the group (including primary).
+public struct AlbumMergeGroup: Codable, Sendable, Equatable, Identifiable {
+    public var primaryID: String
+    public var memberIDs: [String]
+
+    public var id: String { primaryID }
+
+    public init(primaryID: String, memberIDs: [String]) {
+        self.primaryID = primaryID
+        let unique = Array(Set(memberIDs + [primaryID]))
+        self.memberIDs = unique.sorted()
+    }
+
+    public static func suggestionKey(albumIDs: [String]) -> String {
+        Array(Set(albumIDs)).sorted().joined(separator: "\u{1E}")
+    }
+}
+
+/// How album merge suggestions behave when opening an album page.
+public enum AlbumMergeMode: String, Codable, Sendable, CaseIterable, Identifiable, Hashable {
+    case manually = "MANUALLY"
+    case automatically = "AUTOMATICALLY"
+
+    public var id: String { rawValue }
+}
+
 // MARK: - AppSettings
 
 /// User preferences and persistent application configuration.
@@ -275,6 +368,19 @@ public struct AppSettings: Codable, Sendable {
     public var appTheme: AppTheme
     public var defaultLibraryCategory: LibraryCategory
     public var playerBackgroundStyle: PlayerBackgroundStyle
+    /// Album detail page backdrop (iOS). Independent of the fullscreen player setting; default SOLID.
+    public var albumPageBackgroundStyle: PlayerBackgroundStyle
+    /// Home page section order + on/off (iOS). Artists/Albums/Playlists/Tracks default off.
+    public var homeSections: [HomeSectionPreference]
+    /// Library / Home shared sort (persisted across launches).
+    public var artistSortOption: ArtistSortOption
+    public var isArtistSortReversed: Bool
+    public var albumSortOption: AlbumSortOption
+    public var isAlbumSortReversed: Bool
+    public var playlistSortOption: PlaylistSortOption
+    public var isPlaylistSortReversed: Bool
+    public var trackSortOption: TrackSortOption
+    public var isTrackSortReversed: Bool
     public var libraryScanMethod: LibraryScanMethod
     /// Folder nesting layout used by FOLDER mode for local sources.
     public var folderHierarchyLayout: FolderHierarchyLayout
@@ -340,6 +446,16 @@ public struct AppSettings: Codable, Sendable {
     public var cacheInAdvanceCount: Int
     // Persistently hidden/removed Jellyfin item IDs excluded from library sync
     public var removedJellyfinItemIDs: Set<String>
+    /// User-confirmed album merges: primary id absorbs the other member ids across rebuilds/sync.
+    public var albumMergeGroups: [AlbumMergeGroup]
+    /// Suggestion keys the user dismissed (sorted album ids joined) — do not show MERGE ALBUM? again for that group.
+    public var dismissedAlbumMergeKeys: Set<String>
+    /// Sources: MERGE ALBUMS picker — manual prompt vs auto-merge on album open.
+    public var albumMergeMode: AlbumMergeMode
+    /// Sources: HIDE DUPLICATES for server albums (local uses Find Track Tags / autoHideDuplicates).
+    public var hideServerAlbumDuplicates: Bool
+    /// Album ids exempt from HIDE DUPLICATES after RETURN from an automatic HIDDEN row.
+    public var hideServerDuplicateExemptAlbumIDs: Set<String>
 
     /// Backwards compatibility property
     public var accentTheme: AppTheme {
@@ -352,6 +468,16 @@ public struct AppSettings: Codable, Sendable {
         appTheme: AppTheme = .dark,
         defaultLibraryCategory: LibraryCategory = .artists,
         playerBackgroundStyle: PlayerBackgroundStyle = .albumColor,
+        albumPageBackgroundStyle: PlayerBackgroundStyle = .solid,
+        homeSections: [HomeSectionPreference] = HomeSectionPreference.defaults(),
+        artistSortOption: ArtistSortOption = .name,
+        isArtistSortReversed: Bool = false,
+        albumSortOption: AlbumSortOption = .title,
+        isAlbumSortReversed: Bool = false,
+        playlistSortOption: PlaylistSortOption = .name,
+        isPlaylistSortReversed: Bool = false,
+        trackSortOption: TrackSortOption = .title,
+        isTrackSortReversed: Bool = false,
         libraryScanMethod: LibraryScanMethod = .id3Tags,
         folderHierarchyLayout: FolderHierarchyLayout = .auto,
         autoPlayNext: Bool = true,
@@ -390,11 +516,26 @@ public struct AppSettings: Codable, Sendable {
         downloadOverCellular: Bool = false,
         cacheInAdvanceEnabled: Bool = false,
         cacheInAdvanceCount: Int = 3,
-        removedJellyfinItemIDs: Set<String> = []
+        removedJellyfinItemIDs: Set<String> = [],
+        albumMergeGroups: [AlbumMergeGroup] = [],
+        dismissedAlbumMergeKeys: Set<String> = [],
+        albumMergeMode: AlbumMergeMode = .manually,
+        hideServerAlbumDuplicates: Bool = false,
+        hideServerDuplicateExemptAlbumIDs: Set<String> = []
     ) {
         self.appTheme = appTheme
         self.defaultLibraryCategory = defaultLibraryCategory
         self.playerBackgroundStyle = playerBackgroundStyle
+        self.albumPageBackgroundStyle = albumPageBackgroundStyle
+        self.homeSections = HomeSectionPreference.normalized(homeSections)
+        self.artistSortOption = artistSortOption
+        self.isArtistSortReversed = isArtistSortReversed
+        self.albumSortOption = albumSortOption
+        self.isAlbumSortReversed = isAlbumSortReversed
+        self.playlistSortOption = playlistSortOption
+        self.isPlaylistSortReversed = isPlaylistSortReversed
+        self.trackSortOption = trackSortOption
+        self.isTrackSortReversed = isTrackSortReversed
         self.libraryScanMethod = libraryScanMethod
         self.folderHierarchyLayout = folderHierarchyLayout
         self.autoPlayNext = autoPlayNext
@@ -434,6 +575,11 @@ public struct AppSettings: Codable, Sendable {
         self.cacheInAdvanceEnabled = cacheInAdvanceEnabled
         self.cacheInAdvanceCount = min(max(cacheInAdvanceCount, 0), 25)
         self.removedJellyfinItemIDs = removedJellyfinItemIDs
+        self.albumMergeGroups = albumMergeGroups
+        self.dismissedAlbumMergeKeys = dismissedAlbumMergeKeys
+        self.albumMergeMode = albumMergeMode
+        self.hideServerAlbumDuplicates = hideServerAlbumDuplicates
+        self.hideServerDuplicateExemptAlbumIDs = hideServerDuplicateExemptAlbumIDs
     }
 
     // MARK: - Custom Codable to seamlessly decode older settings JSON
@@ -446,6 +592,18 @@ public struct AppSettings: Codable, Sendable {
         case defaultLibraryCategory
         // Player background style option
         case playerBackgroundStyle
+        // Album page background style option (iOS)
+        case albumPageBackgroundStyle
+        // Home page sections order + enabled (iOS)
+        case homeSections
+        case artistSortOption
+        case isArtistSortReversed
+        case albumSortOption
+        case isAlbumSortReversed
+        case playlistSortOption
+        case isPlaylistSortReversed
+        case trackSortOption
+        case isTrackSortReversed
         // Library scan method option
         case libraryScanMethod
         // Folder hierarchy layout option (FOLDER mode)
@@ -511,6 +669,11 @@ public struct AppSettings: Codable, Sendable {
         case cacheInAdvanceEnabled
         case cacheInAdvanceCount
         case removedJellyfinItemIDs
+        case albumMergeGroups
+        case dismissedAlbumMergeKeys
+        case albumMergeMode
+        case hideServerAlbumDuplicates
+        case hideServerDuplicateExemptAlbumIDs
     }
 
     // Initialize with configured properties
@@ -536,6 +699,18 @@ public struct AppSettings: Codable, Sendable {
         // All other settings use safe decodeIfPresent with sensible defaults so missing keys don't throw.
         self.defaultLibraryCategory = (try? container.decodeIfPresent(LibraryCategory.self, forKey: .defaultLibraryCategory)) ?? .artists
         self.playerBackgroundStyle = (try? container.decodeIfPresent(PlayerBackgroundStyle.self, forKey: .playerBackgroundStyle)) ?? .albumColor
+        self.albumPageBackgroundStyle = (try? container.decodeIfPresent(PlayerBackgroundStyle.self, forKey: .albumPageBackgroundStyle)) ?? .solid
+        self.homeSections = HomeSectionPreference.normalized(
+            try? container.decodeIfPresent([HomeSectionPreference].self, forKey: .homeSections)
+        )
+        self.artistSortOption = (try? container.decodeIfPresent(ArtistSortOption.self, forKey: .artistSortOption)) ?? .name
+        self.isArtistSortReversed = (try? container.decodeIfPresent(Bool.self, forKey: .isArtistSortReversed)) ?? false
+        self.albumSortOption = (try? container.decodeIfPresent(AlbumSortOption.self, forKey: .albumSortOption)) ?? .title
+        self.isAlbumSortReversed = (try? container.decodeIfPresent(Bool.self, forKey: .isAlbumSortReversed)) ?? false
+        self.playlistSortOption = (try? container.decodeIfPresent(PlaylistSortOption.self, forKey: .playlistSortOption)) ?? .name
+        self.isPlaylistSortReversed = (try? container.decodeIfPresent(Bool.self, forKey: .isPlaylistSortReversed)) ?? false
+        self.trackSortOption = (try? container.decodeIfPresent(TrackSortOption.self, forKey: .trackSortOption)) ?? .title
+        self.isTrackSortReversed = (try? container.decodeIfPresent(Bool.self, forKey: .isTrackSortReversed)) ?? false
         self.libraryScanMethod = (try? container.decodeIfPresent(LibraryScanMethod.self, forKey: .libraryScanMethod)) ?? .id3Tags
         self.folderHierarchyLayout = (try? container.decodeIfPresent(FolderHierarchyLayout.self, forKey: .folderHierarchyLayout)) ?? .auto
         self.autoPlayNext = true
@@ -590,6 +765,11 @@ public struct AppSettings: Codable, Sendable {
         self.cacheInAdvanceEnabled = (try? container.decodeIfPresent(Bool.self, forKey: .cacheInAdvanceEnabled)) ?? false
         self.cacheInAdvanceCount = min(max((try? container.decodeIfPresent(Int.self, forKey: .cacheInAdvanceCount)) ?? 3, 0), 25)
         self.removedJellyfinItemIDs = (try? container.decodeIfPresent(Set<String>.self, forKey: .removedJellyfinItemIDs)) ?? []
+        self.albumMergeGroups = (try? container.decodeIfPresent([AlbumMergeGroup].self, forKey: .albumMergeGroups)) ?? []
+        self.dismissedAlbumMergeKeys = (try? container.decodeIfPresent(Set<String>.self, forKey: .dismissedAlbumMergeKeys)) ?? []
+        self.albumMergeMode = (try? container.decodeIfPresent(AlbumMergeMode.self, forKey: .albumMergeMode)) ?? .manually
+        self.hideServerAlbumDuplicates = (try? container.decodeIfPresent(Bool.self, forKey: .hideServerAlbumDuplicates)) ?? false
+        self.hideServerDuplicateExemptAlbumIDs = (try? container.decodeIfPresent(Set<String>.self, forKey: .hideServerDuplicateExemptAlbumIDs)) ?? []
     }
 
     // Encode
@@ -599,6 +779,16 @@ public struct AppSettings: Codable, Sendable {
         try container.encode(appTheme, forKey: .appTheme)
         try container.encode(defaultLibraryCategory, forKey: .defaultLibraryCategory)
         try container.encode(playerBackgroundStyle, forKey: .playerBackgroundStyle)
+        try container.encode(albumPageBackgroundStyle, forKey: .albumPageBackgroundStyle)
+        try container.encode(homeSections, forKey: .homeSections)
+        try container.encode(artistSortOption, forKey: .artistSortOption)
+        try container.encode(isArtistSortReversed, forKey: .isArtistSortReversed)
+        try container.encode(albumSortOption, forKey: .albumSortOption)
+        try container.encode(isAlbumSortReversed, forKey: .isAlbumSortReversed)
+        try container.encode(playlistSortOption, forKey: .playlistSortOption)
+        try container.encode(isPlaylistSortReversed, forKey: .isPlaylistSortReversed)
+        try container.encode(trackSortOption, forKey: .trackSortOption)
+        try container.encode(isTrackSortReversed, forKey: .isTrackSortReversed)
         try container.encode(libraryScanMethod, forKey: .libraryScanMethod)
         try container.encode(folderHierarchyLayout, forKey: .folderHierarchyLayout)
         try container.encode(autoPlayNext, forKey: .autoPlayNext)
@@ -638,6 +828,11 @@ public struct AppSettings: Codable, Sendable {
         try container.encode(cacheInAdvanceEnabled, forKey: .cacheInAdvanceEnabled)
         try container.encode(cacheInAdvanceCount, forKey: .cacheInAdvanceCount)
         try container.encode(removedJellyfinItemIDs, forKey: .removedJellyfinItemIDs)
+        try container.encode(albumMergeGroups, forKey: .albumMergeGroups)
+        try container.encode(dismissedAlbumMergeKeys, forKey: .dismissedAlbumMergeKeys)
+        try container.encode(albumMergeMode, forKey: .albumMergeMode)
+        try container.encode(hideServerAlbumDuplicates, forKey: .hideServerAlbumDuplicates)
+        try container.encode(hideServerDuplicateExemptAlbumIDs, forKey: .hideServerDuplicateExemptAlbumIDs)
     }
 }
 

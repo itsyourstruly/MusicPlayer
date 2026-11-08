@@ -413,7 +413,8 @@ public actor LibraryRepository {
                     verifiedGoodDiffs: [],
                     downloadedMetadataCache: PersistentDownloadedMetadataCache(),
                     scanMethod: settings.libraryScanMethod,
-            serverSourceOrder: settings.serverSources.map(\.id)
+            serverSourceOrder: settings.serverSources.map(\.id),
+                albumMergeGroups: settings.albumMergeGroups
                 )
                 let state = updateFullState(
                     tracks: res.tracks,
@@ -464,7 +465,8 @@ public actor LibraryRepository {
             verifiedGoodDiffs: verifiedGoodDiffs,
             downloadedMetadataCache: downloadedMetadataCache,
             scanMethod: settings.libraryScanMethod,
-            serverSourceOrder: settings.serverSources.map(\.id)
+            serverSourceOrder: settings.serverSources.map(\.id),
+        albumMergeGroups: settings.albumMergeGroups
         )
 
         return updateFullState(
@@ -491,7 +493,8 @@ public actor LibraryRepository {
             verifiedGoodDiffs: verifiedGoodDiffs,
             downloadedMetadataCache: downloadedMetadataCache,
             scanMethod: settings.libraryScanMethod,
-            serverSourceOrder: settings.serverSources.map(\.id)
+            serverSourceOrder: settings.serverSources.map(\.id),
+        albumMergeGroups: settings.albumMergeGroups
         )
         return updateFullState(
             tracks: res.tracks,
@@ -531,7 +534,8 @@ public actor LibraryRepository {
             verifiedGoodDiffs: verifiedGoodDiffs,
             downloadedMetadataCache: downloadedMetadataCache,
             scanMethod: settings.libraryScanMethod,
-            serverSourceOrder: settings.serverSources.map(\.id)
+            serverSourceOrder: settings.serverSources.map(\.id),
+        albumMergeGroups: settings.albumMergeGroups
         )
 
         return updateFullState(

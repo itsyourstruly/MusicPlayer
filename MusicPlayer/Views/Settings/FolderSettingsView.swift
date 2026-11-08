@@ -23,6 +23,7 @@ public struct FolderSettingsView: View {
     @State private var showingClearArtworkAlert: Bool = false
     @State private var showingClearDownloadsAlert: Bool = false
     @State private var showingClearEverythingAlert: Bool = false
+    @State private var showingClearMergesAlert: Bool = false
     @State private var showingCloudWarningAlert: Bool = false
     @State private var cloudWarningMessage: String = ""
     @State private var artworkCacheSizeBytes: Int64 = 0
@@ -39,6 +40,131 @@ public struct FolderSettingsView: View {
     }
 
     public var body: some View {
+        sourcesScrollContent
+            .background(appTheme.backgroundColor.ignoresSafeArea())
+            .navigationTitle("SOURCES")
+            .navigationBarTitleDisplayMode(.inline)
+            .fileImporter(
+                isPresented: $showingFolderPicker,
+                allowedContentTypes: [.folder],
+                allowsMultipleSelection: false
+            ) { result in
+                switch result {
+                case .success(let urls):
+                    if let selectedURL = urls.first {
+                        _ = selectedURL.startAccessingSecurityScopedResource()
+                        if let folder = folderToChange {
+                            Task {
+                                await libraryStore.changeFolder(id: folder.id, newURL: selectedURL)
+                                selectedURL.stopAccessingSecurityScopedResource()
+                            }
+                        } else {
+                            Task {
+                                await libraryStore.addAndScanFolder(url: selectedURL)
+                                selectedURL.stopAccessingSecurityScopedResource()
+                            }
+                        }
+                    }
+                    folderToChange = nil
+                case .failure(let error):
+                    folderToChange = nil
+                    AppLogger.library.error("Folder selection failed: \(error.localizedDescription)")
+                }
+            }
+            .alert("UNLINK DIRECTORY?", isPresented: $showingUnlinkAlert) {
+                Button("CANCEL", role: .cancel) {
+                    folderToUnlink = nil
+                }
+                Button("UNLINK", role: .destructive) {
+                    if let folder = folderToUnlink {
+                        libraryStore.unlinkFolder(id: folder.id)
+                        folderToUnlink = nil
+                    } else {
+                        libraryStore.unlinkDirectory()
+                    }
+                }
+            } message: {
+                Text("THIS WILL REMOVE INDEXED TRACKS AND PLAYLISTS FROM THE APP. YOUR AUDIO FILES ON DISK WILL NOT BE MODIFIED OR DELETED.")
+            }
+            .modifier(FolderSettingsStorageClearAlerts(
+                libraryStore: libraryStore,
+                showingClearMetadataAlert: $showingClearMetadataAlert,
+                showingClearArtworkAlert: $showingClearArtworkAlert,
+                showingClearDownloadsAlert: $showingClearDownloadsAlert,
+                showingClearMergesAlert: $showingClearMergesAlert,
+                showingClearEverythingAlert: $showingClearEverythingAlert,
+                refreshArtworkCacheSize: { await refreshArtworkCacheSize() },
+                onClearedMerges: { reconcileStorageClearTargetSelection() }
+            ))
+            .alert("ICLOUD STORAGE DETECTED", isPresented: $showingCloudWarningAlert) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(cloudWarningMessage)
+            }
+            .sheet(isPresented: $showingAddSourceSheet, onDismiss: {
+                if pendingOpenFolderPicker {
+                    pendingOpenFolderPicker = false
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                        folderToChange = nil
+                        showingFolderPicker = true
+                    }
+                }
+            }) {
+                AddLibrarySourceSheet(
+                    onSelectLocalFolder: {
+                        pendingOpenFolderPicker = true
+                    },
+                    onServerConnected: { serverLink in
+                        handleServerConnected(serverLink)
+                    }
+                )
+                .environment(\.appTheme, appTheme)
+            }
+            .alert("REMOVE SERVER?", isPresented: $showingUnlinkServerAlert) {
+                Button("CANCEL", role: .cancel) {
+                    serverToUnlink = nil
+                }
+                Button("REMOVE", role: .destructive) {
+                    if let server = serverToUnlink {
+                        removeServer(server)
+                        serverToUnlink = nil
+                    }
+                }
+            } message: {
+                Text("THIS WILL REMOVE THIS SERVER'S TRACKS, DOWNLOADS AND ARTWORK FROM YOUR LIBRARY.")
+            }
+            .sheet(isPresented: $showingTagFinderSheet) {
+                TrackTagFinderSheetView(libraryStore: libraryStore)
+                    .tint(appTheme.accentColor)
+                    .environment(\.appTheme, appTheme)
+            }
+            .sheet(item: $activeDetail) { detail in
+                SettingOptionDetailSheet(detail: detail)
+                    .environment(\.appTheme, libraryStore.settings.appTheme)
+            }
+            .sheet(item: $folderForPlaylistFinder) { folder in
+                FolderPlaylistFinderSheet(libraryStore: libraryStore, folder: folder)
+                    .tint(appTheme.accentColor)
+                    .environment(\.appTheme, appTheme)
+            }
+            .task {
+                if artworkCacheSizeBytes == 0 {
+                    await refreshArtworkCacheSize()
+                }
+            }
+            .task {
+                // Lists items hidden before the HIDDEN list existed (tags read off the main thread, once per session)
+                libraryStore.resolveLegacyHiddenTracksIfNeeded()
+            }
+            .onChange(of: libraryStore.hiddenItems.isEmpty) { _, isEmpty in
+                if isEmpty { isHiddenExpanded = false }
+            }
+            .onChange(of: availableStorageClearTargets.map(\.rawValue).joined(separator: "|")) { _, _ in
+                reconcileStorageClearTargetSelection()
+            }
+    }
+
+    private var sourcesScrollContent: some View {
         ScrollView(.vertical, showsIndicators: false) {
             VStack(alignment: .leading, spacing: 20) {
                 // MARK: - 1. Linked To Folder Header with Gear Menu & Transient Scan Status
@@ -88,152 +214,6 @@ public struct FolderSettingsView: View {
             .padding(.horizontal, 20)
             .padding(.vertical, 20)
             .padding(.bottom, 60)
-        }
-        .background(appTheme.backgroundColor.ignoresSafeArea())
-        .navigationTitle("SOURCES")
-        .navigationBarTitleDisplayMode(.inline)
-        .fileImporter(
-            isPresented: $showingFolderPicker,
-            allowedContentTypes: [.folder],
-            allowsMultipleSelection: false
-        ) { result in
-            switch result {
-            case .success(let urls):
-                if let selectedURL = urls.first {
-                    _ = selectedURL.startAccessingSecurityScopedResource()
-                    if let folder = folderToChange {
-                        Task {
-                            await libraryStore.changeFolder(id: folder.id, newURL: selectedURL)
-                            selectedURL.stopAccessingSecurityScopedResource()
-                        }
-                    } else {
-                        Task {
-                            await libraryStore.addAndScanFolder(url: selectedURL)
-                            selectedURL.stopAccessingSecurityScopedResource()
-                        }
-                    }
-                }
-                folderToChange = nil
-            case .failure(let error):
-                folderToChange = nil
-                AppLogger.library.error("Folder selection failed: \(error.localizedDescription)")
-            }
-        }
-        .alert("UNLINK DIRECTORY?", isPresented: $showingUnlinkAlert) {
-            Button("CANCEL", role: .cancel) {
-                folderToUnlink = nil
-            }
-            Button("UNLINK", role: .destructive) {
-                if let folder = folderToUnlink {
-                    libraryStore.unlinkFolder(id: folder.id)
-                    folderToUnlink = nil
-                } else {
-                    libraryStore.unlinkDirectory()
-                }
-            }
-        } message: {
-            Text("THIS WILL REMOVE INDEXED TRACKS AND PLAYLISTS FROM THE APP. YOUR AUDIO FILES ON DISK WILL NOT BE MODIFIED OR DELETED.")
-        }
-        .alert("CLEAR METADATA CACHE?", isPresented: $showingClearMetadataAlert) {
-            Button("CANCEL", role: .cancel) {}
-            Button("CLEAR", role: .destructive) {
-                libraryStore.clearDownloadedMetadataCache()
-            }
-        } message: {
-            Text("THIS WILL REMOVE ALL LOCALLY CACHED ONLINE METADATA MATCHES AND RESET ENRICHMENT QUEUES.")
-        }
-        .alert("CLEAR ARTWORK CACHE?", isPresented: $showingClearArtworkAlert) {
-            Button("CANCEL", role: .cancel) {}
-            Button("CLEAR", role: .destructive) {
-                libraryStore.clearArtworkCache()
-                Task {
-                    await refreshArtworkCacheSize()
-                }
-            }
-        } message: {
-            Text("THIS WILL REMOVE ALL CACHED COVER ARTWORKS FROM DISK. ARTWORKS WILL BE RE-EXTRACTED AS NEEDED.")
-        }
-        .alert("CLEAR ALL DOWNLOADS?", isPresented: $showingClearDownloadsAlert) {
-            Button("CANCEL", role: .cancel) {}
-            Button("CLEAR", role: .destructive) {
-                JellyfinDownloadManager.shared.deleteAllDownloads()
-            }
-        } message: {
-            Text("THIS WILL REMOVE ALL DOWNLOADED SERVER TRACKS FROM DEVICE STORAGE. TRACKS WILL REMAIN IN YOUR LIBRARY AND CAN STILL BE STREAMED.")
-        }
-        .alert("CLEAR EVERYTHING?", isPresented: $showingClearEverythingAlert) {
-            Button("CANCEL", role: .cancel) {}
-            Button("CLEAR EVERYTHING", role: .destructive) {
-                libraryStore.clearEverything()
-                Task {
-                    await refreshArtworkCacheSize()
-                }
-            }
-        } message: {
-            Text("THIS WILL PERMANENTLY REMOVE ALL SOURCES, TRACKS, ALBUMS, PLAYLISTS, ARTWORKS, AND ALL DATA SAVED IN THE APP. THIS ACTION CANNOT BE UNDONE.")
-        }
-        .alert("ICLOUD STORAGE DETECTED", isPresented: $showingCloudWarningAlert) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text(cloudWarningMessage)
-        }
-        .sheet(isPresented: $showingAddSourceSheet, onDismiss: {
-            if pendingOpenFolderPicker {
-                pendingOpenFolderPicker = false
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
-                    folderToChange = nil
-                    showingFolderPicker = true
-                }
-            }
-        }) {
-            AddLibrarySourceSheet(
-                onSelectLocalFolder: {
-                    pendingOpenFolderPicker = true
-                },
-                onServerConnected: { serverLink in
-                    handleServerConnected(serverLink)
-                }
-            )
-            .environment(\.appTheme, appTheme)
-        }
-        .alert("REMOVE SERVER?", isPresented: $showingUnlinkServerAlert) {
-            Button("CANCEL", role: .cancel) {
-                serverToUnlink = nil
-            }
-            Button("REMOVE", role: .destructive) {
-                if let server = serverToUnlink {
-                    removeServer(server)
-                    serverToUnlink = nil
-                }
-            }
-        } message: {
-            Text("THIS WILL REMOVE THIS SERVER'S TRACKS, DOWNLOADS AND ARTWORK FROM YOUR LIBRARY.")
-        }
-        .sheet(isPresented: $showingTagFinderSheet) {
-            TrackTagFinderSheetView(libraryStore: libraryStore)
-                .tint(appTheme.accentColor)
-                .environment(\.appTheme, appTheme)
-        }
-        .sheet(item: $activeDetail) { detail in
-            SettingOptionDetailSheet(detail: detail)
-                .environment(\.appTheme, libraryStore.settings.appTheme)
-        }
-        .sheet(item: $folderForPlaylistFinder) { folder in
-            FolderPlaylistFinderSheet(libraryStore: libraryStore, folder: folder)
-                .tint(appTheme.accentColor)
-                .environment(\.appTheme, appTheme)
-        }
-        .task {
-            if artworkCacheSizeBytes == 0 {
-                await refreshArtworkCacheSize()
-            }
-        }
-        .task {
-            // Lists items hidden before the HIDDEN list existed (tags read off the main thread, once per session)
-            libraryStore.resolveLegacyHiddenTracksIfNeeded()
-        }
-        .onChange(of: libraryStore.hiddenItems.isEmpty) { _, isEmpty in
-            if isEmpty { isHiddenExpanded = false }
         }
     }
 
@@ -562,6 +542,16 @@ public struct FolderSettingsView: View {
                 ),
                 onLongPress: { activeDetail = SettingOptionCatalog.downloadOverCellular }
             )
+            TypographicToggleRow(
+                title: "HIDE DUPLICATES",
+                isOn: Binding(
+                    get: { libraryStore.settings.hideServerAlbumDuplicates },
+                    set: { newValue in
+                        libraryStore.setHideServerAlbumDuplicates(newValue)
+                    }
+                )
+            )
+            albumMergeModeSection
         }
     }
 
@@ -764,12 +754,45 @@ public struct FolderSettingsView: View {
     }
 
     // MARK: - 6. Cache Management (CLEAR METADATA CACHE & CLEAR ARTWORK CACHE)
-    private enum StorageClearTarget: String, CaseIterable, Identifiable {
+    private enum StorageClearTarget: String, CaseIterable, Identifiable, Hashable {
         case metadata = "LOCAL TRACKS METADATA CACHE"
         case artwork = "ARTWORK CACHE"
         case jellyfinOffline = "SERVER OFFLINE STORAGE"
+        case merges = "MERGES"
         case everything = "EVERYTHING"
         var id: String { rawValue }
+    }
+
+    private func storageClearTargetHasContent(_ target: StorageClearTarget) -> Bool {
+        switch target {
+        case .metadata:
+            return libraryStore.downloadedMetadataCache.totalRecordsCount > 0
+        case .artwork:
+            return artworkCacheSizeBytes > 0
+        case .jellyfinOffline:
+            return !JellyfinDownloadManager.shared.downloadRecords.isEmpty
+        case .merges:
+            return !libraryStore.settings.albumMergeGroups.isEmpty
+        case .everything:
+            return StorageClearTarget.allCases.contains {
+                $0 != .everything && storageClearTargetHasContent($0)
+            }
+        }
+    }
+
+    private var availableStorageClearTargets: [StorageClearTarget] {
+        StorageClearTarget.allCases.filter(storageClearTargetHasContent)
+    }
+
+    private func reconcileStorageClearTargetSelection() {
+        let available = availableStorageClearTargets
+        if available.isEmpty {
+            storageTarget = .metadata
+            return
+        }
+        if !available.contains(storageTarget) {
+            storageTarget = available[0]
+        }
     }
 
     private var storageTargetDetail: String {
@@ -780,14 +803,53 @@ public struct FolderSettingsView: View {
             return ByteFormatting.formatFileSize(bytes: artworkCacheSizeBytes).uppercased()
         case .jellyfinOffline:
             return "\(JellyfinDownloadManager.shared.downloadRecords.count) TRACKS • \(JellyfinDownloadManager.shared.formattedTotalSize.uppercased())"
+        case .merges:
+            let groups = libraryStore.settings.albumMergeGroups
+            let original = Set(groups.flatMap(\.memberIDs)).count
+            let merged = groups.count
+            return "\(original) ALBUMS MERGED INTO \(merged)"
         case .everything:
             let sourceCount = libraryStore.settings.linkedFolders.count + libraryStore.settings.serverSources.count
             return "\(sourceCount) SOURCES • \(libraryStore.tracks.count) TRACKS • \(libraryStore.albums.count) ALBUMS"
         }
     }
 
+    private var albumMergeModeSection: some View {
+        HStack(alignment: .center, spacing: 8) {
+            Text("MERGE ALBUMS")
+                .font(.system(size: 13, weight: .bold, design: .monospaced))
+                .foregroundStyle(Color.primary)
+
+            Spacer(minLength: 8)
+
+            Picker(selection: Binding(
+                get: { libraryStore.settings.albumMergeMode },
+                set: { newValue in
+                    libraryStore.settings.albumMergeMode = newValue
+                    libraryStore.saveSettings()
+                    HapticFeedback.selectionChanged()
+                }
+            )) {
+                ForEach(AlbumMergeMode.allCases) { mode in
+                    Text(mode.rawValue)
+                        .lineLimit(1)
+                        .tag(mode)
+                }
+            } label: {
+                Text("MERGE ALBUMS")
+            }
+            .pickerStyle(.menu)
+            .labelsHidden()
+            .font(.system(size: 13, weight: .bold, design: .monospaced))
+            .lineLimit(1)
+            .tint(appTheme.accentColor)
+        }
+        .padding(.vertical, 4)
+    }
+
     private var cacheManagementSection: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        let available = availableStorageClearTargets
+        return VStack(alignment: .leading, spacing: 14) {
             Text("APP STORAGE MANAGEMENT")
                 .font(.system(size: 11, weight: .bold, design: .monospaced))
                 .foregroundStyle(.secondary)
@@ -796,58 +858,65 @@ public struct FolderSettingsView: View {
                     activeDetail = SettingOptionCatalog.storageManagementSection
                 }
 
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text("CLEAR")
-                    .font(.system(size: 13, weight: .bold, design: .monospaced))
-                    .foregroundStyle(Color.white)
-
-                Menu {
-                    ForEach(StorageClearTarget.allCases) { target in
-                        Button {
-                            HapticFeedback.selectionChanged()
-                            storageTarget = target
-                        } label: {
-                            if storageTarget == target {
-                                Label(target.rawValue, systemImage: "checkmark")
-                            } else {
-                                Text(target.rawValue)
-                            }
-                        }
-                    }
-                } label: {
-                    Text(storageTarget.rawValue)
-                        .font(.system(size: 13, weight: .bold, design: .monospaced))
-                        .foregroundStyle(Color.white)
-                        .multilineTextAlignment(.leading)
-                }
-
-                Spacer(minLength: 0)
-            }
-
-            HStack(alignment: .firstTextBaseline) {
-                Text(storageTargetDetail)
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundStyle(.secondary)
-
-                Spacer()
-
-                Button(role: .destructive) {
-                    HapticFeedback.notificationWarning()
-                    switch storageTarget {
-                    case .metadata: showingClearMetadataAlert = true
-                    case .artwork: showingClearArtworkAlert = true
-                    case .jellyfinOffline: showingClearDownloadsAlert = true
-                    case .everything: showingClearEverythingAlert = true
-                    }
-                } label: {
+            if available.isEmpty {
+                EmptyView()
+            } else {
+                HStack(alignment: .center, spacing: 8) {
                     Text("CLEAR")
                         .font(.system(size: 13, weight: .bold, design: .monospaced))
-                        .foregroundStyle(Color.red)
+                        .foregroundStyle(Color.primary)
+
+                    Spacer(minLength: 8)
+
+                    // Same native menu-picker control as Appearance settings (shows up/down chevrons).
+                    Picker(selection: $storageTarget) {
+                        ForEach(available) { target in
+                            Text(target.rawValue)
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.75)
+                                .tag(target)
+                        }
+                    } label: {
+                        Text("CLEAR")
+                    }
+                    .pickerStyle(.menu)
+                    .labelsHidden()
+                    .font(.system(size: 13, weight: .bold, design: .monospaced))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+                    .tint(appTheme.accentColor)
+                    .onChange(of: storageTarget) { _, _ in
+                        HapticFeedback.selectionChanged()
+                    }
                 }
-                .buttonStyle(.plain)
+
+                HStack(alignment: .firstTextBaseline) {
+                    Text(storageTargetDetail)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(.secondary)
+
+                    Spacer()
+
+                    Button(role: .destructive) {
+                        HapticFeedback.notificationWarning()
+                        switch storageTarget {
+                        case .metadata: showingClearMetadataAlert = true
+                        case .artwork: showingClearArtworkAlert = true
+                        case .jellyfinOffline: showingClearDownloadsAlert = true
+                        case .merges: showingClearMergesAlert = true
+                        case .everything: showingClearEverythingAlert = true
+                        }
+                    } label: {
+                        Text("CLEAR")
+                            .font(.system(size: 13, weight: .bold, design: .monospaced))
+                            .foregroundStyle(Color.red)
+                    }
+                    .buttonStyle(.plain)
+                }
             }
         }
         .padding(.vertical, 4)
+        .onAppear { reconcileStorageClearTargetSelection() }
     }
 
     // MARK: - 7. Hidden Items Section
@@ -873,12 +942,33 @@ public struct FolderSettingsView: View {
             .buttonStyle(.plain)
 
             if isHiddenExpanded {
-                LazyVStack(spacing: 2) {
-                    ForEach(libraryStore.hiddenItems) { item in
-                        HiddenItemRow(item: item) {
-                            HapticFeedback.notificationSuccess()
-                            withAnimation(.spring(response: 0.28, dampingFraction: 0.8)) {
-                                libraryStore.returnHiddenItem(item)
+                let manual = libraryStore.hiddenItems.filter { $0.kind != .autoDuplicate }
+                let automatic = libraryStore.hiddenItems.filter { $0.kind == .autoDuplicate }
+                LazyVStack(alignment: .leading, spacing: 10) {
+                    if !manual.isEmpty {
+                        Text("MANUALLY HIDDEN")
+                            .font(.system(size: 11, weight: .bold, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                        ForEach(manual) { item in
+                            HiddenItemRow(item: item) {
+                                HapticFeedback.notificationSuccess()
+                                withAnimation(.spring(response: 0.28, dampingFraction: 0.8)) {
+                                    libraryStore.returnHiddenItem(item)
+                                }
+                            }
+                        }
+                    }
+                    if !automatic.isEmpty {
+                        Text("AUTOMATICALLY HIDDEN")
+                            .font(.system(size: 11, weight: .bold, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                            .padding(.top, manual.isEmpty ? 0 : 6)
+                        ForEach(automatic) { item in
+                            HiddenItemRow(item: item) {
+                                HapticFeedback.notificationSuccess()
+                                withAnimation(.spring(response: 0.28, dampingFraction: 0.8)) {
+                                    libraryStore.returnHiddenItem(item)
+                                }
                             }
                         }
                     }
@@ -906,7 +996,7 @@ private struct HiddenItemRow: View {
     @Environment(\.appTheme) private var appTheme
 
     private var subtitle: String {
-        if item.kind == .album {
+        if item.kind == .album || item.kind == .autoDuplicate {
             let count = item.records.count
             return "\(item.subtitle) • \(count) \(count == 1 ? "TRACK" : "TRACKS")"
         }
@@ -917,7 +1007,7 @@ private struct HiddenItemRow: View {
         HStack(spacing: 12) {
             AlbumArtworkView(
                 artworkKey: item.artworkKey,
-                title: item.kind == .album ? item.title : (item.records.first?.track.album ?? item.title),
+                title: (item.kind == .album || item.kind == .autoDuplicate) ? item.title : (item.records.first?.track.album ?? item.title),
                 subtitle: item.subtitle,
                 cornerRadius: 6
             )
@@ -947,5 +1037,66 @@ private struct HiddenItemRow: View {
         .padding(.horizontal, 8)
         .background(appTheme.backgroundColor)
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+}
+
+
+// MARK: - Storage clear alerts (split out so Sources body type-checks)
+
+private struct FolderSettingsStorageClearAlerts: ViewModifier {
+    @Bindable var libraryStore: LibraryStore
+    @Binding var showingClearMetadataAlert: Bool
+    @Binding var showingClearArtworkAlert: Bool
+    @Binding var showingClearDownloadsAlert: Bool
+    @Binding var showingClearMergesAlert: Bool
+    @Binding var showingClearEverythingAlert: Bool
+    let refreshArtworkCacheSize: () async -> Void
+    let onClearedMerges: () -> Void
+
+    func body(content: Content) -> some View {
+        content
+            .alert("CLEAR METADATA CACHE?", isPresented: $showingClearMetadataAlert) {
+                Button("CANCEL", role: .cancel) {}
+                Button("CLEAR", role: .destructive) {
+                    libraryStore.clearDownloadedMetadataCache()
+                }
+            } message: {
+                Text("THIS WILL REMOVE ALL LOCALLY CACHED ONLINE METADATA MATCHES AND RESET ENRICHMENT QUEUES.")
+            }
+            .alert("CLEAR ARTWORK CACHE?", isPresented: $showingClearArtworkAlert) {
+                Button("CANCEL", role: .cancel) {}
+                Button("CLEAR", role: .destructive) {
+                    libraryStore.clearArtworkCache()
+                    Task { await refreshArtworkCacheSize() }
+                }
+            } message: {
+                Text("THIS WILL REMOVE ALL CACHED COVER ARTWORKS FROM DISK. ARTWORKS WILL BE RE-EXTRACTED AS NEEDED.")
+            }
+            .alert("CLEAR ALL DOWNLOADS?", isPresented: $showingClearDownloadsAlert) {
+                Button("CANCEL", role: .cancel) {}
+                Button("CLEAR", role: .destructive) {
+                    JellyfinDownloadManager.shared.deleteAllDownloads()
+                }
+            } message: {
+                Text("THIS WILL REMOVE ALL DOWNLOADED SERVER TRACKS FROM DEVICE STORAGE. TRACKS WILL REMAIN IN YOUR LIBRARY AND CAN STILL BE STREAMED.")
+            }
+            .alert("CLEAR MERGES?", isPresented: $showingClearMergesAlert) {
+                Button("CANCEL", role: .cancel) {}
+                Button("CLEAR", role: .destructive) {
+                    libraryStore.clearAllAlbumMerges()
+                    onClearedMerges()
+                }
+            } message: {
+                Text("THIS WILL UNMERGE ALL MANUALLY MERGED ALBUMS AND SHOW MERGE SUGGESTIONS AGAIN WHERE CANDIDATES EXIST.")
+            }
+            .alert("CLEAR EVERYTHING?", isPresented: $showingClearEverythingAlert) {
+                Button("CANCEL", role: .cancel) {}
+                Button("CLEAR EVERYTHING", role: .destructive) {
+                    libraryStore.clearEverything()
+                    Task { await refreshArtworkCacheSize() }
+                }
+            } message: {
+                Text("THIS WILL PERMANENTLY REMOVE ALL SOURCES, TRACKS, ALBUMS, PLAYLISTS, ARTWORKS, AND ALL DATA SAVED IN THE APP. THIS ACTION CANNOT BE UNDONE.")
+            }
     }
 }

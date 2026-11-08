@@ -852,7 +852,7 @@ public struct FullScreenPlayerView: View {
                             Button(action: {
                                 guard canTriggerButtonPress else { return }
                                 HapticFeedback.lightImpact()
-                                if let albumObj = libraryStore.findAlbum(title: track.album, artist: track.artist) {
+                                if let albumObj = libraryStore.findAlbum(for: track) {
                                     selectedAlbumForNavigation = albumObj
                                 }
                             }) {
@@ -988,7 +988,7 @@ public struct FullScreenPlayerView: View {
 
     private func playAlbumNext(for track: Track) {
         let albumTracks: [Track]
-        if let albumObj = libraryStore.findAlbum(title: track.album, artist: track.artist), !albumObj.tracks.isEmpty {
+        if let albumObj = libraryStore.findAlbum(for: track), !albumObj.tracks.isEmpty {
             albumTracks = albumObj.tracks
         } else {
             let matched = libraryStore.tracks.filter {

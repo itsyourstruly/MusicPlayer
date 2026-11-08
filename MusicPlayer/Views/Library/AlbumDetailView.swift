@@ -23,7 +23,19 @@ public struct AlbumDetailView: View {
     @State private var selectedTrackForInfo: Track? = nil
     @State private var selectedTrackForPlaylist: Track? = nil
     @State private var showingAlbumMetadataSheet: Bool = false
+    @State private var showingAlbumMergeSheet: Bool = false
+    @State private var mergeCandidateAlbums: [Album] = []
+    @State private var showMergePill: Bool = false
+    @State private var showMergedToastPill: Bool = false
+    @State private var lastAutoMergedAlbums: [Album] = []
+    @State private var mergedToastHideTask: Task<Void, Never>? = nil
     @State private var serverDescription: ServerDescription? = nil
+    #if os(iOS)
+    @State private var palette: ArtworkColorExtractor.ColorPalette = ArtworkColorExtractor.ColorPalette(
+        primaryColor: Color.appSecondaryBackground,
+        isDark: true
+    )
+    #endif
     @Environment(\.appTheme) private var appTheme
     @Environment(LibrarySelectionStore.self) private var librarySelection: LibrarySelectionStore?
 
@@ -38,9 +50,30 @@ public struct AlbumDetailView: View {
         self.playerService = playerService
     }
 
+    /// iPhone album pages: number instead of art, clear row fill. Mac and other screens keep defaults.
+    private var albumTrackRowShowsArtwork: Bool {
+        #if os(iOS)
+        false
+        #else
+        true
+        #endif
+    }
+
+    private var albumTrackRowUsesClearBackground: Bool {
+        #if os(iOS)
+        true
+        #else
+        false
+        #endif
+    }
+
     private var currentAlbum: Album {
         if let direct = libraryStore.album(forID: album.id) {
             return direct
+        }
+        // Prefer punctuation-preserving identity (keeps "?") over FuzzyMatcher-normalized fallback.
+        if let identityMatch = libraryStore.preferredAlbum(forIdentityKey: album.identityKey) {
+            return libraryStore.album(forID: identityMatch.id) ?? identityMatch
         }
         if let normMatch = libraryStore.album(normalizedArtist: album.normalizedArtist, normalizedTitle: album.normalizedTitle) {
             return libraryStore.album(forID: normMatch.id) ?? normMatch
@@ -221,6 +254,32 @@ public struct AlbumDetailView: View {
                             }) {
                                 Text(libraryStore.isAlbumPinned(activeAlbum) ? "UNPIN ALBUM" : "PIN ALBUM")
                             }
+
+                            #if os(iOS)
+                            if libraryStore.settings.albumMergeMode == .manually,
+                               !mergeCandidateAlbums.isEmpty,
+                               !showMergePill {
+                                Divider()
+                                Button(action: {
+                                    HapticFeedback.lightImpact()
+                                    showingAlbumMergeSheet = true
+                                }) {
+                                    Text("MERGE")
+                                }
+                            }
+                            #endif
+                            if libraryStore.hasUndoableAlbumMerge(activeAlbum) {
+                                Divider()
+                                Button(role: .destructive, action: {
+                                    HapticFeedback.lightImpact()
+                                    libraryStore.undoAlbumMerge(for: activeAlbum)
+                                    #if os(iOS)
+                                    refreshMergeSuggestion(for: currentAlbum)
+                                    #endif
+                                }) {
+                                    Text("UNDO MERGE")
+                                }
+                            }
                         } label: {
                             Image(systemName: "music.note")
                                 .font(.system(size: 16, weight: .semibold))
@@ -262,6 +321,8 @@ public struct AlbumDetailView: View {
                                         isInPlayNext: playNextSet.contains(track.id),
                                         isTapToPlayNextEnabled: isTapToPlayNext,
                                         showAlbumSubtitle: false,
+                                        showsArtwork: albumTrackRowShowsArtwork,
+                                        usesClearBackground: albumTrackRowUsesClearBackground,
                                         onPlay: {
                                             playerService.play(track: track, inQueue: mainTracks, startIndex: index)
                                         },
@@ -314,13 +375,15 @@ public struct AlbumDetailView: View {
                                 ForEach(Array(altTracks.enumerated()), id: \.element.id) { index, track in
                                     TrackRowView(
                                         track: track,
-                                        indexNumber: nil,
+                                        indexNumber: index + 1,
                                         isCurrentTrack: track.id == currentTrackID,
                                         isPlaying: isCurrentPlaying && track.id == currentTrackID,
                                         isNextTrack: track.id == nextTrackID,
                                         isInPlayNext: playNextSet.contains(track.id),
                                         isTapToPlayNextEnabled: isTapToPlayNext,
                                         showAlbumSubtitle: false,
+                                        showsArtwork: albumTrackRowShowsArtwork,
+                                        usesClearBackground: albumTrackRowUsesClearBackground,
                                         onPlay: {
                                             playerService.play(track: track, inQueue: altTracks, startIndex: index)
                                         },
@@ -369,7 +432,29 @@ public struct AlbumDetailView: View {
             }
             #endif
         }
+        #if os(iOS)
+        .background {
+            PlayerBackgroundView(
+                style: libraryStore.settings.albumPageBackgroundStyle,
+                appTheme: libraryStore.settings.appTheme,
+                primaryColor: palette.primaryColor,
+                artworkKey: activeAlbum.artworkKey,
+                overlayOpacity: 0.50
+            )
+            .ignoresSafeArea()
+        }
+        .task(id: activeAlbum.artworkKey) {
+            let newPalette = await ArtworkColorExtractor.shared.extractPrimaryColor(
+                for: activeAlbum.artworkKey,
+                fallback: Color.appSecondaryBackground
+            )
+            withAnimation(.easeInOut(duration: 0.65)) {
+                self.palette = newPalette
+            }
+        }
+        #else
         .background(libraryStore.settings.appTheme.backgroundColor.ignoresSafeArea())
+        #endif
         .navigationTitle(activeAlbum.releaseTypeDisplayTitle)
         .navigationBarTitleDisplayMode(.inline)
         #if os(iOS)
@@ -432,11 +517,229 @@ public struct AlbumDetailView: View {
                 .tint(libraryStore.settings.appTheme.accentColor)
                 .environment(\.appTheme, libraryStore.settings.appTheme)
         }
+        #if os(iOS)
+        .sheet(isPresented: $showingAlbumMergeSheet) {
+            albumMergeSheet(for: activeAlbum)
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            if showMergePill || showMergedToastPill {
+                HStack {
+                    Spacer(minLength: 0)
+                    if showMergedToastPill {
+                        albumMergedToastPill
+                    } else {
+                        albumMergePill
+                    }
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, 20)
+                .padding(.bottom, playerService.currentTrack != nil ? 92 : 8)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
+        .task(id: activeAlbum.id) {
+            refreshMergeSuggestion(for: activeAlbum)
+            if libraryStore.settings.hideServerAlbumDuplicates {
+                libraryStore.hideVisibleServerDuplicateTracks(among: activeAlbum.tracks)
+            }
+        }
+        .onChange(of: libraryStore.settings.hideServerAlbumDuplicates) { _, enabled in
+            if enabled {
+                libraryStore.hideVisibleServerDuplicateTracks(among: currentAlbum.tracks)
+            }
+        }
+        .onChange(of: libraryStore.albums.count) { _, _ in
+            refreshMergeSuggestion(for: currentAlbum)
+        }
+        #endif
         .navigationDestination(item: $selectedArtistForNavigation) { artist in
             ArtistDetailView(artist: artist, libraryStore: libraryStore, playerService: playerService)
         }
         .enableInteractivePopGesture()
     }
+
+    #if os(iOS)
+    private func refreshMergeSuggestion(for active: Album) {
+        let candidates = libraryStore.mergeCandidates(for: active)
+        mergeCandidateAlbums = candidates
+        if libraryStore.settings.albumMergeMode == .automatically {
+            showMergePill = false
+            guard libraryStore.shouldAutoMergeAlbum(for: active), !candidates.isEmpty else { return }
+            lastAutoMergedAlbums = candidates
+            libraryStore.mergeAlbums(into: active, otherIDs: candidates.map(\.id))
+            mergeCandidateAlbums = []
+            presentMergedToastPill()
+            return
+        }
+        showMergedToastPill = false
+        showMergePill = libraryStore.shouldSuggestAlbumMerge(for: active)
+    }
+
+    private func presentMergedToastPill() {
+        mergedToastHideTask?.cancel()
+        withAnimation(.easeOut(duration: 0.2)) { showMergedToastPill = true }
+        mergedToastHideTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            guard !Task.isCancelled else { return }
+            withAnimation(.easeOut(duration: 0.2)) { showMergedToastPill = false }
+        }
+    }
+
+    private var albumMergePill: some View {
+        let theme = libraryStore.settings.appTheme
+        return HStack(spacing: 4) {
+            Button {
+                HapticFeedback.lightImpact()
+                showingAlbumMergeSheet = true
+            } label: {
+                Text("MERGE ALBUM?")
+                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+                    .foregroundStyle(theme.accentColor)
+                    .fixedSize(horizontal: true, vertical: false)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            Button {
+                HapticFeedback.lightImpact()
+                libraryStore.dismissAlbumMergeSuggestion(for: currentAlbum)
+                withAnimation(.easeOut(duration: 0.2)) {
+                    showMergePill = false
+                }
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(Color.secondary)
+                    .frame(width: 22, height: 22)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.leading, 10)
+        .padding(.trailing, 3)
+        .padding(.vertical, 5)
+        .background(
+            Capsule(style: .continuous)
+                .fill(theme.backgroundColor.opacity(0.96))
+        )
+        .shadow(color: Color.black.opacity(0.14), radius: 6, x: 0, y: 2)
+    }
+
+    private var albumMergedToastPill: some View {
+        let theme = libraryStore.settings.appTheme
+        return Button {
+            HapticFeedback.lightImpact()
+            // Keep mergeCandidateAlbums empty so the sheet shows lastAutoMergedAlbums as a post-merge review.
+            showingAlbumMergeSheet = true
+        } label: {
+            Text("MERGED")
+                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                .foregroundStyle(theme.accentColor)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 5)
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .background(
+            Capsule(style: .continuous)
+                .fill(theme.backgroundColor.opacity(0.96))
+        )
+        .shadow(color: Color.black.opacity(0.14), radius: 6, x: 0, y: 2)
+    }
+
+    @ViewBuilder
+    private func albumMergeSheet(for activeAlbum: Album) -> some View {
+        let theme = libraryStore.settings.appTheme
+        let sheetAlbums = mergeCandidateAlbums.isEmpty ? lastAutoMergedAlbums : mergeCandidateAlbums
+        let isPostMergeReview = mergeCandidateAlbums.isEmpty && !lastAutoMergedAlbums.isEmpty
+        VStack(spacing: 0) {
+            Text(isPostMergeReview ? "MERGED ALBUMS" : "MERGE ALBUM")
+                .font(.system(size: 13, weight: .bold, design: .monospaced))
+                .foregroundStyle(Color.primary)
+                .frame(maxWidth: .infinity)
+                .padding(.horizontal, 20)
+                .padding(.top, 22)
+                .padding(.bottom, 16)
+
+            ScrollView {
+                LazyVStack(spacing: 10) {
+                    ForEach(sheetAlbums) { candidate in
+                        Button {
+                            HapticFeedback.notificationSuccess()
+                            if !isPostMergeReview {
+                                libraryStore.mergeAlbums(into: currentAlbum, otherIDs: [candidate.id])
+                                withAnimation(.easeOut(duration: 0.2)) { showMergePill = false }
+                                refreshMergeSuggestion(for: currentAlbum)
+                            }
+                            showingAlbumMergeSheet = false
+                        } label: {
+                            HStack(spacing: 12) {
+                                AlbumArtworkView(
+                                    artworkKey: candidate.artworkKey,
+                                    title: candidate.title,
+                                    subtitle: candidate.artist,
+                                    cornerRadius: 8,
+                                    targetDimension: 52
+                                )
+                                .frame(width: 52, height: 52)
+
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(candidate.title)
+                                        .font(.system(size: 14, weight: .semibold))
+                                        .foregroundStyle(Color.primary)
+                                        .lineLimit(1)
+                                    Text("\(candidate.artist) · \(candidate.formattedTrackCount)")
+                                        .font(.system(size: 11, weight: .medium, design: .monospaced))
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(1)
+                                    if let year = candidate.displayYear {
+                                        Text(year)
+                                            .font(.system(size: 10, weight: .medium, design: .monospaced))
+                                            .foregroundStyle(.tertiary)
+                                    }
+                                }
+                                Spacer(minLength: 0)
+                                Text("MERGE")
+                                    .font(.system(size: 11, weight: .bold, design: .monospaced))
+                                    .foregroundStyle(theme.accentColor)
+                            }
+                            .padding(.vertical, 6)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                    }
+
+                    if !isPostMergeReview && sheetAlbums.count > 1 {
+                        Button {
+                            HapticFeedback.notificationSuccess()
+                            libraryStore.mergeAlbums(into: currentAlbum, otherIDs: sheetAlbums.map(\.id))
+                            showingAlbumMergeSheet = false
+                            withAnimation(.easeOut(duration: 0.2)) { showMergePill = false }
+                            refreshMergeSuggestion(for: currentAlbum)
+                        } label: {
+                            Text("MERGE ALL INTO THIS ALBUM")
+                                .font(.system(size: 13, weight: .bold, design: .monospaced))
+                                .foregroundStyle(theme.accentColor)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 14)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .padding(.top, 4)
+                    }
+                }
+                .padding(.horizontal, 20)
+                .padding(.bottom, 28)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
+        .presentationBackground(theme.backgroundColor)
+        .tint(theme.accentColor)
+        .environment(\.appTheme, theme)
+    }
+    #endif
 
 
     // Playlist picker sheet

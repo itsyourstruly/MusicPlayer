@@ -59,6 +59,13 @@ nonisolated public struct Album: Identifiable, Codable, Sendable, Hashable {
     // Search tokens
     public let searchTokens: String
 
+    /// Punctuation-preserving title key for album identity / merge suggestions (keeps "?" unlike FuzzyMatcher.normalize).
+    public var identityTitleKey: String { ServerCredits.nameKey(title) }
+    /// Punctuation-preserving artist key for album identity / merge suggestions.
+    public var identityArtistKey: String { ServerCredits.nameKey(artist) }
+    /// Combined identity key: same artist + same title (including punctuation-only titles).
+    public var identityKey: String { "\(identityArtistKey)|\(identityTitleKey)" }
+
     // Pre-computed classification and partition properties
     public let resolvedYear: Int?
     public let mainTracks: [Track]

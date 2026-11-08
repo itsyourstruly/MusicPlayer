@@ -21,8 +21,28 @@ public struct ContentView: View {
     @State private var homeNavigateToSearch: Bool = false
     @State private var selectedHomeAlbum: Album? = nil
     @State private var selectedHomePlaylist: Playlist? = nil
+    @State private var selectedHomeArtist: Artist? = nil
+    @State private var homeLibraryListDestination: HomeLibraryListDestination? = nil
     @State private var isLibrarySearchFocused: Bool = false
     @State private var lastHomeTabTapTime: TimeInterval = 0
+
+    /// True only when Home's navigation stack is at the root page (no pushed destinations).
+    private var homeStackIsAtRoot: Bool {
+        selectedHomeAlbum == nil
+            && selectedHomePlaylist == nil
+            && selectedHomeArtist == nil
+            && homeLibraryListDestination == nil
+            && !homeNavigateToSearch
+    }
+
+    /// Pops every Home-pushed destination back to the Home root.
+    private func popHomeToRoot() {
+        selectedHomeAlbum = nil
+        selectedHomePlaylist = nil
+        selectedHomeArtist = nil
+        homeLibraryListDestination = nil
+        homeNavigateToSearch = false
+    }
 
     /// Custom tab binding so re-tapping the active tab pops its navigation stack or triggers shortcuts
     private var tabBinding: Binding<Int> {
@@ -36,31 +56,31 @@ public struct ContentView: View {
                     HapticFeedback.selectionChanged()
                     if selectedTab == 0 {
                         // Already on the Home tab
-                        if selectedHomeAlbum != nil || selectedHomePlaylist != nil {
-                            // Currently in an album or playlist pushed from Home -> return to Home page
-                            selectedHomeAlbum = nil
-                            selectedHomePlaylist = nil
-                            homeNavigateToSearch = false
-                        } else if homeNavigateToSearch {
-                            // Currently in Search Library -> tap Home to return to the Home page.
-                            // Ask the search page to close its search first, then pop on the next run loop
-                            // (or once a just-tapped Cancel/X close animation is done, so the pop isn't dropped).
-                            let popDelay = GlobalSearchView.popDelayAfterSearchClose
-                            NotificationCenter.default.post(name: .globalSearchShouldLeave, object: nil)
-                            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
-                            DispatchQueue.main.asyncAfter(deadline: .now() + popDelay) {
-                                homeNavigateToSearch = false
+                        if !homeStackIsAtRoot {
+                            if homeNavigateToSearch
+                                && selectedHomeAlbum == nil
+                                && selectedHomePlaylist == nil
+                                && selectedHomeArtist == nil
+                                && homeLibraryListDestination == nil {
+                                // Search Library only: close search first, then pop (same as before).
+                                let popDelay = GlobalSearchView.popDelayAfterSearchClose
+                                NotificationCenter.default.post(name: .globalSearchShouldLeave, object: nil)
+                                UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+                                DispatchQueue.main.asyncAfter(deadline: .now() + popDelay) {
+                                    homeNavigateToSearch = false
+                                }
+                            } else {
+                                // Any deep page (carousel lists, artist/album/playlist, or mixed) -> Home root only.
+                                popHomeToRoot()
                             }
                         } else {
-                            // Already on the Home page -> tap Home to go to the SEARCH LIBRARY page
+                            // Already on the Home root -> tap Home to go to the SEARCH LIBRARY page
                             homeNavigateToSearch = true
                         }
                     } else {
                         // Switching from Library tab to Home -> return to the Home page
                         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
-                        selectedHomeAlbum = nil
-                        selectedHomePlaylist = nil
-                        homeNavigateToSearch = false
+                        popHomeToRoot()
                         selectedTab = 0
                     }
                 } else if newTab == 1 {
@@ -159,6 +179,8 @@ public struct ContentView: View {
                         navigateToSearch: $homeNavigateToSearch,
                         selectedAlbumForNavigation: $selectedHomeAlbum,
                         selectedPlaylistForNavigation: $selectedHomePlaylist,
+                        selectedArtistForNavigationHome: $selectedHomeArtist,
+                        libraryListDestination: $homeLibraryListDestination,
                         onOpenSettings: {
                             showingSettings = true
                         }

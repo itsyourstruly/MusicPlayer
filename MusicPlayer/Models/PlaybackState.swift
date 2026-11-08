@@ -126,7 +126,7 @@ public enum LibraryCategory: String, CaseIterable, Identifiable, Codable, Sendab
 }
 
 /// Track sorting criteria for the all-tracks library view.
-public enum TrackSortOption: String, CaseIterable, Identifiable, Sendable {
+public enum TrackSortOption: String, CaseIterable, Identifiable, Codable, Sendable {
     // Title option
     case title
     // Artist option
@@ -156,7 +156,7 @@ public enum TrackSortOption: String, CaseIterable, Identifiable, Sendable {
 }
 
 /// Artist sorting criteria for the artists library view.
-public enum ArtistSortOption: String, CaseIterable, Identifiable, Sendable {
+public enum ArtistSortOption: String, CaseIterable, Identifiable, Codable, Sendable {
     // Name option
     case name
     // Most option
@@ -177,7 +177,7 @@ public enum ArtistSortOption: String, CaseIterable, Identifiable, Sendable {
 }
 
 /// Album sorting criteria for the albums library view.
-public enum AlbumSortOption: String, CaseIterable, Identifiable, Sendable {
+public enum AlbumSortOption: String, CaseIterable, Identifiable, Codable, Sendable {
     // Title option
     case title
     // Most option
@@ -204,7 +204,7 @@ public enum AlbumSortOption: String, CaseIterable, Identifiable, Sendable {
 }
 
 /// Playlist sorting criteria for the playlists library view.
-public enum PlaylistSortOption: String, CaseIterable, Identifiable, Sendable {
+public enum PlaylistSortOption: String, CaseIterable, Identifiable, Codable, Sendable {
     // Name option
     case name
     // Most option
