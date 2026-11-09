@@ -340,22 +340,20 @@ public struct CenterNeedleWheelScrubberView: View {
                 guard pendingSeekCommitTime == nil else { return }
 
                 let now = Date()
-                let currentRendered: TimeInterval
-                if playerService.playbackStatus.isPlaying {
-                    let elapsed = now.timeIntervalSince(lastObservedDate)
-                    currentRendered = lastObservedTime + max(0, min(elapsed, 0.25))
-                } else {
-                    currentRendered = lastObservedTime
-                }
+                let speed = EqualizerManager.shared.playbackSpeed
+                let elapsed = now.timeIntervalSince(lastObservedDate)
+                let currentRendered = playerService.playbackStatus.isPlaying
+                    ? (lastObservedTime + max(0, elapsed * speed))
+                    : lastObservedTime
 
                 let drift = newTime - currentRendered
-                if abs(drift) > 0.40 {
+                if abs(drift) > 0.35 {
                     // Significant jump (e.g. track jump or external control) -> snap cleanly
                     lastObservedTime = newTime
                     lastObservedDate = now
-                } else {
+                } else if abs(drift) > 0.02 {
                     // Smoothly converge without sudden jitter
-                    lastObservedTime = currentRendered + drift * 0.25
+                    lastObservedTime = currentRendered + drift * 0.40
                     lastObservedDate = now
                 }
                 dragSeekTime = newTime
@@ -539,8 +537,9 @@ public struct CenterNeedleWheelScrubberView: View {
         }
         if playerService.playbackStatus.isPlaying {
             let elapsed = date.timeIntervalSince(lastObservedDate)
-            let clampedElapsed = max(0, min(elapsed, 0.20))
-            return min(duration, max(0, lastObservedTime + clampedElapsed))
+            let speed = EqualizerManager.shared.playbackSpeed
+            let advanced = lastObservedTime + max(0, elapsed * speed)
+            return min(duration, max(0, advanced))
         }
         return playerService.currentTime
     }
@@ -591,6 +590,12 @@ public struct CenterNeedleWheelScrubberView: View {
                 guard startTime <= endTime else { return }
 
                 let focusRadius: CGFloat = 70.0
+                let isZoomed = zoomProgress > 0.001
+                let baselineLineHeight: CGFloat = 2.0
+
+                // Batch path for future ticks on the right of the needle (identical secondary color)
+                var futureTicksPath = Path()
+                var futureDotsPath = Path()
 
                 for time in stride(from: startTime, through: endTime, by: 0.5) {
                     let timeOffset = time - current
@@ -646,26 +651,52 @@ public struct CenterNeedleWheelScrubberView: View {
                     let needleHeight: CGFloat = baselineLineHeight + (fullTargetHeight - baselineLineHeight) * waveformExpansion
                     let halfH = needleHeight / 2.0
 
-                    // Uniform needle line
-                    var needlePath = Path()
-                    needlePath.move(to: CGPoint(x: x, y: baselineY - halfH))
-                    needlePath.addLine(to: CGPoint(x: x, y: baselineY + halfH))
-
                     let pointLineWidth = 1.4 + (0.35 * (proximityScale - 1.0))
-                    context.stroke(
-                        needlePath,
-                        with: .color(tickColor),
-                        style: StrokeStyle(lineWidth: pointLineWidth, lineCap: .round)
-                    )
-
-                    // Micro precision tip at top and bottom of each needle line
                     let tipRadius: CGFloat = 0.85 * waveformExpansion * (1.0 + 0.25 * (proximityScale - 1.0))
-                    if tipRadius > 0.25 {
-                        let topDot = Path(ellipseIn: CGRect(x: x - tipRadius, y: baselineY - halfH - tipRadius, width: tipRadius * 2, height: tipRadius * 2))
-                        let bottomDot = Path(ellipseIn: CGRect(x: x - tipRadius, y: baselineY + halfH - tipRadius, width: tipRadius * 2, height: tipRadius * 2))
-                        context.fill(topDot, with: .color(tickColor.opacity(Double(waveformExpansion))))
-                        context.fill(bottomDot, with: .color(tickColor.opacity(Double(waveformExpansion))))
+
+                    if timeDelta < 0 {
+                        // Future tick: batch into futureTicksPath
+                        futureTicksPath.move(to: CGPoint(x: x, y: baselineY - halfH))
+                        futureTicksPath.addLine(to: CGPoint(x: x, y: baselineY + halfH))
+                        if tipRadius > 0.25 {
+                            futureDotsPath.addEllipse(in: CGRect(x: x - tipRadius, y: baselineY - halfH - tipRadius, width: tipRadius * 2, height: tipRadius * 2))
+                            futureDotsPath.addEllipse(in: CGRect(x: x - tipRadius, y: baselineY + halfH - tipRadius, width: tipRadius * 2, height: tipRadius * 2))
+                        }
+                    } else {
+                        // Uniform needle line
+                        var needlePath = Path()
+                        needlePath.move(to: CGPoint(x: x, y: baselineY - halfH))
+                        needlePath.addLine(to: CGPoint(x: x, y: baselineY + halfH))
+
+                        context.stroke(
+                            needlePath,
+                            with: .color(tickColor),
+                            style: StrokeStyle(lineWidth: pointLineWidth, lineCap: .round)
+                        )
+
+                        // Micro precision tip at top and bottom of each needle line
+                        if tipRadius > 0.25 {
+                            let topDot = Path(ellipseIn: CGRect(x: x - tipRadius, y: baselineY - halfH - tipRadius, width: tipRadius * 2, height: tipRadius * 2))
+                            let bottomDot = Path(ellipseIn: CGRect(x: x - tipRadius, y: baselineY + halfH - tipRadius, width: tipRadius * 2, height: tipRadius * 2))
+                            context.fill(topDot, with: .color(tickColor.opacity(Double(waveformExpansion))))
+                            context.fill(bottomDot, with: .color(tickColor.opacity(Double(waveformExpansion))))
+                        }
                     }
+                }
+
+                // Stroke & fill all batched future ticks in single draw operations
+                if !futureTicksPath.isEmpty {
+                    context.stroke(
+                        futureTicksPath,
+                        with: .color(secondaryForegroundColor.opacity(0.30)),
+                        style: StrokeStyle(lineWidth: 1.4, lineCap: .round)
+                    )
+                }
+                if !futureDotsPath.isEmpty {
+                    context.fill(
+                        futureDotsPath,
+                        with: .color(secondaryForegroundColor.opacity(0.30 * Double(waveformExpansion)))
+                    )
                 }
             }
         }

@@ -164,7 +164,7 @@ nonisolated public struct Album: Identifiable, Codable, Sendable, Hashable {
         let sortedTracks = tracks.sorted(by: Album.areTracksInOrder)
         self.tracks = sortedTracks
 
-        self.resolvedYear = Album.computeResolvedYear(tracks: sortedTracks, fallbackYear: year)
+        self.resolvedYear = (year != nil && year! > 0) ? year : Album.computeResolvedYear(tracks: sortedTracks, fallbackYear: year)
 
         let partitions = Album.computeTrackPartitions(tracks: sortedTracks)
         self.mainTracks = partitions.main
@@ -207,7 +207,7 @@ nonisolated public struct Album: Identifiable, Codable, Sendable, Hashable {
         let sortedTracks = decodedTracks.sorted(by: Album.areTracksInOrder)
         self.tracks = sortedTracks
 
-        self.resolvedYear = Album.computeResolvedYear(tracks: sortedTracks, fallbackYear: self.year)
+        self.resolvedYear = (self.year != nil && self.year! > 0) ? self.year : Album.computeResolvedYear(tracks: sortedTracks, fallbackYear: self.year)
 
         let partitions = Album.computeTrackPartitions(tracks: sortedTracks)
         self.mainTracks = partitions.main

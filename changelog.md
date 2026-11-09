@@ -1,9 +1,9 @@
 ### v0.4 (10)
 * New:
   -  Within the Appearance settings, new option to toggle album backgrounds to: match the Album Color, Album Blur, or keep the Solid color from the set theme.
-  - Also in the Appearance settings, expand the 'HOME PAGE' section to reorder, toggle existing sections, and add library options. 
-  - Depending on source and organization, you may have a duplicate album, or tracks separated into different albums, or singles. LAP will now find when an album you open has the identical name, and artist as another, and offer to merge them. When albums are merged, you can tap the album artwork inside the album page to use the artwork from any of the merged albums. 
-  - Hide Duplicates option for online sources, which will automatically hide duplicate tracks found in Albums. Automatically hidden tracks show up in Settings->Sources->Hidden, separate from manually hidden tracks. Local sources are still able to scan for duplicates using the "Find Track Tags" option.
+  - Also in the Appearance settings, expand the 'HOME PAGE' section to reorder, toggle existing sections, and add library tabs. 
+  - New option in Sources settings 'Merge Albums.' Depending on source and organization, you may have a duplicate album, or tracks separated into different albums, or singles. LAP will now find when an album you open has the identical name, and artist as another, and offer to merge them. When albums are merged, you can tap the album artwork inside the album page to use the artwork from any of the merged albums. Long press on an artwork to use its release year alongside another cover. 
+  - New 'Hide Duplicates' option for online sources, which will automatically hide duplicate tracks found in Albums. Automatically hidden tracks show up in Settings->Sources->Hidden, separate from manually hidden tracks. Local sources are still able to scan for duplicates using the "Find Track Tags" option.
   - Long press a tab (Artists, Albums, or Playlists) on the Library page to adjust the amount of columns.
   - Add your own separators for artists in Settings->Sources->Artist Separators. This only affects local sources. 
   - Disable CAPITALIZATION thoughout the app in Settings->Appearance.
@@ -12,10 +12,14 @@
   - In Sources settings, clear options now match the set theme to show they can be selected. Added option for merges to undo all merges. It will now only show options to clear what it's actually using. 
   - For the Sources settings, if both Local, and Online sources are added, the Online sources will appear at the top, with the related options below. Local sources will show up below the Online options, with their related options. This change was made to differentiate source options easier. 
   - Source settings starts empty until you add a source.
+  - In Appearance settings, 'USE PROGRESS BAR' now defaults to ON.
   - In album view, tapping the MERGED pill now displays merged albums with an UNMERGE option. Tapping unmerges the album without automatically closing the sheet. Unmerging is instantaneous, and unmerged albums can still be manually merged at any time from the music note menu.
-  - When merging albums automatically, the selected album's artwork is preserved instead of selecting an artwork arbitrarily. Tapping the album artwork in a merged album directly opens an artwork picker sheet displaying all available covers in a 2-column grid.
+  - When merging albums automatically, the selected album's artwork is preserved instead of selecting an artwork arbitrarily. Tapping the album artwork in a merged album directly opens an artwork picker sheet displaying all available covers in a 2-column grid with their release years.
+  - When in library selection mode, the top-left selected items counter now matches the app's theme color.
 - Fixes:
   - When changing local folder organization, the library would not rebuild after saving and rescanning. This has been fixed. Saving a change will now apply the changes immediately. 
+  - Merging duplicate albums now reliably matches split releases and edition variations where tracks had differing featured artist or suffix metadata (such as single tracks split off from full albums).
+  - The waveform timeline in the fullscreen player was buggy, and did not move smoothly. This has been fixed. 
 
 ### v0.4 (8)
 * New:

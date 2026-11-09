@@ -258,7 +258,7 @@ public struct AlbumDetailView: View {
                             }
 
                             #if os(iOS)
-                            let candidatesToMerge = mergeCandidateAlbums.isEmpty ? libraryStore.mergeCandidates(for: currentAlbum) : mergeCandidateAlbums
+                            let candidatesToMerge = libraryStore.mergeCandidates(for: currentAlbum)
                             if !candidatesToMerge.isEmpty, !showMergePill {
                                 Divider()
                                 Button(action: {
@@ -932,7 +932,8 @@ private struct MergedAlbumArtworkPickerSheet: View {
     ]
 
     var body: some View {
-        let artworkKeys = libraryStore.mergedArtworkKeys(for: album)
+        let releases = libraryStore.mergedReleases(for: album)
+        let preferredYear = libraryStore.preferredYear(for: album)
         VStack(spacing: 0) {
             Text(AppCapitalization.format("SELECT ARTWORK", enabled: isCaps))
                 .font(.system(size: 13, weight: .bold, design: .monospaced))
@@ -943,45 +944,71 @@ private struct MergedAlbumArtworkPickerSheet: View {
                 .padding(.bottom, 16)
 
             ScrollView {
-                if artworkKeys.isEmpty {
+                if releases.isEmpty {
                     Text(AppCapitalization.format("NO ARTWORKS AVAILABLE", enabled: isCaps))
                         .font(.system(size: 12, weight: .bold, design: .monospaced))
                         .foregroundStyle(.secondary)
                         .padding(.vertical, 32)
                 } else {
-                    LazyVGrid(columns: columns, spacing: 14) {
-                        ForEach(artworkKeys, id: \.self) { key in
-                            let isSelected = key == album.artworkKey
+                    LazyVGrid(columns: columns, spacing: 18) {
+                        ForEach(releases) { release in
+                            let isSelected = (release.artworkKey == album.artworkKey)
+                            let releaseYear = release.year
+                            let isYearSelected = (releaseYear != nil && releaseYear == preferredYear)
+
                             Button {
                                 HapticFeedback.notificationSuccess()
-                                libraryStore.setMergedAlbumArtwork(key: key, for: album)
+                                libraryStore.setMergedAlbumArtwork(key: release.artworkKey ?? "", for: album)
                                 dismiss()
                             } label: {
-                                ZStack(alignment: .topTrailing) {
-                                    AlbumArtworkView(
-                                        artworkKey: key,
-                                        title: album.title,
-                                        subtitle: album.artist,
-                                        cornerRadius: 10,
-                                        targetDimension: 400
-                                    )
-                                    .aspectRatio(1, contentMode: .fit)
-                                    .overlay(
-                                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                            .stroke(isSelected ? appTheme.accentColor : Color.clear, lineWidth: 3)
-                                    )
-                                    .shadow(color: Color.black.opacity(0.12), radius: 6, x: 0, y: 3)
+                                VStack(spacing: 6) {
+                                    ZStack(alignment: .topTrailing) {
+                                        AlbumArtworkView(
+                                            artworkKey: release.artworkKey,
+                                            title: album.title,
+                                            subtitle: album.artist,
+                                            cornerRadius: 10,
+                                            targetDimension: 400
+                                        )
+                                        .aspectRatio(1, contentMode: .fit)
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                                .stroke(isSelected ? appTheme.accentColor : Color.clear, lineWidth: 3)
+                                        )
+                                        .shadow(color: Color.black.opacity(0.12), radius: 6, x: 0, y: 3)
 
-                                    if isSelected {
-                                        Image(systemName: "checkmark.circle.fill")
-                                            .font(.system(size: 20, weight: .bold))
-                                            .foregroundStyle(appTheme.accentColor)
-                                            .background(Circle().fill(appTheme.backgroundColor))
-                                            .padding(8)
+                                        if isSelected {
+                                            Image(systemName: "checkmark.circle.fill")
+                                                .font(.system(size: 20, weight: .bold))
+                                                .foregroundStyle(appTheme.accentColor)
+                                                .background(Circle().fill(appTheme.backgroundColor))
+                                                .padding(8)
+                                        }
+                                    }
+
+                                    if let year = releaseYear, year > 0 {
+                                        Text(String(year))
+                                            .font(.system(size: 12, weight: isYearSelected ? .bold : .semibold, design: .monospaced))
+                                            .foregroundStyle(isYearSelected ? appTheme.accentColor : Color.secondary)
+                                    }
+                                }
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .contextMenu {
+                                if let year = releaseYear, year > 0 {
+                                    Button {
+                                        HapticFeedback.lightImpact()
+                                        libraryStore.toggleMergedAlbumYear(year: year, for: album)
+                                    } label: {
+                                        if isYearSelected {
+                                            Label(AppCapitalization.format("USE RELEASE YEAR", enabled: isCaps), systemImage: "checkmark")
+                                        } else {
+                                            Text(AppCapitalization.format("USE RELEASE YEAR", enabled: isCaps))
+                                        }
                                     }
                                 }
                             }
-                            .buttonStyle(.plain)
                         }
                     }
                     .padding(.horizontal, 20)

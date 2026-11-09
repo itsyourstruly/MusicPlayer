@@ -270,7 +270,7 @@ public final class LibraryStore {
     private(set) var libraryView: LibraryViewSnapshot? = nil
     @ObservationIgnored private var libraryViewTask: Task<Void, Never>? = nil
     @ObservationIgnored private var libraryViewDirty = false
-    @ObservationIgnored private var libraryContentGeneration = 0
+    @ObservationIgnored private(set) var libraryContentGeneration = 0
     /// Views already built for the current library content, keyed by the disabled-source set (instant toggles back).
     @ObservationIgnored private var libraryViewCache: [String: LibraryViewSnapshot] = [:]
     @ObservationIgnored private var libraryViewCacheGeneration = -1
@@ -3170,20 +3170,42 @@ public final class LibraryStore {
         for album in result.albums { byID[album.id] = album }
 
         var absorbedToPrimary: [String: String] = [:]
+        var hasModifications = false
+
         for group in groups {
             let ids = Array(Set(group.memberIDs + [group.primaryID]))
             let present = ids.compactMap { byID[$0] }
-            guard present.count >= 2 else { continue }
+            guard !present.isEmpty else { continue }
+            guard present.count >= 2 || byID[group.primaryID] != nil else { continue }
+
             let primary = byID[group.primaryID] ?? present.max(by: { $0.tracks.count < $1.tracks.count })!
             let primaryID = primary.id
             let effectiveArtworkKey = group.preferredArtworkKey ?? primary.artworkKey
+
+            let yearForArtwork: Int? = {
+                if let key = effectiveArtworkKey {
+                    if let match = group.memberReleases.first(where: { $0.artworkKey == key })?.year, match > 0 {
+                        return match
+                    }
+                    if let match = present.first(where: { $0.artworkKey == key })?.year, match > 0 {
+                        return match
+                    }
+                }
+                return nil
+            }()
+            let effectiveYear = group.preferredYear ?? yearForArtwork ?? primary.year
+
             var allTracks = primary.tracks.map { track in
-                effectiveArtworkKey != nil ? track.withArtworkKey(effectiveArtworkKey) : track
+                var t = effectiveArtworkKey != nil ? track.withArtworkKey(effectiveArtworkKey) : track
+                if let y = effectiveYear, y > 0 { t = t.withYear(y) }
+                return t
             }
             var seen = Set(allTracks.map(\.id))
             for album in present where album.id != primaryID {
                 for track in album.tracks where seen.insert(track.id).inserted {
-                    allTracks.append(effectiveArtworkKey != nil ? track.withArtworkKey(effectiveArtworkKey) : track)
+                    var t = effectiveArtworkKey != nil ? track.withArtworkKey(effectiveArtworkKey) : track
+                    if let y = effectiveYear, y > 0 { t = t.withYear(y) }
+                    allTracks.append(t)
                 }
                 absorbedToPrimary[album.id] = primaryID
                 byID.removeValue(forKey: album.id)
@@ -3191,7 +3213,7 @@ public final class LibraryStore {
             byID[primaryID] = Album(
                 title: primary.title,
                 artist: primary.artist,
-                year: primary.year,
+                year: effectiveYear,
                 genre: primary.genre,
                 artworkKey: effectiveArtworkKey,
                 tracks: allTracks,
@@ -3200,8 +3222,10 @@ public final class LibraryStore {
                 featuredArtistKeys: primary.featuredArtistKeys,
                 sortName: primary.sortName
             )
+            hasModifications = true
         }
-        guard !absorbedToPrimary.isEmpty else { return result }
+
+        guard hasModifications else { return result }
 
         let finalAlbums = result.albums.compactMap { album -> Album? in
             if absorbedToPrimary[album.id] != nil { return nil }
@@ -3221,7 +3245,7 @@ public final class LibraryStore {
                 }
             }
             if nextAlbums.map(\.id) == artist.albums.map(\.id)
-                && zip(nextAlbums, artist.albums).allSatisfy({ $0.tracks.count == $1.tracks.count }) {
+                && zip(nextAlbums, artist.albums).allSatisfy({ $0.tracks.count == $1.tracks.count && $0.year == $1.year && $0.artworkKey == $1.artworkKey }) {
                 remappedArtists.append(artist)
             } else {
                 remappedArtists.append(artist.withContent(albums: nextAlbums, tracks: artist.tracks, joinedArtists: joinedArtists))
@@ -6188,10 +6212,67 @@ public final class LibraryStore {
 
     // MARK: - Album Merges
 
-    /// Other albums that share punctuation-preserving artist+title with `album` (excludes self / already-merged members).
+    /// Other albums that share punctuation-preserving artist+title with `album` or matching normalized title with compatible artists (excludes self / already-merged members).
     public func mergeCandidates(for album: Album) -> [Album] {
-        let siblings = albumsSharingIdentityKey(album.identityKey).filter { $0.id != album.id }
-        guard !siblings.isEmpty else { return [] }
+        var candidates: [Album] = []
+        var seenIDs = Set<String>()
+        seenIDs.insert(album.id)
+
+        // 1. Exact identity key matches (fast path)
+        for sibling in albumsSharingIdentityKey(album.identityKey) where seenIDs.insert(sibling.id).inserted {
+            candidates.append(sibling)
+        }
+
+        // 2. Normalized title and artist compatibility match across active albums
+        let normTitle = normalizeAlbumTitleForClustering(album.title)
+        if !normTitle.isEmpty && normTitle != "unknown album" {
+            let albumCanonical = ArtistParser.canonicalArtistKey(album.artist)
+            let albumParsedArtists = ArtistParser.parseArtists(from: album.artist)
+            let albumFirstArtist = albumParsedArtists.first.map { ArtistParser.canonicalArtistKey($0) }
+            let albumArtistSet = Set(albumParsedArtists.map { ArtistParser.canonicalArtistKey($0) })
+            let albumTrackAlbumArtists = Set(album.tracks.compactMap { $0.albumArtist?.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }.map { ArtistParser.canonicalArtistKey($0) })
+
+            for other in albums where !seenIDs.contains(other.id) {
+                let otherNormTitle = normalizeAlbumTitleForClustering(other.title)
+                guard otherNormTitle == normTitle else { continue }
+
+                let otherCanonical = ArtistParser.canonicalArtistKey(other.artist)
+                var isMatch = (albumCanonical == otherCanonical)
+
+                if !isMatch {
+                    let otherParsedArtists = ArtistParser.parseArtists(from: other.artist)
+                    let otherFirstArtist = otherParsedArtists.first.map { ArtistParser.canonicalArtistKey($0) }
+                    let otherArtistSet = Set(otherParsedArtists.map { ArtistParser.canonicalArtistKey($0) })
+
+                    // Shared primary/lead artist (e.g. "Drake" vs "Drake feat. Nicki Minaj")
+                    if let firstA = albumFirstArtist, let firstB = otherFirstArtist, !firstA.isEmpty, firstA == firstB {
+                        isMatch = true
+                    }
+                    // Subset/superset artist containment
+                    else if (!albumArtistSet.isEmpty && otherArtistSet.isSuperset(of: albumArtistSet)) ||
+                            (!otherArtistSet.isEmpty && albumArtistSet.isSuperset(of: otherArtistSet)) {
+                        isMatch = true
+                    }
+                    // Overlapping canonical artists
+                    else if !albumArtistSet.isDisjoint(with: otherArtistSet) {
+                        isMatch = true
+                    }
+                    // Explicit track album-artist match
+                    else if !albumTrackAlbumArtists.isEmpty {
+                        let otherTrackAlbumArtists = Set(other.tracks.compactMap { $0.albumArtist?.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }.map { ArtistParser.canonicalArtistKey($0) })
+                        if !albumTrackAlbumArtists.isDisjoint(with: otherTrackAlbumArtists) {
+                            isMatch = true
+                        }
+                    }
+                }
+
+                if isMatch && seenIDs.insert(other.id).inserted {
+                    candidates.append(other)
+                }
+            }
+        }
+
+        guard !candidates.isEmpty else { return [] }
         let mergedAway = Set(settings.albumMergeGroups.flatMap { group -> [String] in
             // Members other than primary are gone from `albums`; still exclude ids already tied to this album's group.
             if group.primaryID == album.id || group.memberIDs.contains(album.id) {
@@ -6199,7 +6280,7 @@ public final class LibraryStore {
             }
             return []
         })
-        return siblings.filter { !mergedAway.contains($0.id) }
+        return candidates.filter { !mergedAway.contains($0.id) }
             .sorted { lhs, rhs in
                 if lhs.tracks.count != rhs.tracks.count { return lhs.tracks.count > rhs.tracks.count }
                 return lhs.id < rhs.id
@@ -6249,15 +6330,21 @@ public final class LibraryStore {
         }
         var memberIDs = Set(others + [primary.id])
 
-        // Collect artworks: primary album's artwork is first and default
+        // Collect releases (albumID, artworkKey, year) and artworks: primary album is first
+        var releases: [MergedAlbumRelease] = []
         var artworkKeys: [String] = []
+
+        releases.append(MergedAlbumRelease(albumID: primary.id, artworkKey: primary.artworkKey, year: primary.year))
         if let primaryArt = primary.artworkKey, !primaryArt.isEmpty {
             artworkKeys.append(primaryArt)
         }
+
         for otherID in others {
-            if let otherAlbum = albumsByID[otherID] ?? albums.first(where: { $0.id == otherID }),
-               let art = otherAlbum.artworkKey, !art.isEmpty, !artworkKeys.contains(art) {
-                artworkKeys.append(art)
+            if let otherAlbum = albumsByID[otherID] ?? albums.first(where: { $0.id == otherID }) {
+                releases.append(MergedAlbumRelease(albumID: otherAlbum.id, artworkKey: otherAlbum.artworkKey, year: otherAlbum.year))
+                if let art = otherAlbum.artworkKey, !art.isEmpty, !artworkKeys.contains(art) {
+                    artworkKeys.append(art)
+                }
             }
         }
 
@@ -6273,13 +6360,18 @@ public final class LibraryStore {
                 for key in group.availableArtworkKeys where !artworkKeys.contains(key) {
                     artworkKeys.append(key)
                 }
+                for rel in group.memberReleases where !releases.contains(where: { $0.albumID == rel.albumID }) {
+                    releases.append(rel)
+                }
             }
         }
         let group = AlbumMergeGroup(
             primaryID: primary.id,
             memberIDs: Array(memberIDs),
             preferredArtworkKey: primary.artworkKey,
-            availableArtworkKeys: artworkKeys
+            availableArtworkKeys: artworkKeys,
+            preferredYear: nil,
+            memberReleases: releases
         )
         remaining.append(group)
         settings.albumMergeGroups = remaining
@@ -6321,6 +6413,65 @@ public final class LibraryStore {
             }
         }
         return result
+    }
+
+    /// Distinct releases available for this merged album (with artwork and year).
+    public func mergedReleases(for album: Album) -> [MergedAlbumRelease] {
+        var results: [MergedAlbumRelease] = []
+        var seenKeys = Set<String>()
+
+        if let group = settings.albumMergeGroups.first(where: { $0.primaryID == album.id || $0.memberIDs.contains(album.id) }) {
+            for rel in group.memberReleases {
+                let key = (rel.artworkKey ?? "") + "_" + String(rel.year ?? 0)
+                if seenKeys.insert(key).inserted {
+                    results.append(rel)
+                }
+            }
+            // Fallback for groups created before memberReleases was tracked
+            for artKey in group.availableArtworkKeys where !artKey.isEmpty {
+                if !results.contains(where: { $0.artworkKey == artKey }) {
+                    let matchedYear = album.tracks.first(where: { $0.artworkKey == artKey })?.year ?? album.year
+                    let key = artKey + "_" + String(matchedYear ?? 0)
+                    if seenKeys.insert(key).inserted {
+                        results.append(MergedAlbumRelease(albumID: UUID().uuidString, artworkKey: artKey, year: matchedYear))
+                    }
+                }
+            }
+        }
+
+        // Ensure current album's artwork and year is represented if missing
+        if let currentArt = album.artworkKey, !results.contains(where: { $0.artworkKey == currentArt }) {
+            results.insert(MergedAlbumRelease(albumID: album.id, artworkKey: currentArt, year: album.year), at: 0)
+        }
+
+        return results
+    }
+
+    /// Explicitly pinned release year for this merged album, if set.
+    public func preferredYear(for album: Album) -> Int? {
+        settings.albumMergeGroups.first(where: { $0.primaryID == album.id || $0.memberIDs.contains(album.id) })?.preferredYear
+    }
+
+    /// Toggles the preferred release year override for a merged album.
+    public func toggleMergedAlbumYear(year: Int, for album: Album) {
+        var modified = false
+        var updatedGroups: [AlbumMergeGroup] = []
+        for var group in settings.albumMergeGroups {
+            if group.primaryID == album.id || group.memberIDs.contains(album.id) {
+                if group.preferredYear == year {
+                    group.preferredYear = nil
+                } else {
+                    group.preferredYear = year
+                }
+                modified = true
+            }
+            updatedGroups.append(group)
+        }
+        guard modified else { return }
+        settings.albumMergeGroups = updatedGroups
+        saveSettings()
+        applyPersistedAlbumMergesLocally()
+        saveLibrary()
     }
 
     /// Updates the preferred artwork for a merged album and propagates it to the album and all its tracks.
@@ -6440,6 +6591,10 @@ public final class LibraryStore {
         self.artistLookupIndex = lookup
         rebuildAlbumLookups()
         invalidateSortedCaches()
+        reconcileRecentAndPinnedItems()
+        #if os(iOS)
+        ArtistDetailView.invalidateDiscographyCache()
+        #endif
         // album(forID:) prefers libraryView — patch it now so AlbumDetailView.currentAlbum updates instantly.
         let snap = LibraryViewBuilder.build(makeLibraryViewInput())
         publishLibraryView(snap)

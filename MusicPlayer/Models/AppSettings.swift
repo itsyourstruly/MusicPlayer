@@ -334,12 +334,29 @@ public struct HomeSectionPreference: Codable, Sendable, Identifiable, Equatable 
 
 // MARK: - Album merges
 
+/// Single release info within a merged album group, preserving its artwork and release year.
+public struct MergedAlbumRelease: Codable, Sendable, Equatable, Identifiable {
+    public var albumID: String
+    public var artworkKey: String?
+    public var year: Int?
+
+    public var id: String { albumID }
+
+    public init(albumID: String, artworkKey: String?, year: Int?) {
+        self.albumID = albumID
+        self.artworkKey = artworkKey
+        self.year = year
+    }
+}
+
 /// One user merge: `primaryID` keeps identity; `memberIDs` lists every album id in the group (including primary).
 public struct AlbumMergeGroup: Codable, Sendable, Equatable, Identifiable {
     public var primaryID: String
     public var memberIDs: [String]
     public var preferredArtworkKey: String?
     public var availableArtworkKeys: [String]
+    public var preferredYear: Int?
+    public var memberReleases: [MergedAlbumRelease]
 
     public var id: String { primaryID }
 
@@ -347,17 +364,21 @@ public struct AlbumMergeGroup: Codable, Sendable, Equatable, Identifiable {
         primaryID: String,
         memberIDs: [String],
         preferredArtworkKey: String? = nil,
-        availableArtworkKeys: [String] = []
+        availableArtworkKeys: [String] = [],
+        preferredYear: Int? = nil,
+        memberReleases: [MergedAlbumRelease] = []
     ) {
         self.primaryID = primaryID
         let unique = Array(Set(memberIDs + [primaryID]))
         self.memberIDs = unique.sorted()
         self.preferredArtworkKey = preferredArtworkKey
         self.availableArtworkKeys = availableArtworkKeys
+        self.preferredYear = preferredYear
+        self.memberReleases = memberReleases
     }
 
     private enum CodingKeys: String, CodingKey {
-        case primaryID, memberIDs, preferredArtworkKey, availableArtworkKeys
+        case primaryID, memberIDs, preferredArtworkKey, availableArtworkKeys, preferredYear, memberReleases
     }
 
     public init(from decoder: Decoder) throws {
@@ -366,6 +387,8 @@ public struct AlbumMergeGroup: Codable, Sendable, Equatable, Identifiable {
         self.memberIDs = try container.decode([String].self, forKey: .memberIDs)
         self.preferredArtworkKey = try container.decodeIfPresent(String.self, forKey: .preferredArtworkKey)
         self.availableArtworkKeys = try container.decodeIfPresent([String].self, forKey: .availableArtworkKeys) ?? []
+        self.preferredYear = try container.decodeIfPresent(Int.self, forKey: .preferredYear)
+        self.memberReleases = try container.decodeIfPresent([MergedAlbumRelease].self, forKey: .memberReleases) ?? []
     }
 
     public static func suggestionKey(albumIDs: [String]) -> String {
@@ -538,7 +561,7 @@ public struct AppSettings: Codable, Sendable {
         rememberPlaybackPosition: Bool = true,
         rememberPlaybackPositionMinMinutes: Double = 10.0,
         showAudioSpecsInPlayer: Bool = true,
-        useProgressBar: Bool = false,
+        useProgressBar: Bool = true,
         isCrossfadeEnabled: Bool = false,
         crossfadeDuration: Double = 4.0,
         lastScanDate: Date? = nil,
@@ -789,7 +812,7 @@ public struct AppSettings: Codable, Sendable {
         self.rememberPlaybackPosition = (try? container.decodeIfPresent(Bool.self, forKey: .rememberPlaybackPosition)) ?? true
         self.rememberPlaybackPositionMinMinutes = (try? container.decodeIfPresent(Double.self, forKey: .rememberPlaybackPositionMinMinutes)) ?? 10.0
         self.showAudioSpecsInPlayer = (try? container.decodeIfPresent(Bool.self, forKey: .showAudioSpecsInPlayer)) ?? true
-        self.useProgressBar = (try? container.decodeIfPresent(Bool.self, forKey: .useProgressBar)) ?? false
+        self.useProgressBar = (try? container.decodeIfPresent(Bool.self, forKey: .useProgressBar)) ?? true
         self.isCrossfadeEnabled = (try? container.decodeIfPresent(Bool.self, forKey: .isCrossfadeEnabled)) ?? false
         self.crossfadeDuration = (try? container.decodeIfPresent(Double.self, forKey: .crossfadeDuration)) ?? 4.0
         self.lastScanDate = (try? container.decodeIfPresent(Date.self, forKey: .lastScanDate))

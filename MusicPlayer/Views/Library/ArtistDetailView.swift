@@ -546,9 +546,14 @@ public struct ArtistDetailView: View {
 
     @MainActor private static var discographyCache: [String: (version: Int, discography: CategorizedDiscography)] = [:]
 
+    @MainActor public static func invalidateDiscographyCache() {
+        discographyCache.removeAll()
+    }
+
     private func categorizeDiscography(for activeArtist: Artist) -> CategorizedDiscography {
         let joined = libraryStore.settings.joinedArtists
-        let versionKey = activeArtist.albums.count ^ (activeArtist.tracks.count << 4) ^ joined.hashValue ^ (ReleaseTypeRegistry.shared.revision &* 31)
+        let yearsHash = activeArtist.albums.reduce(0) { $0 ^ ($1.year ?? 0) }
+        let versionKey = activeArtist.albums.count ^ (activeArtist.tracks.count << 4) ^ joined.hashValue ^ (ReleaseTypeRegistry.shared.revision &* 31) ^ (yearsHash &* 37) ^ (libraryStore.libraryContentGeneration &* 41)
 
         if let cached = Self.discographyCache[activeArtist.id], cached.version == versionKey {
             return cached.discography

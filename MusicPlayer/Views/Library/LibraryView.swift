@@ -409,9 +409,10 @@ private struct LibrarySelectionCounterMenu: View {
         } label: {
             Text("\(selection.count)")
                 .font(.system(size: 17, weight: .bold, design: .monospaced))
-                .foregroundStyle(Color.primary)
+                .foregroundStyle(libraryStore.settings.appTheme.accentColor)
                 .monospacedDigit()
         }
+        .tint(libraryStore.settings.appTheme.accentColor)
     }
 }
 
