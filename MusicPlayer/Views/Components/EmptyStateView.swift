@@ -3,6 +3,7 @@ import SwiftUI
 /// Minimal, high-contrast typographic empty state component.
 /// Strictly avoids SF Symbols or illustrative graphics.
 public struct EmptyStateView: View {
+    @Environment(\.isCapitalizationEnabled) private var isCapitalizationEnabled
     // Display title
     public let title: String
     // Message
@@ -28,13 +29,13 @@ public struct EmptyStateView: View {
     // Main view layout structure
     public var body: some View {
         VStack(spacing: 16) {
-            Text(title)
+            Text(AppCapitalization.format(title, enabled: isCapitalizationEnabled))
                 .font(.system(size: 17, weight: .bold, design: .monospaced))
-                .textCase(.uppercase)
+                .textCase(isCapitalizationEnabled ? .uppercase : nil)
                 .foregroundStyle(Color.primary)
 
             if !message.isEmpty {
-                Text(message)
+                Text(AppCapitalization.format(message, enabled: isCapitalizationEnabled))
                     .font(.system(size: 14, weight: .regular))
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -44,7 +45,7 @@ public struct EmptyStateView: View {
 
             if let actTitle = actionTitle, let act = action {
                 Button(action: act) {
-                    Text(actTitle)
+                    Text(AppCapitalization.format(actTitle, enabled: isCapitalizationEnabled))
                 }
                 .buttonStyle(TypographicButtonStyle(variant: .primary, size: .regular))
                 .padding(.top, 8)

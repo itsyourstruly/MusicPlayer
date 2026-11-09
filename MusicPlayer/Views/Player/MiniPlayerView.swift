@@ -11,6 +11,7 @@ public struct MiniPlayerView: View {
         isDark: true
     )
     @State private var dragOffset: CGSize = .zero
+    @Environment(\.isCapitalizationEnabled) private var isCaps: Bool
 
     // Initialize with configured properties
     public init(
@@ -65,7 +66,7 @@ public struct MiniPlayerView: View {
                                 .progressViewStyle(CircularProgressViewStyle(tint: palette.foregroundColor))
                                 .scaleEffect(0.9)
                         } else {
-                            Text(playerService.playbackStatus.isPlaying ? "PAUSE" : "PLAY")
+                            Text(AppCapitalization.format(playerService.playbackStatus.isPlaying ? "PAUSE" : "PLAY", enabled: isCaps))
                                 .font(.system(size: 12, weight: .black, design: .monospaced))
                                 .foregroundStyle(palette.foregroundColor)
                                 .contentTransition(.interpolate)

@@ -10,6 +10,7 @@ public struct PlaylistDetailView: View {
     @Bindable var playerService: AudioPlayerService
     @Environment(\.dismiss) private var dismiss
     @Environment(\.appTheme) private var appTheme
+    @Environment(\.isCapitalizationEnabled) private var isCaps: Bool
 
     @State private var isSearching: Bool = false
     @State private var searchQuery: String = ""
@@ -167,7 +168,7 @@ public struct PlaylistDetailView: View {
                                     playerService.play(track: first, inQueue: queue, startIndex: 0)
                                 }
                             }) {
-                                Text("PLAY")
+                                Text(AppCapitalization.format("PLAY", enabled: isCaps))
                             }
                             .buttonStyle(TypographicButtonStyle(variant: .primary, size: .regular))
                             .disabled(queue.isEmpty)
@@ -179,7 +180,7 @@ public struct PlaylistDetailView: View {
                                     playerService.play(track: first, inQueue: shuffled, startIndex: 0)
                                 }
                             }) {
-                                Text("SHUFFLE")
+                                Text(AppCapitalization.format("SHUFFLE", enabled: isCaps))
                             }
                             .buttonStyle(TypographicButtonStyle(variant: .secondary, size: .regular))
                             .disabled(queue.isEmpty)
@@ -294,7 +295,7 @@ public struct PlaylistDetailView: View {
                                         HStack(spacing: 6) {
                                             Image(systemName: "plus")
                                                 .font(.system(size: 11, weight: .bold))
-                                            Text("ADD")
+                                            Text(AppCapitalization.format("ADD", enabled: isCaps))
                                                 .font(.system(size: 11, weight: .bold, design: .monospaced))
                                         }
                                         .foregroundStyle(Color.primary)
@@ -315,7 +316,7 @@ public struct PlaylistDetailView: View {
                                 .transition(.opacity.combined(with: .move(edge: .top)))
                             }
 
-                            Text("TRACKLIST (\(rows.count))")
+                            Text(AppCapitalization.format("TRACKLIST (\(rows.count))", enabled: isCaps))
                                 .font(.system(size: 12, weight: .bold, design: .monospaced))
                                 .foregroundStyle(.secondary)
                                 .padding(.horizontal, 2)

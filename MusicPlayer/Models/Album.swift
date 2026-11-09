@@ -98,6 +98,30 @@ nonisolated public struct Album: Identifiable, Codable, Sendable, Hashable {
         self.alternateTracks = alternateTracks
     }
 
+    /// Canonical track sorting comparator: disc -> valid track number (numbered before missing) -> natural title -> url -> id tie-breaker.
+    public static func areTracksInOrder(_ lhs: Track, _ rhs: Track) -> Bool {
+        let lhsDisc = lhs.discNumber ?? 1
+        let rhsDisc = rhs.discNumber ?? 1
+        if lhsDisc != rhsDisc { return lhsDisc < rhsDisc }
+
+        let lhsNum = lhs.trackNumber ?? 0
+        let rhsNum = rhs.trackNumber ?? 0
+        if lhsNum > 0 && rhsNum > 0 && lhsNum != rhsNum {
+            return lhsNum < rhsNum
+        }
+        if lhsNum > 0 && rhsNum == 0 { return true }
+        if lhsNum == 0 && rhsNum > 0 { return false }
+
+        let titleCmp = lhs.title.localizedStandardCompare(rhs.title)
+        if titleCmp != .orderedSame {
+            return titleCmp == .orderedAscending
+        }
+        if lhs.url.absoluteString != rhs.url.absoluteString {
+            return lhs.url.absoluteString < rhs.url.absoluteString
+        }
+        return lhs.id.uuidString < rhs.id.uuidString
+    }
+
     // Initialize with configured properties
     public init(
         title: String,
@@ -137,26 +161,7 @@ nonisolated public struct Album: Identifiable, Codable, Sendable, Hashable {
         self.searchTokens = "\(nTitle) \(nArtist)"
 
         // Sort tracks by disc number then track number, then title
-        let sortedTracks = tracks.sorted { lhs, rhs in
-            // Lhs disc
-            let lhsDisc = lhs.discNumber ?? 1
-            // Rhs disc
-            let rhsDisc = rhs.discNumber ?? 1
-            if lhsDisc != rhsDisc { return lhsDisc < rhsDisc }
-
-            // Lhs num
-            let lhsNum = lhs.trackNumber ?? 0
-            // Rhs num
-            let rhsNum = rhs.trackNumber ?? 0
-            if lhsNum > 0 && rhsNum > 0 && lhsNum != rhsNum {
-                return lhsNum < rhsNum
-            }
-            // Numbered tracks always sort before un-numbered ones
-            if lhsNum > 0 && rhsNum == 0 { return true }
-            if lhsNum == 0 && rhsNum > 0 { return false }
-
-            return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
-        }
+        let sortedTracks = tracks.sorted(by: Album.areTracksInOrder)
         self.tracks = sortedTracks
 
         self.resolvedYear = Album.computeResolvedYear(tracks: sortedTracks, fallbackYear: year)
@@ -199,21 +204,7 @@ nonisolated public struct Album: Identifiable, Codable, Sendable, Hashable {
         self.normalizedArtist = nArtist
         self.searchTokens = "\(nTitle) \(nArtist)"
 
-        let sortedTracks = decodedTracks.sorted { lhs, rhs in
-            let lhsDisc = lhs.discNumber ?? 1
-            let rhsDisc = rhs.discNumber ?? 1
-            if lhsDisc != rhsDisc { return lhsDisc < rhsDisc }
-
-            let lhsNum = lhs.trackNumber ?? 0
-            let rhsNum = rhs.trackNumber ?? 0
-            if lhsNum > 0 && rhsNum > 0 && lhsNum != rhsNum {
-                return lhsNum < rhsNum
-            }
-            if lhsNum > 0 && rhsNum == 0 { return true }
-            if lhsNum == 0 && rhsNum > 0 { return false }
-
-            return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
-        }
+        let sortedTracks = decodedTracks.sorted(by: Album.areTracksInOrder)
         self.tracks = sortedTracks
 
         self.resolvedYear = Album.computeResolvedYear(tracks: sortedTracks, fallbackYear: self.year)
@@ -385,7 +376,14 @@ nonisolated public struct Album: Identifiable, Codable, Sendable, Hashable {
             if lNum > 0 && rNum == 0 { return true }
             if lNum == 0 && rNum > 0 { return false }
 
-            return lhs.key.title.localizedCaseInsensitiveCompare(rhs.key.title) == .orderedAscending
+            let titleCmp = lhs.key.title.localizedStandardCompare(rhs.key.title)
+            if titleCmp != .orderedSame {
+                return titleCmp == .orderedAscending
+            }
+            if lhs.track.url.absoluteString != rhs.track.url.absoluteString {
+                return lhs.track.url.absoluteString < rhs.track.url.absoluteString
+            }
+            return lhs.track.id.uuidString < rhs.track.id.uuidString
         }.map { $0.track }
     }
 

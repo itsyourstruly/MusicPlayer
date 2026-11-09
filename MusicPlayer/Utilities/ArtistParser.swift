@@ -133,10 +133,73 @@ nonisolated public enum ArtistParser: Sendable {
 
     /// Parses a raw artist string into discrete, individually selectable `ArtistSegment` tokens with intelligent compound name protection.
     public static func parse(rawArtist: String) -> [ArtistSegment] {
+        parse(rawArtist: rawArtist, customSeparators: [])
+    }
+
+    /// Parses a raw artist string into discrete tokens, optionally applying custom literal delimiters before built-in splitting.
+    public static func parse(rawArtist: String, customSeparators: [String]) -> [ArtistSegment] {
         let trimmed = rawArtist.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             return [ArtistSegment(name: "Unknown Artist")]
         }
+
+        let validSeparators = Array(Set(customSeparators.filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }))
+            .sorted { $0.count > $1.count }
+
+        if !validSeparators.isEmpty {
+            let chunks = splitByCustomSeparators(trimmed, separators: validSeparators)
+            if chunks.count > 1 || (chunks.count == 1 && chunks[0].sepAfter != nil) {
+                var allSegments: [ArtistSegment] = []
+                for (chunk, sepAfter) in chunks {
+                    let chunkTrimmed = chunk.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !chunkTrimmed.isEmpty else { continue }
+                    var chunkSegments = parseStandard(chunkTrimmed)
+                    if let sep = sepAfter, !chunkSegments.isEmpty {
+                        let lastIdx = chunkSegments.count - 1
+                        let existing = chunkSegments[lastIdx]
+                        chunkSegments[lastIdx] = ArtistSegment(name: existing.name, separatorAfter: existing.separatorAfter ?? sep)
+                    }
+                    allSegments.append(contentsOf: chunkSegments)
+                }
+                if !allSegments.isEmpty {
+                    return allSegments
+                }
+            }
+        }
+
+        return parseStandard(trimmed)
+    }
+
+    private static func splitByCustomSeparators(_ text: String, separators: [String]) -> [(chunk: String, sepAfter: String?)] {
+        var chunks: [(chunk: String, sepAfter: String?)] = []
+        var searchIndex = text.startIndex
+        var currentChunkStart = text.startIndex
+
+        while searchIndex < text.endIndex {
+            var matchedSep: String? = nil
+            for sep in separators {
+                if text[searchIndex...].hasPrefix(sep) {
+                    matchedSep = sep
+                    break
+                }
+            }
+
+            if let sep = matchedSep {
+                let chunkStr = String(text[currentChunkStart..<searchIndex])
+                chunks.append((chunk: chunkStr, sepAfter: sep))
+                searchIndex = text.index(searchIndex, offsetBy: sep.count)
+                currentChunkStart = searchIndex
+            } else {
+                searchIndex = text.index(after: searchIndex)
+            }
+        }
+
+        let trailingChunk = String(text[currentChunkStart..<text.endIndex])
+        chunks.append((chunk: trailingChunk, sepAfter: nil))
+        return chunks
+    }
+
+    private static func parseStandard(_ trimmed: String) -> [ArtistSegment] {
 
         // 1. Direct match for protected entity
         if isSingleArtistException(trimmed) {
@@ -257,11 +320,18 @@ nonisolated public enum ArtistParser: Sendable {
     }
 
     /// Parses a raw artist string into an array of clean individual artist name strings.
-    public static func parseArtists(from rawArtist: String) -> [String] {
-        parse(rawArtist: rawArtist).map { $0.name }
+    public static func parseArtists(from rawArtist: String, customSeparators: [String] = []) -> [String] {
+        parse(rawArtist: rawArtist, customSeparators: customSeparators).map { $0.name }
     }
 
     // MARK: - Featured Artist Extraction
+
+    public struct TitleFeaturedCreditInfo: Sendable {
+        public let baseTitle: String
+        public let featuredArtists: [String]
+        public let artistRangesInTitle: [(artistName: String, range: Range<String.Index>)]
+        public var hasFeaturedCredit: Bool { !featuredArtists.isEmpty }
+    }
 
     // Matches "(feat. X)", "[ft. X]", and trailing "feat. X" patterns across all common bracket styles
     private static let titleFeatureRegex: NSRegularExpression? = {
@@ -271,29 +341,53 @@ nonisolated public enum ArtistParser: Sendable {
 
     /// Extracts all featured artist names mentioned in a track title (e.g. `(feat. Drake & Future)` -> `["Drake", "Future"]`).
     public static func extractFeaturedArtists(fromTitle title: String) -> [String] {
+        parseTitleFeaturedCredit(title).featuredArtists
+    }
+
+    /// Parses terminal featured credit suffixes: (feat. X), [feat. X], feat. X, ft. X.
+    /// Preserves base title and computes exact character ranges of recognized featured artist names within the title.
+    public static func parseTitleFeaturedCredit(_ title: String) -> TitleFeaturedCreditInfo {
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, let regex = titleFeatureRegex else { return [] }
+        guard !trimmed.isEmpty, let regex = titleFeatureRegex else {
+            return TitleFeaturedCreditInfo(baseTitle: title, featuredArtists: [], artistRangesInTitle: [])
+        }
 
         let nsString = trimmed as NSString
         let matches = regex.matches(in: trimmed, options: [], range: NSRange(location: 0, length: nsString.length))
+        guard let lastMatch = matches.last else {
+            return TitleFeaturedCreditInfo(baseTitle: title, featuredArtists: [], artistRangesInTitle: [])
+        }
+
+        let suffixRange = lastMatch.range
+        let baseNSRange = NSRange(location: 0, length: suffixRange.location)
+        let rawBase = nsString.substring(with: baseNSRange).trimmingCharacters(in: .whitespacesAndNewlines)
+        let baseTitle = rawBase.isEmpty ? trimmed : rawBase
 
         var featuredArtists: [String] = []
-        for match in matches {
-            for groupIndex in 1...3 {
-                let range = match.range(at: groupIndex)
-                if range.location != NSNotFound && range.length > 0 {
-                    let featureString = nsString.substring(with: range)
-                    let artists = parseArtists(from: featureString)
-                    for a in artists {
-                        let clean = cleanArtistToken(a)
-                        if !clean.isEmpty && !featuredArtists.contains(where: { $0.caseInsensitiveCompare(clean) == .orderedSame }) {
-                            featuredArtists.append(clean)
-                        }
+        var artistRanges: [(artistName: String, range: Range<String.Index>)] = []
+
+        for groupIndex in 1...3 {
+            let range = lastMatch.range(at: groupIndex)
+            if range.location != NSNotFound && range.length > 0 {
+                let featureString = nsString.substring(with: range)
+                let artists = parseArtists(from: featureString)
+                for a in artists {
+                    let clean = cleanArtistToken(a)
+                    if !clean.isEmpty && !isGenericArtistName(clean) && !featuredArtists.contains(where: { $0.caseInsensitiveCompare(clean) == .orderedSame }) {
+                        featuredArtists.append(clean)
+                    }
+                    if let swiftRange = title.range(of: clean, options: [.caseInsensitive]) {
+                        artistRanges.append((artistName: clean, range: swiftRange))
                     }
                 }
             }
         }
-        return featuredArtists
+
+        return TitleFeaturedCreditInfo(
+            baseTitle: baseTitle,
+            featuredArtists: featuredArtists,
+            artistRangesInTitle: artistRanges
+        )
     }
 
     /// Checks whether an artist name is a generic compilation placeholder that should not be indexed as a real artist.
@@ -314,19 +408,24 @@ nonisolated public enum ArtistParser: Sendable {
     }
 
     /// Returns all distinct real artists associated with a track (primary artists from artist/albumArtist, plus featured artists from the title).
-    public static func allArtists(forTitle title: String, artist: String, albumArtist: String? = nil) -> [String] {
+    public static func allArtists(
+        forTitle title: String,
+        artist: String,
+        albumArtist: String? = nil,
+        customSeparators: [String] = []
+    ) -> [String] {
         var results: [String] = []
 
         let cleanDirect = artist.trimmingCharacters(in: .whitespacesAndNewlines)
         if isSingleArtistException(cleanDirect) {
-            let parsedDirect = parse(rawArtist: cleanDirect)
+            let parsedDirect = parse(rawArtist: cleanDirect, customSeparators: customSeparators)
             for seg in parsedDirect {
                 if !seg.name.isEmpty && !isGenericArtistName(seg.name) {
                     results.append(seg.name)
                 }
             }
         } else {
-            let direct = parseArtists(from: artist)
+            let direct = parseArtists(from: artist, customSeparators: customSeparators)
             for a in direct {
                 let clean = cleanArtistToken(a)
                 if !clean.isEmpty && !isGenericArtistName(clean) && !results.contains(where: { $0.caseInsensitiveCompare(clean) == .orderedSame }) {
@@ -339,14 +438,14 @@ nonisolated public enum ArtistParser: Sendable {
         if let albArt = albumArtist, !albArt.isEmpty {
             let cleanAlb = albArt.trimmingCharacters(in: .whitespacesAndNewlines)
             if isSingleArtistException(cleanAlb) {
-                let parsedAlb = parse(rawArtist: cleanAlb)
+                let parsedAlb = parse(rawArtist: cleanAlb, customSeparators: customSeparators)
                 for seg in parsedAlb {
                     if !seg.name.isEmpty && !isGenericArtistName(seg.name) && !results.contains(where: { $0.caseInsensitiveCompare(seg.name) == .orderedSame }) {
                         results.append(seg.name)
                     }
                 }
             } else {
-                let albArtists = parseArtists(from: albArt)
+                let albArtists = parseArtists(from: albArt, customSeparators: customSeparators)
                 for a in albArtists {
                     let clean = cleanArtistToken(a)
                     if !clean.isEmpty && !isGenericArtistName(clean) && !results.contains(where: { $0.caseInsensitiveCompare(clean) == .orderedSame }) {
@@ -451,7 +550,8 @@ nonisolated public enum ArtistParser: Sendable {
     public static func resolveAlbumArtists(
         for tracks: [Track],
         explicitAlbumArtist: String? = nil,
-        joinedArtists: [String] = []
+        joinedArtists: [String] = [],
+        customSeparators: [String] = []
     ) -> [String] {
         let cleanExplicit = explicitAlbumArtist?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let explicitCanonical = canonicalArtistKey(cleanExplicit)
@@ -463,9 +563,9 @@ nonisolated public enum ArtistParser: Sendable {
                 if explicitCanonical == joinedCanonical {
                     return [joined]
                 }
-                let joinedParts = parseArtists(from: joined).map { canonicalArtistKey($0) }
+                let joinedParts = parseArtists(from: joined, customSeparators: customSeparators).map { canonicalArtistKey($0) }
                 if joinedParts.count > 1 {
-                    let explicitParts = parseArtists(from: cleanExplicit).map { canonicalArtistKey($0) }
+                    let explicitParts = parseArtists(from: cleanExplicit, customSeparators: customSeparators).map { canonicalArtistKey($0) }
                     if Set(joinedParts).isSubset(of: Set(explicitParts)) {
                         return [joined]
                     }
@@ -475,7 +575,7 @@ nonisolated public enum ArtistParser: Sendable {
 
         // 2. If explicitAlbumArtist has multiple parsed artists (e.g. "Drake & 21 Savage")
         if !cleanExplicit.isEmpty && !isGenericArtistName(cleanExplicit) {
-            let explicitParsed = parseArtists(from: cleanExplicit).filter { !isGenericArtistName($0) }
+            let explicitParsed = parseArtists(from: cleanExplicit, customSeparators: customSeparators).filter { !isGenericArtistName($0) }
             if explicitParsed.count > 1 {
                 return explicitParsed
             }
@@ -494,10 +594,10 @@ nonisolated public enum ArtistParser: Sendable {
         if n == 1 {
             let track = tracks[0]
             if !cleanExplicit.isEmpty && !isGenericArtistName(cleanExplicit) {
-                let parsed = parseArtists(from: cleanExplicit).filter { !isGenericArtistName($0) }
+                let parsed = parseArtists(from: cleanExplicit, customSeparators: customSeparators).filter { !isGenericArtistName($0) }
                 if !parsed.isEmpty { return parsed }
             }
-            let trackArtists = parseArtists(from: track.artist).filter { !isGenericArtistName($0) }
+            let trackArtists = parseArtists(from: track.artist, customSeparators: customSeparators).filter { !isGenericArtistName($0) }
             if !trackArtists.isEmpty { return trackArtists }
             return [track.artist.isEmpty ? "Unknown Artist" : track.artist]
         }
@@ -507,12 +607,12 @@ nonisolated public enum ArtistParser: Sendable {
             var seen = Set<String>()
             var result: [String] = []
             if !cleanExplicit.isEmpty && !isGenericArtistName(cleanExplicit) {
-                for a in parseArtists(from: cleanExplicit) where !isGenericArtistName(a) && seen.insert(canonicalArtistKey(a)).inserted {
+                for a in parseArtists(from: cleanExplicit, customSeparators: customSeparators) where !isGenericArtistName(a) && seen.insert(canonicalArtistKey(a)).inserted {
                     result.append(a)
                 }
             }
             for track in tracks {
-                for a in parseArtists(from: track.artist) where !isGenericArtistName(a) && seen.insert(canonicalArtistKey(a)).inserted {
+                for a in parseArtists(from: track.artist, customSeparators: customSeparators) where !isGenericArtistName(a) && seen.insert(canonicalArtistKey(a)).inserted {
                     result.append(a)
                 }
             }
@@ -530,8 +630,8 @@ nonisolated public enum ArtistParser: Sendable {
         var statsByCanonical: [String: ArtistStats] = [:]
 
         for (idx, track) in tracks.enumerated() {
-            let primaryParsed = parseArtists(from: track.artist).filter { !isGenericArtistName($0) }
-            let allOnTrack = allArtists(forTitle: track.title, artist: track.artist, albumArtist: track.albumArtist).filter { !isGenericArtistName($0) }
+            let primaryParsed = parseArtists(from: track.artist, customSeparators: customSeparators).filter { !isGenericArtistName($0) }
+            let allOnTrack = allArtists(forTitle: track.title, artist: track.artist, albumArtist: track.albumArtist, customSeparators: customSeparators).filter { !isGenericArtistName($0) }
 
             for a in primaryParsed {
                 let k = canonicalArtistKey(a)
@@ -567,7 +667,7 @@ nonisolated public enum ArtistParser: Sendable {
 
         // Always include explicit album artist if present and non-generic
         if !cleanExplicit.isEmpty && !isGenericArtistName(cleanExplicit) {
-            for a in parseArtists(from: cleanExplicit) where !isGenericArtistName(a) {
+            for a in parseArtists(from: cleanExplicit, customSeparators: customSeparators) where !isGenericArtistName(a) {
                 let k = canonicalArtistKey(a)
                 if !k.isEmpty {
                     qualifiedCanonicals.insert(k)

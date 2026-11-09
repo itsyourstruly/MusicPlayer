@@ -123,43 +123,34 @@ public struct FolderHierarchyScanner: Sendable {
         // 2. Extract hierarchy components from folder nesting
         let hierarchy = extractHierarchy(for: url, rootFolderURL: rootFolderURL)
 
-        // 3. Filename track number and title extraction
+        // 3. Intelligently extract clean title, artist, track number, disc, and year
         let filenameWithoutExt = url.deletingPathExtension().lastPathComponent
-        let fnMeta = parseFilenameMetadata(filename: filenameWithoutExt)
 
-        // 4. Resolve Title: filename title -> embedded tag title -> raw filename
-        let finalTitle: String = {
-            if let t = fnMeta.title, !t.isEmpty, !isGenericString(t) {
-                return t
-            }
-            if let t = binaryMeta?.title?.trimmingCharacters(in: .whitespacesAndNewlines), !t.isEmpty, !isGenericString(t) {
-                return t
-            }
-            return filenameWithoutExt
+        let candidateArtist: String? = {
+            if let a = hierarchy.artist, !a.isEmpty, !isGenericString(a) { return a }
+            if let a = binaryMeta?.artist?.trimmingCharacters(in: .whitespacesAndNewlines), !a.isEmpty, !isGenericString(a) { return a }
+            if let a = binaryMeta?.author?.trimmingCharacters(in: .whitespacesAndNewlines), !a.isEmpty, !isGenericString(a) { return a }
+            if let a = avArtist?.trimmingCharacters(in: .whitespacesAndNewlines), !a.isEmpty, !isGenericString(a) { return a }
+            if let a = avAuthor?.trimmingCharacters(in: .whitespacesAndNewlines), !a.isEmpty, !isGenericString(a) { return a }
+            return nil
         }()
 
-        // 5. Resolve Artist: folder artist -> filename artist -> embedded tag artist -> embedded tag author -> AV artist -> AV author -> Unknown Artist
-        let finalArtist: String = {
-            if let a = hierarchy.artist, !a.isEmpty, !isGenericString(a) {
-                return a
-            }
-            if let a = fnMeta.artist, !a.isEmpty, !isGenericString(a) {
-                return a
-            }
-            if let a = binaryMeta?.artist?.trimmingCharacters(in: .whitespacesAndNewlines), !a.isEmpty, !isGenericString(a) {
-                return a
-            }
-            if let a = binaryMeta?.author?.trimmingCharacters(in: .whitespacesAndNewlines), !a.isEmpty, !isGenericString(a) {
-                return a
-            }
-            if let a = avArtist?.trimmingCharacters(in: .whitespacesAndNewlines), !a.isEmpty, !isGenericString(a) {
-                return a
-            }
-            if let a = avAuthor?.trimmingCharacters(in: .whitespacesAndNewlines), !a.isEmpty, !isGenericString(a) {
-                return a
-            }
-            return "Unknown Artist"
-        }()
+        let extractedMeta = TrackMetadataExtractor.extract(
+            rawTitle: binaryMeta?.title,
+            existingArtist: candidateArtist,
+            existingAlbum: hierarchy.album ?? binaryMeta?.album,
+            existingAlbumArtist: binaryMeta?.albumArtist,
+            existingTrackNumber: binaryMeta?.trackNumber,
+            existingDiscNumber: hierarchy.discNumber ?? binaryMeta?.discNumber,
+            existingYear: hierarchy.year ?? binaryMeta?.year,
+            fallbackFilename: filenameWithoutExt
+        )
+
+        // 4. Resolve Title: clean extracted title -> raw filename
+        let finalTitle = extractedMeta.cleanTitle.isEmpty ? filenameWithoutExt : extractedMeta.cleanTitle
+
+        // 5. Resolve Artist: folder artist -> extracted artist -> Unknown Artist
+        let finalArtist = extractedMeta.artist ?? "Unknown Artist"
 
         // 6. Resolve Album: folder album -> embedded tag album -> "Singles" / "Unknown Album"
         let finalAlbum: String = {
@@ -175,11 +166,11 @@ public struct FolderHierarchyScanner: Sendable {
             return "Unknown Album"
         }()
 
-        // 7. Resolve Disc Number: folder disc -> embedded tag disc
-        let finalDiscNumber: Int? = hierarchy.discNumber ?? binaryMeta?.discNumber
+        // 7. Resolve Disc Number: folder disc -> extracted disc -> embedded tag disc
+        let finalDiscNumber: Int? = hierarchy.discNumber ?? extractedMeta.discNumber ?? binaryMeta?.discNumber
 
-        // 8. Resolve Track Number: filename track number -> embedded tag track number
-        let finalTrackNumber: Int? = fnMeta.trackNumber ?? binaryMeta?.trackNumber
+        // 8. Resolve Track Number: extracted track number -> embedded tag track number
+        let finalTrackNumber: Int? = extractedMeta.trackNumber ?? binaryMeta?.trackNumber
 
         // 9. Artwork Resolution: embedded artwork -> local folder artwork file
         var artworkKey: String?
@@ -246,7 +237,7 @@ public struct FolderHierarchyScanner: Sendable {
             album: finalAlbum,
             albumArtist: hierarchy.artist ?? binaryMeta?.albumArtist,
             genre: binaryMeta?.genre,
-            year: hierarchy.year ?? binaryMeta?.year,
+            year: hierarchy.year ?? binaryMeta?.year ?? extractedMeta.year,
             trackNumber: finalTrackNumber,
             totalTracks: binaryMeta?.totalTracks,
             discNumber: finalDiscNumber,
@@ -257,7 +248,7 @@ public struct FolderHierarchyScanner: Sendable {
             fileInfo: audioFileInfo,
             lyrics: binaryMeta?.lyrics,
             relativePath: relativePath,
-            metadataSource: .embeddedTags,
+            metadataSource: .folderStructure,
             tagSnapshot: tagSnap
         )
     }
@@ -425,58 +416,8 @@ public struct FolderHierarchyScanner: Sendable {
 
     /// Parses track number, artist, and title from standard file name patterns.
     private func parseFilenameMetadata(filename: String) -> (trackNumber: Int?, artist: String?, title: String?) {
-        var clean = filename.trimmingCharacters(in: .whitespacesAndNewlines)
-        var trackNumber: Int?
-        var artist: String?
-        var title: String?
-
-        // Check leading digits (e.g. "01 - ", "01. ", "01 ", "1-01 ", "1.01 ")
-        let digitsPattern = #"^(\d{1,3})[\s\-\.\_]+"#
-        if let regex = try? NSRegularExpression(pattern: digitsPattern),
-           let match = regex.firstMatch(in: clean, options: [], range: NSRange(location: 0, length: clean.utf16.count)) {
-            if let numRange = Range(match.range(at: 1), in: clean), let num = Int(clean[numRange]), num > 0 {
-                trackNumber = num
-                if let fullRange = Range(match.range, in: clean) {
-                    clean = String(clean[fullRange.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
-                }
-            }
-        }
-
-        // Multi-disc filename prefix check (e.g. "1-01 Song Title")
-        let multiDiscPrefix = #"^(\d{1})\-(\d{1,2})[\s\-\.\_]+"#
-        if trackNumber == nil,
-           let regex = try? NSRegularExpression(pattern: multiDiscPrefix),
-           let match = regex.firstMatch(in: clean, options: [], range: NSRange(location: 0, length: clean.utf16.count)) {
-            if let trackRange = Range(match.range(at: 2), in: clean), let num = Int(clean[trackRange]), num > 0 {
-                trackNumber = num
-                if let fullRange = Range(match.range, in: clean) {
-                    clean = String(clean[fullRange.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
-                }
-            }
-        }
-
-        // Split on standard delimiters (" - ", " — ", " – ")
-        let delimiters = [" - ", " — ", " – "]
-        for delim in delimiters {
-            if clean.contains(delim) {
-                let parts = clean.components(separatedBy: delim).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
-                if parts.count == 2 {
-                    artist = parts[0]
-                    title = parts[1]
-                    return (trackNumber, artist, title)
-                } else if parts.count >= 3 {
-                    artist = parts[0]
-                    title = parts[1...].joined(separator: " - ")
-                    return (trackNumber, artist, title)
-                }
-            }
-        }
-
-        if !clean.isEmpty {
-            title = clean
-        }
-
-        return (trackNumber, artist, title)
+        let extracted = TrackMetadataExtractor.extract(rawTitle: filename)
+        return (extracted.trackNumber, extracted.artist, extracted.cleanTitle)
     }
 
     private func isGenericString(_ str: String) -> Bool {

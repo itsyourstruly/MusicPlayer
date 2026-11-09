@@ -72,6 +72,7 @@ public struct FullScreenPlayerView: View {
     @State private var touchStretchX: CGFloat = 1.0
     @State private var touchStretchY: CGFloat = 1.0
     @State private var swayAnimationTask: Task<Void, Never>? = nil
+    @Environment(\.isCapitalizationEnabled) private var isCaps: Bool
 
     @State private var palette: ArtworkColorExtractor.ColorPalette = ArtworkColorExtractor.ColorPalette(
         primaryColor: Color.appSecondaryBackground,
@@ -318,7 +319,7 @@ public struct FullScreenPlayerView: View {
                     showingQueue = true
                 }) {
                     HStack(spacing: 6) {
-                        Text("QUEUE")
+                        Text(AppCapitalization.format("QUEUE", enabled: isCaps))
                             .font(.system(size: 13, weight: .bold, design: .monospaced))
                         Text("↑")
                             .font(.system(size: 13, weight: .bold, design: .monospaced))
@@ -408,7 +409,7 @@ public struct FullScreenPlayerView: View {
                         showingQueue = true
                     }) {
                         HStack(spacing: 6) {
-                            Text("QUEUE")
+                            Text(AppCapitalization.format("QUEUE", enabled: isCaps))
                                 .font(.system(size: 13, weight: .bold, design: .monospaced))
                             Text("↑")
                                 .font(.system(size: 13, weight: .bold, design: .monospaced))
@@ -1062,11 +1063,11 @@ public struct FullScreenPlayerView: View {
                     }
                 }
             }
-            .navigationTitle("MOVE TO PLAYLIST")
+            .navigationTitle(AppCapitalization.format("MOVE TO PLAYLIST", enabled: isCaps))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("DONE") {
+                    Button(AppCapitalization.format("DONE", enabled: isCaps)) {
                         showingChangePlaylistSheet = false
                     }
                     .font(.system(size: 13, weight: .bold, design: .monospaced))

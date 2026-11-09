@@ -6,6 +6,7 @@ import SwiftUI
 public struct PlaybackSettingsView: View {
     @Bindable var libraryStore: LibraryStore
     @Bindable var playerService: AudioPlayerService
+    @Environment(\.isCapitalizationEnabled) private var isCaps: Bool
     @State private var activeDetail: SettingOptionDetail? = nil
 
     // Initialize with configured properties
@@ -38,7 +39,7 @@ public struct PlaybackSettingsView: View {
             .padding(.bottom, 60)
         }
         .background(libraryStore.settings.appTheme.backgroundColor.ignoresSafeArea())
-        .navigationTitle("PLAYBACK")
+        .navigationTitle(AppCapitalization.format("PLAYBACK", enabled: isCaps))
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
             // Write only values that actually differ: any assignment to an @Observable property notifies
@@ -85,7 +86,7 @@ public struct PlaybackSettingsView: View {
             if libraryStore.settings.isCrossfadeEnabled {
                 VStack(alignment: .leading, spacing: 8) {
                     HStack {
-                        Text("DURATION")
+                        Text(AppCapitalization.format("DURATION", enabled: isCaps))
                             .font(.system(size: 13, weight: .bold, design: .monospaced))
                             .foregroundStyle(.secondary)
 
@@ -175,13 +176,13 @@ public struct PlaybackSettingsView: View {
                 if libraryStore.settings.rememberPlaybackPosition {
                     VStack(alignment: .leading, spacing: 8) {
                         HStack {
-                            Text("MIN TRACK LENGTH")
+                            Text(AppCapitalization.format("MIN TRACK LENGTH", enabled: isCaps))
                                 .font(.system(size: 13, weight: .bold, design: .monospaced))
                                 .foregroundStyle(.secondary)
 
                             Spacer()
 
-                            Text("\(Int(libraryStore.settings.rememberPlaybackPositionMinMinutes)) MIN")
+                            Text("\(Int(libraryStore.settings.rememberPlaybackPositionMinMinutes)) \(AppCapitalization.format("MIN", enabled: isCaps))")
                                 .font(.system(size: 13, weight: .bold, design: .monospaced))
                                 .foregroundStyle(libraryStore.settings.appTheme.accentColor)
                         }

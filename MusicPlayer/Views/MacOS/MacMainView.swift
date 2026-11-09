@@ -21,6 +21,7 @@ public struct MacMainView: View {
     @State private var isDropTargeted: Bool = false
 
     @Environment(\.appTheme) private var appTheme
+    @Environment(\.isCapitalizationEnabled) private var isCaps: Bool
 
     // Initialize with configured properties
     public init(libraryStore: LibraryStore, playerService: AudioPlayerService) {
@@ -246,7 +247,7 @@ public struct MacMainView: View {
                     .padding(.vertical, 16)
                 }
                 .background(appTheme.backgroundColor)
-                .navigationTitle("ALBUMS")
+                .navigationTitle(AppCapitalization.format("ALBUMS", enabled: isCaps))
             }
 
         case .artists:
@@ -259,7 +260,7 @@ public struct MacMainView: View {
                     .padding(.vertical, 16)
                 }
                 .background(appTheme.backgroundColor)
-                .navigationTitle("ARTISTS")
+                .navigationTitle(AppCapitalization.format("ARTISTS", enabled: isCaps))
             }
 
         case .duplicates:
@@ -291,7 +292,7 @@ public struct MacMainView: View {
         NavigationStack {
             List {
                 if libraryStore.playlists.isEmpty {
-                    Text("NO PLAYLISTS CREATED")
+                    Text(AppCapitalization.format("NO PLAYLISTS CREATED", enabled: isCaps))
                         .font(.system(size: 11, design: .monospaced))
                         .foregroundStyle(.secondary)
                 } else {
@@ -309,7 +310,7 @@ public struct MacMainView: View {
                                         .foregroundStyle(.secondary)
                                 }
                                 Spacer()
-                                Text("ADD")
+                                Text(AppCapitalization.format("ADD", enabled: isCaps))
                                     .font(.system(size: 10, weight: .bold, design: .monospaced))
                                     .foregroundStyle(appTheme.accentColor)
                             }
@@ -318,10 +319,10 @@ public struct MacMainView: View {
                     }
                 }
             }
-            .navigationTitle("ADD TO PLAYLIST")
+            .navigationTitle(AppCapitalization.format("ADD TO PLAYLIST", enabled: isCaps))
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("DONE") {
+                    Button(AppCapitalization.format("DONE", enabled: isCaps)) {
                         selectedTrackForPlaylist = nil
                     }
                     .font(.system(size: 11, weight: .bold, design: .monospaced))

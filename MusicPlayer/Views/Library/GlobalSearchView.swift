@@ -903,6 +903,7 @@ public struct GlobalSearchView: View {
     @Bindable var playerService: AudioPlayerService
     @Environment(\.dismiss) private var dismiss
     @Environment(\.appTheme) private var appTheme
+    @Environment(\.isCapitalizationEnabled) private var isCaps: Bool
 
     @State private var searchQuery: String = ""
     @State private var searchModel = GlobalSearchModel()
@@ -1020,13 +1021,13 @@ public struct GlobalSearchView: View {
                     }
                 }
         )
-        .navigationTitle("SEARCH LIBRARY")
+        .navigationTitle(AppCapitalization.format("SEARCH LIBRARY", enabled: isCaps))
         .navigationBarTitleDisplayMode(.inline)
         .searchable(
             text: $searchQuery,
             isPresented: $isSearchPresented,
             placement: .navigationBarDrawer(displayMode: .always),
-            prompt: Text("SEARCH TRACKS, ARTISTS, ALBUMS...")
+            prompt: Text(AppCapitalization.format("SEARCH TRACKS, ARTISTS, ALBUMS...", enabled: isCaps))
         )
         .searchFocused($isSearchFieldFocused)
         .onChange(of: isSearchPresented) { _, presented in
@@ -1216,7 +1217,7 @@ public struct GlobalSearchView: View {
         if !recentTracks.isEmpty {
             VStack(alignment: .leading, spacing: 14) {
                 HStack {
-                    Text("RECENTLY PLAYED")
+                    Text(AppCapitalization.format("RECENTLY PLAYED", enabled: isCaps))
                         .font(.system(size: 11, weight: .bold, design: .monospaced))
                         .foregroundStyle(.secondary)
 
@@ -1227,7 +1228,7 @@ public struct GlobalSearchView: View {
                             libraryStore.clearRecentSearchPlayedTracks()
                         }
                     }) {
-                        Text("CLEAR")
+                        Text(AppCapitalization.format("CLEAR", enabled: isCaps))
                             .font(.system(size: 10, weight: .bold, design: .monospaced))
                             .foregroundStyle(.secondary)
                             .padding(.horizontal, 8)
@@ -1347,6 +1348,7 @@ public struct SearchTreeTrackRowView: View {
     @State private var dragOffset: CGFloat = 0
     @State private var showPlayNextSuccess: Bool = false
     @State private var showQueueNextSuccess: Bool = false
+    @Environment(\.isCapitalizationEnabled) private var isCaps: Bool
 
     private var track: Track { trackNode.track }
     private var isCurrent: Bool { playerService.currentTrack?.id == track.id }
@@ -1453,17 +1455,17 @@ public struct SearchTreeTrackRowView: View {
         }
         .contextMenu {
             Button(action: triggerPlayNext) {
-                Text("PLAY NEXT")
+                Text(AppCapitalization.format("PLAY NEXT", enabled: isCaps))
             }
 
             Button(action: triggerQueueNext) {
-                Text("QUEUE")
+                Text(AppCapitalization.format("QUEUE", enabled: isCaps))
             }
 
             Button(action: {
                 onAddToPlaylist(track)
             }) {
-                Text("ADD TO PLAYLIST")
+                Text(AppCapitalization.format("ADD TO PLAYLIST", enabled: isCaps))
             }
 
             QuickAddToPlaylistMenu(tracks: [track], libraryStore: libraryStore)
@@ -1473,7 +1475,7 @@ public struct SearchTreeTrackRowView: View {
             Button(action: {
                 onShowInfo(track)
             }) {
-                Text("FILE INFO")
+                Text(AppCapitalization.format("FILE INFO", enabled: isCaps))
             }
 
             TrackMenuBottomItem(track: track, isPlayingOrNext: isCurrent || playerService.nextTrack?.id == track.id) {
@@ -1531,6 +1533,7 @@ public struct SearchAlbumTreeNodeRow: View {
     public let onSelectAlbum: (Album) -> Void
     // Album menu GO TO ARTIST
     public var onSelectArtist: ((Artist) -> Void)? = nil
+    @Environment(\.isCapitalizationEnabled) private var isCaps: Bool
 
     public var body: some View {
         let resolvedAlbumArt = albumNode.album.artworkKey ?? albumNode.album.tracks.first(where: { $0.artworkKey != nil })?.artworkKey
@@ -1563,7 +1566,7 @@ public struct SearchAlbumTreeNodeRow: View {
                         .font(.system(size: 10))
                         .foregroundStyle(.tertiary)
 
-                    Text("\(albumNode.tracks.count) \(albumNode.tracks.count == 1 ? "TRACK" : "TRACKS")")
+                    Text("\(albumNode.tracks.count) \(albumNode.tracks.count == 1 ? AppCapitalization.format("TRACK", enabled: isCaps) : AppCapitalization.format("TRACKS", enabled: isCaps))")
                         .font(.system(size: 10, design: .monospaced))
                         .foregroundStyle(.secondary)
                 }
@@ -1574,7 +1577,7 @@ public struct SearchAlbumTreeNodeRow: View {
             Button(action: {
                 onSelectAlbum(albumNode.album)
             }) {
-                Text("OPEN")
+                Text(AppCapitalization.format("OPEN", enabled: isCaps))
                     .font(.system(size: 12, weight: .bold, design: .monospaced))
                     .foregroundStyle(Color.primary)
                     .padding(.horizontal, 6)
@@ -1601,6 +1604,7 @@ public struct SearchArtistTreeNodeRow: View {
     @Bindable var playerService: AudioPlayerService
     public let onSelectArtist: (Artist) -> Void
     public let onToggleArtistExpansion: (String) -> Void
+    @Environment(\.isCapitalizationEnabled) private var isCaps: Bool
 
     public var body: some View {
         let summary = artistNode.artist.discographySummary
@@ -1632,7 +1636,7 @@ public struct SearchArtistTreeNodeRow: View {
             Button(action: {
                 onSelectArtist(artistNode.artist)
             }) {
-                Text("OPEN")
+                Text(AppCapitalization.format("OPEN", enabled: isCaps))
                     .font(.system(size: 13, weight: .bold, design: .monospaced))
                     .foregroundStyle(Color.primary)
                     .padding(.horizontal, 6)
@@ -1650,7 +1654,7 @@ public struct SearchArtistTreeNodeRow: View {
             Button(action: {
                 onSelectArtist(artistNode.artist)
             }) {
-                Text("VIEW ARTIST")
+                Text(AppCapitalization.format("VIEW ARTIST", enabled: isCaps))
             }
 
             Button(action: {
@@ -1659,7 +1663,7 @@ public struct SearchArtistTreeNodeRow: View {
                     playerService.play(track: first, inQueue: artistNode.artist.tracks)
                 }
             }) {
-                Text("PLAY ARTIST")
+                Text(AppCapitalization.format("PLAY ARTIST", enabled: isCaps))
             }
 
             Button(action: {
@@ -1670,7 +1674,7 @@ public struct SearchArtistTreeNodeRow: View {
                     playerService.play(track: first, inQueue: shuffled)
                 }
             }) {
-                Text("SHUFFLE ARTIST")
+                Text(AppCapitalization.format("SHUFFLE ARTIST", enabled: isCaps))
             }
         }
     }
@@ -1738,6 +1742,7 @@ public struct SearchResultRowView: View, Equatable {
     public let row: SearchResultRow
     @Bindable var libraryStore: LibraryStore
     @Bindable var playerService: AudioPlayerService
+    @Environment(\.isCapitalizationEnabled) private var isCaps: Bool
 
     public let onSelectArtist: (Artist) -> Void
     public let onSelectAlbum: (Album) -> Void
@@ -1825,7 +1830,7 @@ public struct SearchResultRowView: View, Equatable {
                 onShowInfo: onSelectTrackForInfo
             )
         case let .looseTracksHeader(count):
-            Text("TRACKS (\(count))")
+            Text(AppCapitalization.format("TRACKS (\(count))", enabled: isCaps))
                 .font(.system(size: 11, weight: .bold, design: .monospaced))
                 .foregroundStyle(.secondary)
                 .padding(.leading, 4)
@@ -1848,7 +1853,7 @@ public struct SearchResultRowView: View, Equatable {
             .padding(.vertical, -6)
         case .loadMore:
             Button(action: onLoadMoreTracks) {
-                Text("SHOW MORE TRACKS")
+                Text(AppCapitalization.format("SHOW MORE TRACKS", enabled: isCaps))
                     .font(.system(size: 11, weight: .bold, design: .monospaced))
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .center)
@@ -1863,7 +1868,7 @@ public struct SearchResultRowView: View, Equatable {
         case let .playlistsHeader(count, isCollapsed):
             Button(action: onTogglePlaylistsCollapse) {
                 HStack {
-                    Text("PLAYLISTS (\(count))")
+                    Text(AppCapitalization.format("PLAYLISTS (\(count))", enabled: isCaps))
                         .font(.system(size: 11, weight: .bold, design: .monospaced))
                         .foregroundStyle(.secondary)
 
@@ -1885,7 +1890,7 @@ public struct SearchResultRowView: View, Equatable {
 
     private func filteredArtistRow(_ artistNode: SearchTreeArtistNode) -> some View {
         let totalTracks = artistNode.albums.reduce(0) { $0 + $1.tracks.count }
-        let summary = "\(artistNode.albums.count) \(artistNode.albums.count == 1 ? "ALBUM" : "ALBUMS") · \(totalTracks) \(totalTracks == 1 ? "TRACK" : "TRACKS")"
+        let summary = "\(artistNode.albums.count) \(artistNode.albums.count == 1 ? AppCapitalization.format("ALBUM", enabled: isCaps) : AppCapitalization.format("ALBUMS", enabled: isCaps)) · \(totalTracks) \(totalTracks == 1 ? AppCapitalization.format("TRACK", enabled: isCaps) : AppCapitalization.format("TRACKS", enabled: isCaps))"
 
         return Button(action: {
             onSelectArtist(artistNode.artist)
@@ -1913,7 +1918,7 @@ public struct SearchResultRowView: View, Equatable {
 
                 Spacer()
 
-                Text("OPEN")
+                Text(AppCapitalization.format("OPEN", enabled: isCaps))
                     .font(.system(size: 12, weight: .bold, design: .monospaced))
                     .foregroundStyle(Color.primary)
             }
@@ -1926,7 +1931,7 @@ public struct SearchResultRowView: View, Equatable {
             Button(action: {
                 onSelectArtist(artistNode.artist)
             }) {
-                Text("VIEW ARTIST")
+                Text(AppCapitalization.format("VIEW ARTIST", enabled: isCaps))
             }
         }
     }
@@ -1970,7 +1975,7 @@ public struct SearchResultRowView: View, Equatable {
 
                 Spacer()
 
-                Text("OPEN")
+                Text(AppCapitalization.format("OPEN", enabled: isCaps))
                     .font(.system(size: 12, weight: .bold, design: .monospaced))
                     .foregroundStyle(Color.primary)
             }
@@ -2111,6 +2116,7 @@ private struct SearchAdaptiveGridLayout: Layout {
 // MARK: - Tree Controls Bar
 
 private struct SearchTreeControlsBar: View {
+    @Environment(\.isCapitalizationEnabled) private var isCaps: Bool
     let artistsCount: Int
     let albumsCount: Int
     let tracksCount: Int
@@ -2125,7 +2131,7 @@ private struct SearchTreeControlsBar: View {
                     HapticFeedback.selectionChanged()
                     onToggleCategoryFilter(.artists)
                 }) {
-                    Text("\(artistsCount) ARTISTS")
+                    Text(AppCapitalization.format("\(artistsCount) ARTISTS", enabled: isCaps))
                         .font(.system(size: 11, weight: .bold, design: .monospaced))
                         .foregroundStyle(activeCategoryFilter == .artists ? Color.white : Color.secondary)
                         .padding(.vertical, 2)
@@ -2141,7 +2147,7 @@ private struct SearchTreeControlsBar: View {
                     HapticFeedback.selectionChanged()
                     onToggleCategoryFilter(.albums)
                 }) {
-                    Text("\(albumsCount) ALBUMS")
+                    Text(AppCapitalization.format("\(albumsCount) ALBUMS", enabled: isCaps))
                         .font(.system(size: 11, weight: .bold, design: .monospaced))
                         .foregroundStyle(activeCategoryFilter == .albums ? Color.white : Color.secondary)
                         .padding(.vertical, 2)
@@ -2157,7 +2163,7 @@ private struct SearchTreeControlsBar: View {
                     HapticFeedback.selectionChanged()
                     onToggleCategoryFilter(.tracks)
                 }) {
-                    Text("\(tracksCount) TRACKS")
+                    Text(AppCapitalization.format("\(tracksCount) TRACKS", enabled: isCaps))
                         .font(.system(size: 11, weight: .bold, design: .monospaced))
                         .foregroundStyle(activeCategoryFilter == .tracks ? Color.white : Color.secondary)
                         .padding(.vertical, 2)
@@ -2170,7 +2176,7 @@ private struct SearchTreeControlsBar: View {
 
             if activeCategoryFilter == nil {
                 Button(action: onCollapseAll) {
-                    Text("COLLAPSE")
+                    Text(AppCapitalization.format("COLLAPSE", enabled: isCaps))
                         .font(.system(size: 11, weight: .bold, design: .monospaced))
                         .foregroundStyle(.secondary)
                 }
@@ -2182,7 +2188,7 @@ private struct SearchTreeControlsBar: View {
                         onToggleCategoryFilter(cur)
                     }
                 }) {
-                    Text("SHOW ALL")
+                    Text(AppCapitalization.format("SHOW ALL", enabled: isCaps))
                         .font(.system(size: 11, weight: .bold, design: .monospaced))
                         .foregroundStyle(.secondary)
                 }

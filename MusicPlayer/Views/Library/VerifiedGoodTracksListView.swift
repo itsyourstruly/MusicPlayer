@@ -6,6 +6,7 @@ public struct VerifiedGoodTracksListView: View {
     @Bindable var libraryStore: LibraryStore
     @Environment(\.dismiss) private var dismiss
     @Environment(\.appTheme) private var appTheme
+    @Environment(\.isCapitalizationEnabled) private var isCaps: Bool
 
     @State private var selectedTrackForCustomSearch: Track? = nil
     @State private var recheckingTrackID: UUID? = nil
@@ -83,11 +84,11 @@ public struct VerifiedGoodTracksListView: View {
                         .padding(.horizontal, 16)
                         .padding(.vertical, 14)
                     }
-                    .nativeSearchField(text: $searchText, prompt: "SEARCH VERIFIED TRACKS...")
+                    .nativeSearchField(text: $searchText, prompt: AppCapitalization.format("SEARCH VERIFIED TRACKS...", enabled: isCaps))
                 }
             }
             .background(appTheme.backgroundColor.ignoresSafeArea())
-            .navigationTitle("VERIFIED TRACKS")
+            .navigationTitle(AppCapitalization.format("VERIFIED TRACKS", enabled: isCaps))
             .navigationBarTitleDisplayMode(.inline)
             .sheet(item: $selectedTrackForCustomSearch) { track in
                 OnlineMetadataMatchSheet(track: track, libraryStore: libraryStore)
@@ -99,13 +100,13 @@ public struct VerifiedGoodTracksListView: View {
 
     private var searchBar: some View {
         HStack(spacing: 8) {
-            TextField("SEARCH VERIFIED TRACKS...", text: $searchText)
+            TextField(AppCapitalization.format("SEARCH VERIFIED TRACKS...", enabled: isCaps), text: $searchText)
                 .font(.system(size: 12, weight: .medium, design: .monospaced))
                 .textFieldStyle(.plain)
                 .submitLabel(.search)
 
             if !searchText.isEmpty {
-                Button("CLEAR") {
+                Button(AppCapitalization.format("CLEAR", enabled: isCaps)) {
                     searchText = ""
                 }
                 .font(.system(size: 10, weight: .bold, design: .monospaced))
@@ -209,6 +210,7 @@ public struct VerifiedGoodTrackCard: View {
 
     @State private var selectedPage: Int = 1 // Default to 1 (ORIGINAL LOCAL)
     @Environment(\.appTheme) private var appTheme
+    @Environment(\.isCapitalizationEnabled) private var isCaps: Bool
 
     public var body: some View {
         VStack(spacing: 14) {
@@ -219,7 +221,7 @@ public struct VerifiedGoodTrackCard: View {
                     Button(action: {
                         withAnimation(.easeInOut(duration: 0.2)) { selectedPage = 0 }
                     }) {
-                        Text("ONLINE METADATA")
+                        Text(AppCapitalization.format("ONLINE METADATA", enabled: isCaps))
                             .font(.system(size: 11, weight: .black, design: .monospaced))
                             .foregroundStyle(selectedPage == 0 ? Color.blue : Color.secondary.opacity(0.5))
                     }
@@ -232,7 +234,7 @@ public struct VerifiedGoodTrackCard: View {
                     Button(action: {
                         withAnimation(.easeInOut(duration: 0.2)) { selectedPage = 1 }
                     }) {
-                        Text("ORIGINAL LOCAL")
+                        Text(AppCapitalization.format("ORIGINAL LOCAL", enabled: isCaps))
                             .font(.system(size: 11, weight: .black, design: .monospaced))
                             .foregroundStyle(selectedPage == 1 ? Color.orange : Color.secondary.opacity(0.5))
                     }
@@ -265,14 +267,14 @@ public struct VerifiedGoodTrackCard: View {
                 Spacer()
 
                 Button(action: onCustomSearch) {
-                    Text("CUSTOM SEARCH")
+                    Text(AppCapitalization.format("CUSTOM SEARCH", enabled: isCaps))
                         .font(.system(size: 12, weight: .bold, design: .monospaced))
                         .foregroundStyle(Color.primary)
                 }
                 .buttonStyle(.plain)
 
                 Button(action: onRescan) {
-                    Text(isRechecking ? "RESCANNING..." : "RESCAN")
+                    Text(AppCapitalization.format(isRechecking ? "RESCANNING..." : "RESCAN", enabled: isCaps))
                         .font(.system(size: 12, weight: .bold, design: .monospaced))
                         .foregroundStyle(isRechecking ? Color.secondary : Color.blue)
                 }

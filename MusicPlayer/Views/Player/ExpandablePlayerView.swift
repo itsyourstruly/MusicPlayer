@@ -31,6 +31,7 @@ public struct ExpandablePlayerView: View {
     )
 
     @State private var showingQueue: Bool = false
+    @Environment(\.isCapitalizationEnabled) private var isCaps: Bool
     @State private var showingFileInfo: Bool = false
     @State private var showingPlaybackSheet: Bool = false
     @State private var showingPlaylistPicker: Bool = false
@@ -450,6 +451,7 @@ private struct MorphingPlayerCard: View, Animatable {
     }
 
     @State private var isArtworkFlipped: Bool = false
+    @Environment(\.isCapitalizationEnabled) private var isCaps: Bool
     private var isLyricsViewPreferred: Bool {
         get { libraryStore.settings.isLyricsViewPreferred }
         nonmutating set {
@@ -1320,7 +1322,7 @@ private struct MorphingPlayerCard: View, Animatable {
                                             .accessibilityLabel("Queue")
                                     } else {
                                         HStack(spacing: 6) {
-                                            Text("QUEUE")
+                                            Text(AppCapitalization.format("QUEUE", enabled: isCaps))
                                                 .font(.system(size: 13, weight: .bold, design: .monospaced))
                                             Text("↑")
                                                 .font(.system(size: 13, weight: .bold, design: .monospaced))
@@ -1468,7 +1470,7 @@ private struct MorphingPlayerCard: View, Animatable {
                                     .accessibilityLabel("Queue")
                             } else {
                                 HStack(spacing: 6) {
-                                    Text("QUEUE")
+                                    Text(AppCapitalization.format("QUEUE", enabled: isCaps))
                                         .font(.system(size: 13, weight: .bold, design: .monospaced))
                                     Text("↑")
                                         .font(.system(size: 13, weight: .bold, design: .monospaced))

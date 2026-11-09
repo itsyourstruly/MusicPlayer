@@ -60,6 +60,7 @@ public struct TrackRowView: View {
     public let isContextMenuDisabled: Bool
 
     @Environment(\.appTheme) private var appTheme
+    @Environment(\.isCapitalizationEnabled) private var isCaps: Bool
     @GestureState private var gestureDragOffset: CGFloat = 0
     @State private var dragOffset: CGFloat = 0
     @State private var isTapPlayNextTriggered: Bool = false
@@ -229,7 +230,8 @@ public struct TrackRowView: View {
             if isTrailingSurfaceVisible {
                 HStack(spacing: 0) {
                     Spacer()
-                    Text(showQueueSuccess ? "QUEUED" : (showQueueAgain ? "AGAIN?" : "QUEUE"))
+                    let queueText = showQueueSuccess ? "QUEUED" : (showQueueAgain ? "AGAIN?" : "QUEUE")
+                    Text(AppCapitalization.format(queueText, enabled: isCaps))
                         .font(.system(size: 11, weight: .bold, design: .monospaced))
                         .foregroundStyle(Color.appInvertedBackground)
                         .lineLimit(1)
@@ -420,10 +422,10 @@ public struct TrackRowView: View {
     @ViewBuilder
     private var contextMenuItems: some View {
             Button(action: triggerPlayNext) {
-                Text("PLAY NEXT")
+                Text(AppCapitalization.format("PLAY NEXT", enabled: isCaps))
             }
             Button(action: { triggerQueue(appendToEnd: true) }) {
-                Text("QUEUE")
+                Text(AppCapitalization.format("QUEUE", enabled: isCaps))
             }
 
             // Artists
@@ -433,7 +435,7 @@ public struct TrackRowView: View {
                     Button(action: {
                         onSelectArtist(firstArtist)
                     }) {
-                        Text("GO TO ARTIST")
+                        Text(AppCapitalization.format("GO TO ARTIST", enabled: isCaps))
                     }
                 } else {
                     Menu {
@@ -445,19 +447,19 @@ public struct TrackRowView: View {
                             }
                         }
                     } label: {
-                        Text("GO TO ARTIST")
+                        Text(AppCapitalization.format("GO TO ARTIST", enabled: isCaps))
                     }
                 }
             }
 
             if let onSelectAlbum = onSelectAlbum, !track.album.isEmpty {
                 Button(action: onSelectAlbum) {
-                    Text("GO TO ALBUM")
+                    Text(AppCapitalization.format("GO TO ALBUM", enabled: isCaps))
                 }
             }
 
             Button(action: onAddToPlaylist) {
-                Text("ADD TO PLAYLIST")
+                Text(AppCapitalization.format("ADD TO PLAYLIST", enabled: isCaps))
             }
 
             if let quickAddLibraryStore {
@@ -471,12 +473,12 @@ public struct TrackRowView: View {
             }
 
             Button(action: onShowInfo) {
-                Text("FILE INFO")
+                Text(AppCapitalization.format("FILE INFO", enabled: isCaps))
             }
 
             if let onRemove = onRemoveFromPlaylist {
                 Button(role: .destructive, action: onRemove) {
-                    Text("REMOVE FROM PLAYLIST")
+                    Text(AppCapitalization.format("REMOVE FROM PLAYLIST", enabled: isCaps))
                 }
             } else {
                 libraryOnlyMenuItems
@@ -488,7 +490,7 @@ public struct TrackRowView: View {
     private var libraryOnlyMenuItems: some View {
             if let onToggleSelect {
                 Button(action: onToggleSelect) {
-                    Text(isSelected ? "DESELECT" : "SELECT")
+                    Text(AppCapitalization.format(isSelected ? "DESELECT" : "SELECT", enabled: isCaps))
                 }
             }
 

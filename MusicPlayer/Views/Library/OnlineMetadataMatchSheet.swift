@@ -8,6 +8,7 @@ public struct OnlineMetadataMatchSheet: View {
     @Bindable var libraryStore: LibraryStore
     @Environment(\.dismiss) private var dismiss
     @Environment(\.appTheme) private var appTheme
+    @Environment(\.isCapitalizationEnabled) private var isCaps: Bool
 
     @State private var searchResults: [OnlineTrackMetadata] = []
     @State private var selectedMatch: OnlineTrackMetadata?
@@ -58,9 +59,9 @@ public struct OnlineMetadataMatchSheet: View {
                 .padding(.vertical, 12)
             }
             .background(appTheme.backgroundColor.ignoresSafeArea())
-            .navigationTitle("ONLINE METADATA")
+            .navigationTitle(AppCapitalization.format("ONLINE METADATA", enabled: isCaps))
             .navigationBarTitleDisplayMode(.inline)
-            .nativeSearchField(text: $searchQuery, prompt: "CUSTOM SEARCH QUERY...")
+            .nativeSearchField(text: $searchQuery, prompt: AppCapitalization.format("CUSTOM SEARCH QUERY...", enabled: isCaps))
             // Keyboard Search key runs the search (empty queries are ignored)
             .onSubmit(of: .search) {
                 guard !isSearching, !searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }

@@ -37,6 +37,7 @@ public struct AlbumDetailView: View {
     )
     #endif
     @Environment(\.appTheme) private var appTheme
+    @Environment(\.isCapitalizationEnabled) private var isCaps: Bool
     @Environment(LibrarySelectionStore.self) private var librarySelection: LibrarySelectionStore?
 
     // Initialize with configured properties
@@ -176,7 +177,7 @@ public struct AlbumDetailView: View {
                                 playerService.play(track: first, inQueue: activeAlbum.tracks)
                             }
                         }) {
-                            Text("PLAY ALBUM")
+                            Text(AppCapitalization.format("PLAY ALBUM", enabled: isCaps))
                         }
                         .buttonStyle(TypographicButtonStyle(variant: .primary, size: .regular))
 
@@ -188,7 +189,7 @@ public struct AlbumDetailView: View {
                                 playerService.play(track: first, inQueue: shuffled)
                             }
                         }) {
-                            Text("SHUFFLE")
+                            Text(AppCapitalization.format("SHUFFLE", enabled: isCaps))
                         }
                         .buttonStyle(TypographicButtonStyle(variant: .secondary, size: .regular))
 
@@ -201,14 +202,14 @@ public struct AlbumDetailView: View {
                                 HapticFeedback.notificationSuccess()
                                 playerService.insertPlayNextFront(tracks: activeAlbum.tracks)
                             }) {
-                                Text("PLAY NEXT")
+                                Text(AppCapitalization.format("PLAY NEXT", enabled: isCaps))
                             }
 
                             Button(action: {
                                 HapticFeedback.notificationSuccess()
                                 playerService.appendToQueue(tracks: activeAlbum.tracks)
                             }) {
-                                Text("QUEUE")
+                                Text(AppCapitalization.format("QUEUE", enabled: isCaps))
                             }
 
                             Divider()
@@ -219,7 +220,7 @@ public struct AlbumDetailView: View {
                                 Button(action: {
                                     showingAlbumMetadataSheet = true
                                 }) {
-                                    Text("ALBUM METADATA")
+                                    Text(AppCapitalization.format("ALBUM METADATA", enabled: isCaps))
                                 }
                             }
 
@@ -229,7 +230,7 @@ public struct AlbumDetailView: View {
                                     HapticFeedback.notificationSuccess()
                                     libraryStore.toggleCollaborativeAlbum(activeAlbum)
                                 }) {
-                                    Text(libraryStore.isCollaborativeAlbum(activeAlbum) ? "REVERT COLLABORATIVE ALBUM" : "MAKE COLLABORATIVE ALBUM")
+                                    Text(AppCapitalization.format(libraryStore.isCollaborativeAlbum(activeAlbum) ? "REVERT COLLABORATIVE ALBUM" : "MAKE COLLABORATIVE ALBUM", enabled: isCaps))
                                 }
                             }
 
@@ -238,7 +239,7 @@ public struct AlbumDetailView: View {
                             Button(action: {
                                 showingPlaylistPicker = true
                             }) {
-                                Text("ADD TO PLAYLIST")
+                                Text(AppCapitalization.format("ADD TO PLAYLIST", enabled: isCaps))
                             }
 
                             QuickAddToPlaylistMenu(tracks: activeAlbum.tracks, libraryStore: libraryStore)
@@ -252,7 +253,7 @@ public struct AlbumDetailView: View {
                                 HapticFeedback.lightImpact()
                                 libraryStore.togglePinAlbum(activeAlbum)
                             }) {
-                                Text(libraryStore.isAlbumPinned(activeAlbum) ? "UNPIN ALBUM" : "PIN ALBUM")
+                                Text(AppCapitalization.format(libraryStore.isAlbumPinned(activeAlbum) ? "UNPIN ALBUM" : "PIN ALBUM", enabled: isCaps))
                             }
 
                             #if os(iOS)
@@ -264,7 +265,7 @@ public struct AlbumDetailView: View {
                                     HapticFeedback.lightImpact()
                                     showingAlbumMergeSheet = true
                                 }) {
-                                    Text("MERGE")
+                                    Text(AppCapitalization.format("MERGE", enabled: isCaps))
                                 }
                             }
                             #endif
@@ -277,7 +278,7 @@ public struct AlbumDetailView: View {
                                     refreshMergeSuggestion(for: currentAlbum)
                                     #endif
                                 }) {
-                                    Text("UNDO MERGE")
+                                    Text(AppCapitalization.format("UNDO MERGE", enabled: isCaps))
                                 }
                             }
                         } label: {
@@ -292,7 +293,7 @@ public struct AlbumDetailView: View {
 
                     // Tracklist Section (Main canonical tracks)
                     VStack(alignment: .leading, spacing: 10) {
-                        Text("TRACKLIST (\(mainTracks.count))")
+                        Text(AppCapitalization.format("TRACKLIST (\(mainTracks.count))", enabled: isCaps))
                             .font(.system(size: 12, weight: .bold, design: .monospaced))
                             .foregroundStyle(.secondary)
                             .padding(.horizontal, 2)
@@ -360,7 +361,7 @@ public struct AlbumDetailView: View {
                     // Alternates Section (Instrumentals, Remixes, Acoustics, Live Versions, etc.)
                     if !altTracks.isEmpty {
                         VStack(alignment: .leading, spacing: 10) {
-                            Text("ALTERNATES")
+                            Text(AppCapitalization.format("ALTERNATES", enabled: isCaps))
                                 .font(.system(size: 12, weight: .bold, design: .monospaced))
                                 .foregroundStyle(.secondary)
                                 .padding(.horizontal, 2)
@@ -579,7 +580,7 @@ public struct AlbumDetailView: View {
         mergedToastHideTask?.cancel()
         withAnimation(.easeOut(duration: 0.2)) { showMergedToastPill = true }
         mergedToastHideTask = Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            try? await Task.sleep(nanoseconds: 10_000_000_000)
             guard !Task.isCancelled else { return }
             withAnimation(.easeOut(duration: 0.2)) { showMergedToastPill = false }
         }
@@ -632,7 +633,7 @@ public struct AlbumDetailView: View {
             // Keep mergeCandidateAlbums empty so the sheet shows lastAutoMergedAlbums as a post-merge review.
             showingAlbumMergeSheet = true
         } label: {
-            Text("MERGED")
+            Text(AppCapitalization.format("MERGED", enabled: isCaps))
                 .font(.system(size: 10, weight: .bold, design: .monospaced))
                 .foregroundStyle(theme.accentColor)
                 .padding(.horizontal, 12)
@@ -653,7 +654,7 @@ public struct AlbumDetailView: View {
         let sheetAlbums = mergeCandidateAlbums.isEmpty ? lastAutoMergedAlbums : mergeCandidateAlbums
         let isPostMergeReview = mergeCandidateAlbums.isEmpty && !lastAutoMergedAlbums.isEmpty
         VStack(spacing: 0) {
-            Text(isPostMergeReview ? "MERGED ALBUMS" : "MERGE ALBUM")
+            Text(AppCapitalization.format(isPostMergeReview ? "MERGED ALBUMS" : "MERGE ALBUM", enabled: isCaps))
                 .font(.system(size: 13, weight: .bold, design: .monospaced))
                 .foregroundStyle(Color.primary)
                 .frame(maxWidth: .infinity)
@@ -699,7 +700,7 @@ public struct AlbumDetailView: View {
                                     }
                                 }
                                 Spacer(minLength: 0)
-                                Text("MERGE")
+                                Text(AppCapitalization.format("MERGE", enabled: isCaps))
                                     .font(.system(size: 11, weight: .bold, design: .monospaced))
                                     .foregroundStyle(theme.accentColor)
                             }
@@ -717,7 +718,7 @@ public struct AlbumDetailView: View {
                             withAnimation(.easeOut(duration: 0.2)) { showMergePill = false }
                             refreshMergeSuggestion(for: currentAlbum)
                         } label: {
-                            Text("MERGE ALL INTO THIS ALBUM")
+                            Text(AppCapitalization.format("MERGE ALL INTO THIS ALBUM", enabled: isCaps))
                                 .font(.system(size: 13, weight: .bold, design: .monospaced))
                                 .foregroundStyle(theme.accentColor)
                                 .frame(maxWidth: .infinity)

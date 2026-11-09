@@ -14,6 +14,7 @@ public struct PlayerControlsView: View {
     public var hidesPlayPauseGlyph: Bool = false
 
     @Environment(\.isPlayerDraggingOrDismissing) private var isPlayerDraggingOrDismissing: Bool
+    @Environment(\.isCapitalizationEnabled) private var isCaps: Bool
 
     // Initialize with configured properties
     public init(
@@ -64,7 +65,7 @@ public struct PlayerControlsView: View {
                                 .font(.system(size: 26, weight: .heavy))
                                 .accessibilityLabel("Previous Track")
                         } else {
-                            Text("BACK")
+                            Text(AppCapitalization.format("BACK", enabled: isCaps))
                                 .font(.system(size: 19, weight: .heavy, design: .monospaced))
                         }
                     }
@@ -106,7 +107,7 @@ public struct PlayerControlsView: View {
                                 .accessibilityElement(children: .ignore)
                                 .accessibilityLabel(playerService.playbackStatus.isPlaying ? "Pause" : "Play")
                             } else {
-                                Text(playerService.playbackStatus.isPlaying ? "PAUSE" : "PLAY")
+                                Text(AppCapitalization.format(playerService.playbackStatus.isPlaying ? "PAUSE" : "PLAY", enabled: isCaps))
                                     .font(.system(size: 34, weight: .black, design: .monospaced))
                                     .foregroundStyle(foregroundColor)
                                     .contentTransition(.interpolate)
@@ -142,7 +143,7 @@ public struct PlayerControlsView: View {
                                 .font(.system(size: 26, weight: .heavy))
                                 .accessibilityLabel("Next Track")
                         } else {
-                            Text("NEXT")
+                            Text(AppCapitalization.format("NEXT", enabled: isCaps))
                                 .font(.system(size: 19, weight: .heavy, design: .monospaced))
                         }
                     }
@@ -174,7 +175,7 @@ public struct PlayerControlsView: View {
                                 .accessibilityLabel("Shuffle")
                                 .accessibilityValue(playerService.shuffleMode == .on ? "On" : "Off")
                         } else {
-                            Text("SHUFFLE")
+                            Text(AppCapitalization.format("SHUFFLE", enabled: isCaps))
                                 .font(.system(size: 12, weight: playerService.shuffleMode == .on ? .black : .bold, design: .monospaced))
                         }
                     }
@@ -206,7 +207,8 @@ public struct PlayerControlsView: View {
                                 .accessibilityLabel("Repeat")
                                 .accessibilityValue(repeatAccessibilityValue)
                         } else {
-                            Text(playerService.repeatMode == .one ? "ONE" : playerService.repeatMode == .all ? "ALL" : "REPEAT")
+                            let repText = playerService.repeatMode == .one ? "ONE" : playerService.repeatMode == .all ? "ALL" : "REPEAT"
+                            Text(AppCapitalization.format(repText, enabled: isCaps))
                                 .font(.system(size: 12, weight: playerService.repeatMode != .off ? .black : .bold, design: .monospaced))
                         }
                     }

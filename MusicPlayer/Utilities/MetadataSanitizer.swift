@@ -264,28 +264,11 @@ public enum MetadataSanitizer: Sendable {
 
     /// Parses artist and title from standard file naming conventions (e.g., "01 - Artist - Title.mp3", "Artist - Title.m4a").
     public static func parseFilename(url: URL) -> (title: String, artist: String)? {
-        // Raw name
-        var rawName = url.deletingPathExtension().lastPathComponent
-
-        // Strip track number prefixes
-        if let numRegex = trackNumberPrefixRegex {
-            // Ns range
-            let nsRange = NSRange(location: 0, length: (rawName as NSString).length)
-            rawName = numRegex.stringByReplacingMatches(in: rawName, options: [], range: nsRange, withTemplate: "")
+        let extracted = TrackMetadataExtractor.extract(rawTitle: nil, fallbackFilename: url.lastPathComponent)
+        guard let artist = extracted.artist, !artist.isEmpty, !isGenericOrEmpty(extracted.cleanTitle) else {
+            return nil
         }
-
-        // Parts
-        let parts = rawName.components(separatedBy: " - ")
-        if parts.count >= 2 {
-            // Primary artist name
-            let artist = parts[0].trimmingCharacters(in: .whitespacesAndNewlines)
-            // Display title
-            let title = parts[1].trimmingCharacters(in: .whitespacesAndNewlines)
-            if !artist.isEmpty && !title.isEmpty {
-                return (title: title, artist: artist)
-            }
-        }
-        return nil
+        return (title: extracted.cleanTitle, artist: artist)
     }
 
     // MARK: - Completeness Pre-Check (Zero Network Cost)

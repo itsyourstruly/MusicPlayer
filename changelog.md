@@ -1,13 +1,18 @@
 ### v0.4 (9)
 * New:
   -  Within the Appearance settings, new option to toggle album backgrounds to: match the Album Color, Album Blur, or keep the Solid color from the set theme.
-  - Also in the Appearance settings, expand the 'HOME PAGE' section to reorder, and toggle existing sections and library options. 
+  - Also in the Appearance settings, expand the 'HOME PAGE' section to reorder, toggle existing sections, and add library options. 
   - Depending on source and organization, you may have a duplicate album, or tracks separated into different albums, or singles. LAP will now find when an album you open has the identical name, and artist as another, and offer to merge them.
+  - Hide Duplicates option for online sources, which will automatically hide duplicate tracks found in Albums. Automatically hidden tracks show up in Settings->Sources->Hidden, separate from manually hidden tracks. Local sources are still able to scan for duplicates using the "Find Track Tags" option.
+  - Long press a tab (Artists, Albums, or Playlists) on the Library page to adjust the amount of columns.
+  - Add your own separators for artists in Settings->Sources->Artist Separators. This only affects local sources. 
+  - Disable CAPITALIZATION thoughout the app in Settings->Appearance.
 - Modifications:
   - In albums, the tracklist no longer shows the album artwork, and has been replaced by the track #, or '-' if missing.
   - In Sources settings, clear options now match the set theme to show they can be selected. Added option for merges to undo all merges. It will now only show options to clear what it's actually using. 
+  - Within the sources settings, if both Local, and Online sources are added, the Online sources will appear at the top, with the related options below. Local sources will show up below the Online options, with their related options. This change was made to differentiate options easier. 
 - Fixes:
-  - 
+  - When changing local folder organization, the library would not rebuild after saving and rescanning. This has been fixed. Saving a change will now apply the changes immediately. 
 
 ### v0.4 (8)
 * New:

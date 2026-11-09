@@ -26,21 +26,31 @@ public struct TypographicButtonStyle: ButtonStyle {
 
     // Make body
     public func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(fontForSize)
-            .textCase(.uppercase)
-            .padding(.horizontal, horizontalPadding)
-            .padding(.vertical, verticalPadding)
-            .background(backgroundColor(isPressed: configuration.isPressed))
-            .foregroundStyle(foregroundColor)
-            .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .stroke(borderColor, lineWidth: 1.0)
-            )
-            .scaleEffect(configuration.isPressed ? 0.96 : 1.0)
-            // Smooth UI transition animation
-            .animation(.easeOut(duration: 0.15), value: configuration.isPressed)
+        TypographicButtonContent(configuration: configuration, style: self)
+    }
+
+    private struct TypographicButtonContent: View {
+        let configuration: Configuration
+        let style: TypographicButtonStyle
+        @Environment(\.isCapitalizationEnabled) private var isCapitalizationEnabled
+
+        var body: some View {
+            configuration.label
+                .font(style.fontForSize)
+                .textCase(isCapitalizationEnabled ? .uppercase : nil)
+                .padding(.horizontal, style.horizontalPadding)
+                .padding(.vertical, style.verticalPadding)
+                .background(style.backgroundColor(isPressed: configuration.isPressed))
+                .foregroundStyle(style.foregroundColor)
+                .clipShape(RoundedRectangle(cornerRadius: style.cornerRadius, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: style.cornerRadius, style: .continuous)
+                        .stroke(style.borderColor, lineWidth: 1.0)
+                )
+                .scaleEffect(configuration.isPressed ? 0.96 : 1.0)
+                // Smooth UI transition animation
+                .animation(.easeOut(duration: 0.15), value: configuration.isPressed)
+        }
     }
 
     private var fontForSize: Font {

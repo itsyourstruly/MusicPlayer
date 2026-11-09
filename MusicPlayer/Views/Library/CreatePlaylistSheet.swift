@@ -4,6 +4,7 @@ import SwiftUI
 public struct CreatePlaylistSheet: View {
     @Bindable var libraryStore: LibraryStore
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.isCapitalizationEnabled) private var isCaps: Bool
 
     @State private var playlistName: String = ""
     @State private var playlistDescription: String = ""
@@ -22,27 +23,27 @@ public struct CreatePlaylistSheet: View {
     public var body: some View {
         NavigationStack {
             Form {
-                Section("PLAYLIST DETAILS") {
-                    TextField("PLAYLIST NAME", text: $playlistName)
+                Section(AppCapitalization.format("PLAYLIST DETAILS", enabled: isCaps)) {
+                    TextField(AppCapitalization.format("PLAYLIST NAME", enabled: isCaps), text: $playlistName)
                         .font(.system(size: 15, weight: .medium))
 
-                    TextField("DESCRIPTION (OPTIONAL)", text: $playlistDescription, axis: .vertical)
+                    TextField(AppCapitalization.format("DESCRIPTION (OPTIONAL)", enabled: isCaps), text: $playlistDescription, axis: .vertical)
                         .font(.system(size: 14))
                         .lineLimit(3...5)
                 }
             }
-            .navigationTitle("NEW PLAYLIST")
+            .navigationTitle(AppCapitalization.format("NEW PLAYLIST", enabled: isCaps))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    Button("CANCEL") {
+                    Button(AppCapitalization.format("CANCEL", enabled: isCaps)) {
                         dismiss()
                     }
                     .font(.system(size: 13, weight: .bold, design: .monospaced))
                 }
 
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("ADD") {
+                    Button(AppCapitalization.format("ADD", enabled: isCaps)) {
                         createAndDismiss()
                     }
                     .font(.system(size: 13, weight: .bold, design: .monospaced))

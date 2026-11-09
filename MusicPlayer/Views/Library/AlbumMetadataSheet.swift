@@ -7,6 +7,7 @@ public struct AlbumMetadataSheet: View {
     @Bindable var libraryStore: LibraryStore
     @Environment(\.dismiss) private var dismiss
     @Environment(\.appTheme) private var appTheme
+    @Environment(\.isCapitalizationEnabled) private var isCaps: Bool
 
     @State private var searchQuery: String
     @State private var selectedSourceAPI: MetadataAPIOption = .all
@@ -85,9 +86,9 @@ public struct AlbumMetadataSheet: View {
                 }
             }
             .background(appTheme.backgroundColor.ignoresSafeArea())
-            .navigationTitle("ALBUM METADATA")
+            .navigationTitle(AppCapitalization.format("ALBUM METADATA", enabled: isCaps))
             .navigationBarTitleDisplayMode(.inline)
-            .nativeSearchField(text: $searchQuery, prompt: "SEARCH ARTIST & ALBUM ONLINE")
+            .nativeSearchField(text: $searchQuery, prompt: AppCapitalization.format("SEARCH ARTIST & ALBUM ONLINE", enabled: isCaps))
             .onSubmit(of: .search) {
                 Task {
                     await performSearch()

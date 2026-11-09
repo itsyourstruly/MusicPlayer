@@ -17,6 +17,7 @@ public struct MetadataComparisonListView: View {
     @Bindable var libraryStore: LibraryStore
     @Environment(\.dismiss) private var dismiss
     @Environment(\.appTheme) private var appTheme
+    @Environment(\.isCapitalizationEnabled) private var isCaps: Bool
 
     @State private var preserveFeatures: Bool = true
     @State private var isEnrichingAll: Bool = false
@@ -67,7 +68,7 @@ public struct MetadataComparisonListView: View {
                 }
             }
             .background(appTheme.backgroundColor.ignoresSafeArea())
-            .navigationTitle("METADATA ENRICHMENT")
+            .navigationTitle(AppCapitalization.format("METADATA ENRICHMENT", enabled: isCaps))
             .navigationBarTitleDisplayMode(.inline)
             .sheet(item: $selectedTrackForCustomSearch) { track in
                 OnlineMetadataMatchSheet(track: track, libraryStore: libraryStore)
@@ -449,6 +450,7 @@ public struct SwipeableMetadataTrackCard: View {
     @State private var selectedPage: Int = 0 // 0 = Online, 1 = Local
     @State private var lockedFields: Set<MetadataField> = []
     @Environment(\.appTheme) private var appTheme
+    @Environment(\.isCapitalizationEnabled) private var isCaps: Bool
 
     public init(
         diff: MetadataDiff,
@@ -477,7 +479,7 @@ public struct SwipeableMetadataTrackCard: View {
                     Button(action: {
                         withAnimation(.easeInOut(duration: 0.2)) { selectedPage = 0 }
                     }) {
-                        Text("ONLINE METADATA")
+                        Text(AppCapitalization.format("ONLINE METADATA", enabled: isCaps))
                             .font(.system(size: 11, weight: .black, design: .monospaced))
                             .foregroundStyle(selectedPage == 0 ? Color.blue : Color.secondary.opacity(0.5))
                     }
@@ -490,7 +492,7 @@ public struct SwipeableMetadataTrackCard: View {
                     Button(action: {
                         withAnimation(.easeInOut(duration: 0.2)) { selectedPage = 1 }
                     }) {
-                        Text("ORIGINAL LOCAL")
+                        Text(AppCapitalization.format("ORIGINAL LOCAL", enabled: isCaps))
                             .font(.system(size: 11, weight: .black, design: .monospaced))
                             .foregroundStyle(selectedPage == 1 ? Color.orange : Color.secondary.opacity(0.5))
                     }
@@ -525,7 +527,7 @@ public struct SwipeableMetadataTrackCard: View {
                     Button(action: {
                         onApply(lockedFields)
                     }) {
-                        Text("APPLY ONLINE METADATA")
+                        Text(AppCapitalization.format("APPLY ONLINE METADATA", enabled: isCaps))
                             .font(.system(size: 13, weight: .bold, design: .monospaced))
                             .foregroundStyle(Color.blue)
                     }
@@ -533,7 +535,7 @@ public struct SwipeableMetadataTrackCard: View {
 
                     if let onCustomSearch = onCustomSearch {
                         Button(action: onCustomSearch) {
-                            Text("CUSTOM SEARCH")
+                            Text(AppCapitalization.format("CUSTOM SEARCH", enabled: isCaps))
                                 .font(.system(size: 13, weight: .bold, design: .monospaced))
                                 .foregroundStyle(Color.primary)
                         }
@@ -543,7 +545,7 @@ public struct SwipeableMetadataTrackCard: View {
                     Button(action: {
                         onKeepLocal()
                     }) {
-                        Text("KEEP LOCAL METADATA")
+                        Text(AppCapitalization.format("KEEP LOCAL METADATA", enabled: isCaps))
                             .font(.system(size: 13, weight: .bold, design: .monospaced))
                             .foregroundStyle(Color.orange)
                     }
@@ -551,7 +553,7 @@ public struct SwipeableMetadataTrackCard: View {
 
                     if let onCustomSearch = onCustomSearch {
                         Button(action: onCustomSearch) {
-                            Text("CUSTOM SEARCH")
+                            Text(AppCapitalization.format("CUSTOM SEARCH", enabled: isCaps))
                                 .font(.system(size: 13, weight: .bold, design: .monospaced))
                                 .foregroundStyle(Color.primary)
                         }

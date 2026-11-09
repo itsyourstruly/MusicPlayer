@@ -6,6 +6,7 @@ public struct ShuffleTargetPickerSheet: View {
     @Bindable var libraryStore: LibraryStore
     @Environment(\.dismiss) private var dismiss
     @Environment(\.appTheme) private var appTheme
+    @Environment(\.isCapitalizationEnabled) private var isCaps: Bool
 
     @State private var searchQuery: String = ""
     @State private var selectedTargetForConfirmation: ShuffleTarget? = nil
@@ -83,12 +84,12 @@ public struct ShuffleTargetPickerSheet: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             .background(appTheme.backgroundColor.ignoresSafeArea())
-            .navigationTitle("SET SHUFFLE TARGET")
+            .navigationTitle(AppCapitalization.format("SET SHUFFLE TARGET", enabled: isCaps))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 // Same monospaced header as before, shown as the top-bar title
                 ToolbarItem(placement: .principal) {
-                    Text("SET SHUFFLE TARGET")
+                    Text(AppCapitalization.format("SET SHUFFLE TARGET", enabled: isCaps))
                         .font(.system(size: 13, weight: .bold, design: .monospaced))
                         .foregroundStyle(Color.primary)
                 }

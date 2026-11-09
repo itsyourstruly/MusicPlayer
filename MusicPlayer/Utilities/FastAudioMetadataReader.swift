@@ -231,6 +231,10 @@ nonisolated public struct FastAudioMetadataReader: Sendable {
             meta.duration = Double(audioDataBytes * 8) / 256_000.0
         }
 
+        if meta.artist == nil {
+            meta.artist = meta.author
+        }
+
         return meta
     }
 
@@ -242,12 +246,13 @@ nonisolated public struct FastAudioMetadataReader: Sendable {
         switch id {
         case "TIT2", "TT2", "TIT1", "TIT3": // Title
             if meta.title == nil { meta.title = decodeID3String(payload) }
-        case "TPE1", "TP1", "TPE3", "TPE4": // Artist
+        case "TPE1", "TP1": // Lead Artist
+            meta.artist = decodeID3String(payload)
+        case "TPE3", "TPE4": // Conductor / Remixer
             if meta.artist == nil { meta.artist = decodeID3String(payload) }
-        case "AUTH", "AUT", "IAUT": // Author tag as artist
+        case "AUTH", "AUT", "IAUT": // Author tag
             let str = decodeID3String(payload)
             if meta.author == nil { meta.author = str }
-            if meta.artist == nil { meta.artist = str }
         case "TALB", "TAL", "TOAL", "TOT", "TSOA": // Album
             if meta.album == nil { meta.album = decodeID3String(payload) }
         case "TPE2", "TP2", "aART", "TSO2": // Album Artist
@@ -310,11 +315,12 @@ nonisolated public struct FastAudioMetadataReader: Sendable {
                 let descUpper = desc.uppercased()
                 if descUpper.contains("LYRIC") || descUpper.contains("UNSYNCED") || descUpper.contains("SYNCED") || descUpper.contains("WORDS") {
                     if meta.lyrics == nil { meta.lyrics = val }
+                } else if (descUpper.contains("ALBUMARTIST") || descUpper.contains("ALBUM ARTIST") || descUpper.contains("BAND")) && meta.albumArtist == nil {
+                    meta.albumArtist = val
                 } else if descUpper.contains("ALBUM") && meta.album == nil {
                     meta.album = val
                 } else if descUpper.contains("AUTHOR") {
                     if meta.author == nil { meta.author = val }
-                    if meta.artist == nil { meta.artist = val }
                 } else if descUpper.contains("ARTIST") && meta.artist == nil {
                     meta.artist = val
                 } else if (descUpper.contains("YEAR") || descUpper.contains("DATE")) && meta.year == nil {
@@ -336,8 +342,7 @@ nonisolated public struct FastAudioMetadataReader: Sendable {
             if idUpper.contains("AUTH") {
                 let str = decodeID3String(payload)
                 if meta.author == nil { meta.author = str }
-                if meta.artist == nil { meta.artist = str }
-            } else if idUpper.contains("ART") && meta.artist == nil {
+            } else if (idUpper == "TPE1" || idUpper == "TP1" || (idUpper.contains("ART") && !idUpper.contains("AART") && !idUpper.contains("APIC"))) && meta.artist == nil {
                 meta.artist = decodeID3String(payload)
             }
             // Fallback embedded year check across any unknown frame
@@ -632,6 +637,10 @@ nonisolated public struct FastAudioMetadataReader: Sendable {
             meta.bitRate = Double(fileSize * 8) / meta.duration
         }
 
+        if meta.artist == nil {
+            meta.artist = meta.author
+        }
+
         return meta
     }
 
@@ -746,10 +755,9 @@ nonisolated public struct FastAudioMetadataReader: Sendable {
                                 if meta.title == nil { meta.title = str }
                             } else if itemType == "©ART" || lowerType == "art " || lowerType == "soar" {
                                 if meta.artist == nil { meta.artist = str }
-                            } else if itemType == "©aut" || lowerType == "auth" || lowerType.contains("auth") || lowerType.contains("aut") {
+                            } else if itemType == "©aut" || lowerType == "auth" || lowerType.contains("auth") {
                                 if meta.author == nil { meta.author = str }
-                                if meta.artist == nil { meta.artist = str }
-                            } else if itemType == "©alb" || lowerType == "alb " || lowerType == "soal" || lowerType.contains("alb") {
+                            } else if itemType == "©alb" || lowerType == "alb " || lowerType == "soal" {
                                 if meta.album == nil { meta.album = str }
                             } else if itemType == "aART" || lowerType == "soaa" || lowerType.contains("aart") {
                                 if meta.albumArtist == nil { meta.albumArtist = str }
@@ -823,13 +831,18 @@ nonisolated public struct FastAudioMetadataReader: Sendable {
             if captureReleaseTag(key: key, value: val, meta: &meta) { return }
             if (key.contains("LYRIC") || key.contains("UNSYNCED") || key.contains("SYNCED") || key.contains("WORDS") || key == "TEXT") && meta.lyrics == nil {
                 meta.lyrics = val
+            } else if (key.contains("ALBUMARTIST") || key.contains("ALBUM ARTIST") || key == "BAND" || key == "ENSEMBLE") && meta.albumArtist == nil {
+                meta.albumArtist = val
             } else if (key.contains("ALBUM") || key == "ALBUMTITLE" || key == "ALBUM_TITLE") && meta.album == nil {
                 meta.album = val
             } else if key.contains("AUTHOR") {
                 if meta.author == nil { meta.author = val }
-                if meta.artist == nil { meta.artist = val }
-            } else if (key.contains("ARTIST") || key == "PERFORMER") && meta.artist == nil {
-                meta.artist = val
+            } else if (key.contains("ARTIST") || key == "PERFORMER") {
+                if let existing = meta.artist {
+                    meta.artist = "\(existing) / \(val)"
+                } else {
+                    meta.artist = val
+                }
             } else if (key.contains("TITLE") || key == "NAME") && meta.title == nil {
                 meta.title = val
             } else if (key.contains("DATE") || key.contains("YEAR")) && meta.year == nil {
@@ -899,6 +912,10 @@ nonisolated public struct FastAudioMetadataReader: Sendable {
 
         if meta.duration > 0 && fileSize > 0 {
             meta.bitRate = Double(fileSize * 8) / meta.duration
+        }
+
+        if meta.artist == nil {
+            meta.artist = meta.author
         }
 
         return meta
@@ -1038,6 +1055,10 @@ nonisolated public struct FastAudioMetadataReader: Sendable {
             meta.bitRate = Double(fileSize * 8) / meta.duration
         }
 
+        if meta.artist == nil {
+            meta.artist = meta.author
+        }
+
         return meta
     }
 
@@ -1099,9 +1120,12 @@ nonisolated public struct FastAudioMetadataReader: Sendable {
                         if meta.title == nil { meta.title = val }
                     case "AUTHOR", "AUTHORS", "AUTHORNAME", "AUTHOR_NAME":
                         if meta.author == nil { meta.author = val }
-                        if meta.artist == nil { meta.artist = val }
                     case "ARTIST", "PERFORMER", "ARTISTNAME", "ARTIST_NAME":
-                        if meta.artist == nil { meta.artist = val }
+                        if let existing = meta.artist {
+                            meta.artist = "\(existing) / \(val)"
+                        } else {
+                            meta.artist = val
+                        }
                     case "ALBUM", "ALBUMTITLE", "ALBUM_TITLE", "ALBUMNAME", "ALBUM_NAME", "RECORD", "COLLECTION":
                         if meta.album == nil { meta.album = val }
                     case "ALBUMARTIST", "ALBUM ARTIST", "ALBUM_ARTIST", "BAND", "ENSEMBLE":
@@ -1138,13 +1162,18 @@ nonisolated public struct FastAudioMetadataReader: Sendable {
                         if captureReleaseTag(key: key, value: val, meta: &meta) { break }
                         if (key.contains("LYRIC") || key.contains("TEXT") || (val.count > 60 && (val.contains("\n") || val.contains("\r") || val.contains("[0")))) && meta.lyrics == nil {
                             meta.lyrics = val
+                        } else if (key.contains("ALBUMARTIST") || key.contains("ALBUM_ARTIST") || key == "BAND") && meta.albumArtist == nil {
+                            meta.albumArtist = val
                         } else if key.contains("ALBUM") && meta.album == nil {
                             meta.album = val
                         } else if key.contains("AUTHOR") {
                             if meta.author == nil { meta.author = val }
-                            if meta.artist == nil { meta.artist = val }
-                        } else if key.contains("ARTIST") && meta.artist == nil {
-                            meta.artist = val
+                        } else if key.contains("ARTIST") {
+                            if let existing = meta.artist {
+                                meta.artist = "\(existing) / \(val)"
+                            } else {
+                                meta.artist = val
+                            }
                         }
                         if meta.year == nil, let y = MetadataSanitizer.extract4DigitYear(from: val) {
                             meta.year = y
@@ -1239,6 +1268,10 @@ nonisolated public struct FastAudioMetadataReader: Sendable {
             meta.bitRate = Double(byteRate * 8)
         }
 
+        if meta.artist == nil {
+            meta.artist = meta.author
+        }
+
         return meta
     }
 
@@ -1264,7 +1297,6 @@ nonisolated public struct FastAudioMetadataReader: Sendable {
                 case "INAM", "TITL": if meta.title == nil { meta.title = str }
                 case "AUTH", "IAUT":
                     if meta.author == nil { meta.author = str }
-                    if meta.artist == nil { meta.artist = str }
                 case "IART": if meta.artist == nil { meta.artist = str }
                 case "IPRD", "IALB", "ALBM": if meta.album == nil { meta.album = str }
                 case "IGNR", "GENR": if meta.genre == nil { meta.genre = str }
@@ -1279,7 +1311,6 @@ nonisolated public struct FastAudioMetadataReader: Sendable {
                 default:
                     if chunkID.contains("AUTH") || chunkID.contains("AUT") {
                         if meta.author == nil { meta.author = str }
-                        if meta.artist == nil { meta.artist = str }
                     } else if chunkID.contains("ART") {
                         if meta.artist == nil { meta.artist = str }
                     }
@@ -1380,13 +1411,11 @@ nonisolated public struct FastAudioMetadataReader: Sendable {
                     case "NAME": if meta.title == nil { meta.title = text }
                     case "AUTH", "IAUT":
                         if meta.author == nil { meta.author = text }
-                        if meta.artist == nil { meta.artist = text }
                     case "IART": if meta.artist == nil { meta.artist = text }
                     case "(c) ": if meta.album == nil { meta.album = text }
                     default:
                         if chunkID.contains("AUTH") || chunkID.contains("AUT") {
                             if meta.author == nil { meta.author = text }
-                            if meta.artist == nil { meta.artist = text }
                         } else if chunkID.contains("ART") {
                             if meta.artist == nil { meta.artist = text }
                         }
@@ -1397,6 +1426,10 @@ nonisolated public struct FastAudioMetadataReader: Sendable {
 
             offset += 8 + UInt64(chunkSize)
             if chunkSize % 2 != 0 { offset += 1 }
+        }
+
+        if meta.artist == nil {
+            meta.artist = meta.author
         }
 
         return meta

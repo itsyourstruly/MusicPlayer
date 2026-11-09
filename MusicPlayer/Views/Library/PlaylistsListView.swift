@@ -10,9 +10,12 @@ public struct PlaylistsListView: View {
     @State private var selectedPlaylistID: UUID? = nil
     @State private var displayLimit: Int = 80
 
-    private let columns = [
-        GridItem(.adaptive(minimum: 155), spacing: 14)
-    ]
+    private var columns: [GridItem] {
+        if let count = libraryStore.settings.playlistsGridColumnCount, (2...4).contains(count) {
+            return Array(repeating: GridItem(.flexible(), spacing: 14), count: count)
+        }
+        return [GridItem(.adaptive(minimum: 155), spacing: 14)]
+    }
 
 #if os(iOS)
     @State private var localSearchQuery: String = ""
@@ -69,7 +72,7 @@ public struct PlaylistsListView: View {
                     text: $localSearchQuery,
                     isPresented: $isSearchPresented,
                     placement: .toolbar,
-                    prompt: Text("SEARCH PLAYLISTS")
+                    prompt: Text(AppCapitalization.format("SEARCH PLAYLISTS", enabled: libraryStore.settings.isCapitalizationEnabled))
                 )
                 .searchToolbarBehavior(.minimize)
                 .searchFocused($isSearchFieldFocused)
@@ -120,7 +123,7 @@ public struct PlaylistsListView: View {
             HStack {
                 Button(action: { showingCreateSheet = true }) {
                     HStack(spacing: 4) {
-                        Text("+ NEW PLAYLIST")
+                        Text(AppCapitalization.format("+ NEW PLAYLIST", enabled: libraryStore.settings.isCapitalizationEnabled))
                             .font(.system(size: 11, weight: .bold, design: .monospaced))
                     }
                 }
@@ -136,7 +139,7 @@ public struct PlaylistsListView: View {
                 let searching = libraryStore.searchModel.isSearching
 #endif
                 if !searching {
-                    EmptyStateView(title: "EMPTY", message: "")
+                    EmptyStateView(title: AppCapitalization.format("EMPTY", enabled: libraryStore.settings.isCapitalizationEnabled), message: "")
                         .padding(.top, 32)
                 }
             } else {
@@ -170,7 +173,7 @@ public struct PlaylistsListView: View {
                                         .font(.system(size: 13, weight: .bold))
                                         .foregroundStyle(Color.primary)
                                         .lineLimit(1)
-                                    Text(playlist.formattedTrackCount)
+                                    Text(AppCapitalization.format(playlist.formattedTrackCount, enabled: libraryStore.settings.isCapitalizationEnabled))
                                         .font(.system(size: 11, design: .monospaced))
                                         .foregroundStyle(.tertiary)
                                 }

@@ -18,10 +18,17 @@ public struct AppearanceSettingsView: View {
 
     // Main view layout structure
     public var body: some View {
+        let isCaps = libraryStore.settings.isCapitalizationEnabled
         ScrollView(.vertical, showsIndicators: false) {
             VStack(alignment: .leading, spacing: 28) {
                 // Theme Selection
                 themeSection
+
+                Divider()
+                    .overlay(libraryStore.settings.appTheme.separatorColor.opacity(0.4))
+
+                // CAPITALIZATION (immediately below THEME)
+                capitalizationSection
 
                 #if os(iOS)
                 Divider()
@@ -55,11 +62,13 @@ public struct AppearanceSettingsView: View {
             .padding(.bottom, 60)
         }
         .background(libraryStore.settings.appTheme.backgroundColor.ignoresSafeArea())
-        .navigationTitle("APPEARANCE")
+        .navigationTitle(AppCapitalization.format("APPEARANCE", enabled: isCaps))
         .navigationBarTitleDisplayMode(.inline)
+        .environment(\.isCapitalizationEnabled, isCaps)
         .sheet(item: $activeDetail) { detail in
             SettingOptionDetailSheet(detail: detail)
                 .environment(\.appTheme, libraryStore.settings.appTheme)
+                .environment(\.isCapitalizationEnabled, isCaps)
         }
     }
 
@@ -71,8 +80,10 @@ public struct AppearanceSettingsView: View {
         label: @escaping (Value) -> String,
         detail: SettingOptionDetail
     ) -> some View {
-        HStack(alignment: .center, spacing: 12) {
-            Text(title)
+        let isCaps = libraryStore.settings.isCapitalizationEnabled
+        let displayTitle = AppCapitalization.format(title, enabled: isCaps)
+        return HStack(alignment: .center, spacing: 12) {
+            Text(displayTitle)
                 .font(.system(size: 14.5, weight: .bold, design: .monospaced))
                 .foregroundStyle(Color.primary)
                 .onLongPressGesture(minimumDuration: 0.45) {
@@ -84,10 +95,10 @@ public struct AppearanceSettingsView: View {
 
             Picker(selection: selection) {
                 ForEach(options) { option in
-                    Text(label(option)).tag(option)
+                    Text(AppCapitalization.format(label(option), enabled: isCaps)).tag(option)
                 }
             } label: {
-                Text(title)
+                Text(displayTitle)
             }
             .pickerStyle(.menu)
             .labelsHidden()
@@ -99,7 +110,8 @@ public struct AppearanceSettingsView: View {
     #if os(iOS)
     // MARK: - Home Page Section (collapsed by default)
     private var homePageSection: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        let isCaps = libraryStore.settings.isCapitalizationEnabled
+        return VStack(alignment: .leading, spacing: 14) {
             Button {
                 HapticFeedback.selectionChanged()
                 withAnimation(.easeInOut(duration: 0.2)) {
@@ -107,7 +119,7 @@ public struct AppearanceSettingsView: View {
                 }
             } label: {
                 HStack {
-                    Text("HOME PAGE")
+                    Text(AppCapitalization.format("HOME PAGE", enabled: isCaps))
                         .font(.system(size: 11, weight: .bold, design: .monospaced))
                         .foregroundStyle(.secondary)
                     Spacer()
@@ -132,7 +144,7 @@ public struct AppearanceSettingsView: View {
                                 .font(.system(size: 13, weight: .semibold))
                                 .foregroundStyle(.tertiary)
 
-                            Text(section.id.displayName)
+                            Text(AppCapitalization.format(section.id.displayName, enabled: isCaps))
                                 .font(.system(size: 13, weight: .bold, design: .monospaced))
                                 .foregroundStyle(Color.primary)
                                 .lineLimit(2)
@@ -140,7 +152,7 @@ public struct AppearanceSettingsView: View {
 
                             Spacer(minLength: 8)
 
-                            Text(section.isEnabled ? "ON" : "OFF")
+                            Text(AppCapitalization.format(section.isEnabled ? "ON" : "OFF", enabled: isCaps))
                                 .font(.system(size: 12, weight: .bold, design: .monospaced))
                                 .foregroundStyle(section.isEnabled ? Color.blue : Color.red)
                                 .frame(minWidth: 36, alignment: .trailing)
@@ -187,6 +199,17 @@ public struct AppearanceSettingsView: View {
         )
     }
 
+    // MARK: - Capitalization Section
+    private var capitalizationSection: some View {
+        let isCaps = libraryStore.settings.isCapitalizationEnabled
+        return TypographicToggleRow(
+            title: AppCapitalization.format("CAPITALIZATION", enabled: isCaps),
+            isOn: $libraryStore.settings.isCapitalizationEnabled,
+            onToggle: { libraryStore.saveSettings() },
+            onLongPress: { activeDetail = SettingOptionCatalog.capitalization }
+        )
+    }
+
     // MARK: - Default Library Page Section
     private var defaultLibraryPageSection: some View {
         pickerRow(
@@ -204,8 +227,9 @@ public struct AppearanceSettingsView: View {
     #if os(iOS)
     // MARK: - Album Page Section
     private var albumPageSection: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            Text("ALBUM PAGE")
+        let isCaps = libraryStore.settings.isCapitalizationEnabled
+        return VStack(alignment: .leading, spacing: 20) {
+            Text(AppCapitalization.format("ALBUM PAGE", enabled: isCaps))
                 .font(.system(size: 11, weight: .bold, design: .monospaced))
                 .foregroundStyle(.secondary)
                 .onLongPressGesture(minimumDuration: 0.45) {
@@ -229,8 +253,9 @@ public struct AppearanceSettingsView: View {
 
     // MARK: - Fullscreen Player Section
     private var fullscreenPlayerSection: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            Text("FULLSCREEN PLAYER")
+        let isCaps = libraryStore.settings.isCapitalizationEnabled
+        return VStack(alignment: .leading, spacing: 20) {
+            Text(AppCapitalization.format("FULLSCREEN PLAYER", enabled: isCaps))
                 .font(.system(size: 11, weight: .bold, design: .monospaced))
                 .foregroundStyle(.secondary)
                 .onLongPressGesture(minimumDuration: 0.45) {
@@ -250,28 +275,28 @@ public struct AppearanceSettingsView: View {
             )
 
             TypographicToggleRow(
-                title: "SHOW AUDIO SPECS",
+                title: AppCapitalization.format("SHOW AUDIO SPECS", enabled: isCaps),
                 isOn: $libraryStore.settings.showAudioSpecsInPlayer,
                 onToggle: { libraryStore.saveSettings() },
                 onLongPress: { activeDetail = SettingOptionCatalog.showAudioSpecs }
             )
 
             TypographicToggleRow(
-                title: "USE PROGRESS BAR",
+                title: AppCapitalization.format("USE PROGRESS BAR", enabled: isCaps),
                 isOn: $libraryStore.settings.useProgressBar,
                 onToggle: { libraryStore.saveSettings() },
                 onLongPress: { activeDetail = SettingOptionCatalog.useProgressBar }
             )
 
             TypographicToggleRow(
-                title: "ROUNDED ARTWORK",
+                title: AppCapitalization.format("ROUNDED ARTWORK", enabled: isCaps),
                 isOn: $libraryStore.settings.isArtworkRounded,
                 onToggle: { libraryStore.saveSettings() },
                 onLongPress: { activeDetail = SettingOptionCatalog.roundedArtwork }
             )
 
             TypographicToggleRow(
-                title: "ICONS",
+                title: AppCapitalization.format("ICONS", enabled: isCaps),
                 isOn: $libraryStore.settings.usePlayerIcons,
                 onToggle: { libraryStore.saveSettings() },
                 onLongPress: { activeDetail = SettingOptionCatalog.playerIcons }

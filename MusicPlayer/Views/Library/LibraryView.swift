@@ -60,8 +60,9 @@ public struct LibraryView: View {
             }
         }
         .background(libraryStore.settings.appTheme.backgroundColor.ignoresSafeArea())
-        .navigationTitle("LIBRARY")
+        .navigationTitle(AppCapitalization.format("LIBRARY", enabled: libraryStore.settings.isCapitalizationEnabled))
         .navigationBarTitleDisplayMode(.large)
+        .environment(\.isCapitalizationEnabled, libraryStore.settings.isCapitalizationEnabled)
         .searchable(
             text: $libraryStore.searchQuery,
             isPresented: $isSearchFocused,
@@ -128,10 +129,14 @@ public struct LibraryView: View {
     }
 
     private func title(for category: LibraryCategory) -> String {
+        let isCaps = libraryStore.settings.isCapitalizationEnabled
+        let raw: String
         if category == .folders {
-            return (hasMultipleSources || hasAnyServers) ? "SOURCES" : "FOLDERS"
+            raw = (hasMultipleSources || hasAnyServers) ? "SOURCES" : "FOLDERS"
+        } else {
+            raw = category.title
         }
-        return category.title
+        return AppCapitalization.format(raw, enabled: isCaps)
     }
 
     private var visibleCategories: [LibraryCategory] {
@@ -143,28 +148,31 @@ public struct LibraryView: View {
     }
 
     private var searchPrompt: String {
+        let isCaps = libraryStore.settings.isCapitalizationEnabled
+        let findWord = AppCapitalization.format("FIND", enabled: isCaps)
         switch libraryStore.selectedCategory {
         case .artists:
-            // Count
             let count = libraryStore.activeArtists.count
-            return "FIND \(count) \(count == 1 ? "ARTIST" : "ARTISTS")"
+            let word = AppCapitalization.format(count == 1 ? "ARTIST" : "ARTISTS", enabled: isCaps)
+            return "\(findWord) \(count) \(word)"
         case .albums:
-            // Count
             let count = libraryStore.activeAlbums.count
-            return "FIND \(count) \(count == 1 ? "ALBUM" : "ALBUMS")"
+            let word = AppCapitalization.format(count == 1 ? "ALBUM" : "ALBUMS", enabled: isCaps)
+            return "\(findWord) \(count) \(word)"
         case .playlists:
-            // Count
             let count = libraryStore.playlists.count
-            return "FIND \(count) \(count == 1 ? "PLAYLIST" : "PLAYLISTS")"
+            let word = AppCapitalization.format(count == 1 ? "PLAYLIST" : "PLAYLISTS", enabled: isCaps)
+            return "\(findWord) \(count) \(word)"
         case .tracks:
-            // Count
             let count = libraryStore.activeTracks.count
-            return "FIND \(count) \(count == 1 ? "TRACK" : "TRACKS")"
+            let word = AppCapitalization.format(count == 1 ? "TRACK" : "TRACKS", enabled: isCaps)
+            return "\(findWord) \(count) \(word)"
         case .folders:
             let count = totalSourcesCount
             let isSources = hasMultipleSources || hasAnyServers
-            let word = isSources ? (count == 1 ? "SOURCE" : "SOURCES") : (count == 1 ? "FOLDER" : "FOLDERS")
-            return "FIND \(count) \(word)"
+            let rawWord = isSources ? (count == 1 ? "SOURCE" : "SOURCES") : (count == 1 ? "FOLDER" : "FOLDERS")
+            let word = AppCapitalization.format(rawWord, enabled: isCaps)
+            return "\(findWord) \(count) \(word)"
         }
     }
 
@@ -226,11 +234,47 @@ public struct LibraryView: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .modifier(CategoryTabContextMenuModifier(category: category, libraryStore: libraryStore))
             }
         }
         .padding(.horizontal, 16)
         .contentShape(Rectangle())
         .simultaneousGesture(headerSwipeGesture)
+    }
+}
+
+// MARK: - Category Tab Context Menu (Columns selection for ARTISTS, ALBUMS, PLAYLISTS)
+
+private struct CategoryTabContextMenuModifier: ViewModifier {
+    let category: LibraryCategory
+    @Bindable var libraryStore: LibraryStore
+
+    func body(content: Content) -> some View {
+        if category == .artists || category == .albums || category == .playlists {
+            content.contextMenu {
+                let current = libraryStore.settings.gridColumnCount(for: category)
+                let isCaps = libraryStore.settings.isCapitalizationEnabled
+                Menu {
+                    ForEach([2, 3, 4], id: \.self) { count in
+                        Button {
+                            HapticFeedback.selectionChanged()
+                            libraryStore.settings.setGridColumnCount(count, for: category)
+                            libraryStore.saveSettings()
+                        } label: {
+                            if current == count {
+                                Label("\(count)", systemImage: "checkmark")
+                            } else {
+                                Text("\(count)")
+                            }
+                        }
+                    }
+                } label: {
+                    Text(AppCapitalization.format("COLUMNS", enabled: isCaps))
+                }
+            }
+        } else {
+            content
+        }
     }
 }
 
@@ -320,11 +364,12 @@ private struct LibrarySelectionCounterMenu: View {
     let selection: LibrarySelectionStore
     let onAddToPlaylist: () -> Void
     let onShowSelection: () -> Void
+    @Environment(\.isCapitalizationEnabled) private var isCaps: Bool
 
     var body: some View {
         Menu {
             Button(action: onAddToPlaylist) {
-                Text("ADD TO PLAYLIST")
+                Text(AppCapitalization.format("ADD TO PLAYLIST", enabled: isCaps))
             }
 
             QuickAddToPlaylistMenu(libraryStore: libraryStore, onAdded: { selection.end() }) {
@@ -338,7 +383,7 @@ private struct LibrarySelectionCounterMenu: View {
                 HapticFeedback.notificationSuccess()
                 selection.end()
             }) {
-                Text("PLAY NEXT")
+                Text(AppCapitalization.format("PLAY NEXT", enabled: isCaps))
             }
 
             Button(action: {
@@ -348,18 +393,18 @@ private struct LibrarySelectionCounterMenu: View {
                 HapticFeedback.notificationSuccess()
                 selection.end()
             }) {
-                Text("QUEUE")
+                Text(AppCapitalization.format("QUEUE", enabled: isCaps))
             }
 
             Button(action: onShowSelection) {
-                Text("SHOW SELECTION")
+                Text(AppCapitalization.format("SHOW SELECTION", enabled: isCaps))
             }
 
             Button(role: .destructive) {
                 HapticFeedback.lightImpact()
                 selection.end()
             } label: {
-                Text("END SELECTION")
+                Text(AppCapitalization.format("END SELECTION", enabled: isCaps))
             }
         } label: {
             Text("\(selection.count)")
@@ -375,12 +420,13 @@ private struct LibrarySelectionSheet: View {
     let libraryStore: LibraryStore
     let selection: LibrarySelectionStore
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.isCapitalizationEnabled) private var isCaps: Bool
 
     var body: some View {
         let theme = libraryStore.settings.appTheme
         let tracks = selection.tracks(in: libraryStore)
         VStack(spacing: 0) {
-            Text("SELECTION (\(tracks.count))")
+            Text(AppCapitalization.format("SELECTION (\(tracks.count))", enabled: isCaps))
                 .font(.system(size: 13, weight: .bold, design: .monospaced))
                 .foregroundStyle(Color.primary)
                 .padding(.top, 22)
@@ -402,7 +448,7 @@ private struct LibrarySelectionSheet: View {
                             HapticFeedback.lightImpact()
                             selection.remove(ids: [track.id])
                         } label: {
-                            Text("REMOVE")
+                            Text(AppCapitalization.format("REMOVE", enabled: isCaps))
                         }
                     }
                 }

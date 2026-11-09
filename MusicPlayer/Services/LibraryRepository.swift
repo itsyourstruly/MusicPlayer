@@ -413,8 +413,9 @@ public actor LibraryRepository {
                     verifiedGoodDiffs: [],
                     downloadedMetadataCache: PersistentDownloadedMetadataCache(),
                     scanMethod: settings.libraryScanMethod,
-            serverSourceOrder: settings.serverSources.map(\.id),
-                albumMergeGroups: settings.albumMergeGroups
+                    serverSourceOrder: settings.serverSources.map(\.id),
+                    albumMergeGroups: settings.albumMergeGroups,
+                    customArtistSeparators: settings.customArtistSeparators
                 )
                 let state = updateFullState(
                     tracks: res.tracks,
@@ -466,7 +467,8 @@ public actor LibraryRepository {
             downloadedMetadataCache: downloadedMetadataCache,
             scanMethod: settings.libraryScanMethod,
             serverSourceOrder: settings.serverSources.map(\.id),
-        albumMergeGroups: settings.albumMergeGroups
+            albumMergeGroups: settings.albumMergeGroups,
+            customArtistSeparators: settings.customArtistSeparators
         )
 
         return updateFullState(
@@ -494,7 +496,8 @@ public actor LibraryRepository {
             downloadedMetadataCache: downloadedMetadataCache,
             scanMethod: settings.libraryScanMethod,
             serverSourceOrder: settings.serverSources.map(\.id),
-        albumMergeGroups: settings.albumMergeGroups
+            albumMergeGroups: settings.albumMergeGroups,
+            customArtistSeparators: settings.customArtistSeparators
         )
         return updateFullState(
             tracks: res.tracks,
@@ -535,7 +538,8 @@ public actor LibraryRepository {
             downloadedMetadataCache: downloadedMetadataCache,
             scanMethod: settings.libraryScanMethod,
             serverSourceOrder: settings.serverSources.map(\.id),
-        albumMergeGroups: settings.albumMergeGroups
+            albumMergeGroups: settings.albumMergeGroups,
+            customArtistSeparators: settings.customArtistSeparators
         )
 
         return updateFullState(

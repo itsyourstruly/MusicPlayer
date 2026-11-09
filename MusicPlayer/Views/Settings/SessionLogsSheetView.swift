@@ -38,6 +38,7 @@ public struct PlainTextLogDocument: FileDocument {
 public struct SessionLogsSheetView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.appTheme) private var appTheme
+    @Environment(\.isCapitalizationEnabled) private var isCaps: Bool
 
     @State private var logStore = SessionLogStore.shared
     @State private var searchText: String = ""
@@ -122,7 +123,7 @@ public struct SessionLogsSheetView: View {
             }
             .background(appTheme.backgroundColor.ignoresSafeArea())
             .toolbarBackground(appTheme.backgroundColor, for: .navigationBar)
-            .navigationTitle("SESSION LOGS")
+            .navigationTitle(AppCapitalization.format("SESSION LOGS", enabled: isCaps))
             .navigationBarTitleDisplayMode(.inline)
             .searchable(text: $searchText, prompt: "Search logs (message, subsystem, level)...")
             .task {
@@ -278,11 +279,11 @@ public struct SessionLogsSheetView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
-                    Text("SYSTEM & RUNTIME DIAGNOSTICS")
+                    Text(AppCapitalization.format("SYSTEM & RUNTIME DIAGNOSTICS", enabled: isCaps))
                         .font(.system(size: 10, weight: .heavy, design: .monospaced))
                         .foregroundStyle(.secondary)
                     Spacer()
-                    Button("REFRESH") {
+                    Button(AppCapitalization.format("REFRESH", enabled: isCaps)) {
                         HapticFeedback.lightImpact()
                         refreshDiagnostics()
                     }
@@ -315,7 +316,7 @@ public struct SessionLogsSheetView: View {
                 .font(.system(size: 36))
                 .foregroundStyle(.secondary.opacity(0.5))
 
-            Text("NO LOGS RECORDED")
+            Text(AppCapitalization.format("NO LOGS RECORDED", enabled: isCaps))
                 .font(.system(size: 13, weight: .heavy, design: .monospaced))
                 .foregroundStyle(.primary)
 
@@ -340,7 +341,7 @@ public struct SessionLogsSheetView: View {
                 Button(action: {
                     copyLogsAction()
                 }) {
-                    Text("COPY LOGS")
+                    Text(AppCapitalization.format("COPY LOGS", enabled: isCaps))
                         .font(.system(size: 13, weight: .heavy, design: .monospaced))
                         .foregroundStyle(Color.primary)
                         .frame(maxWidth: .infinity)
@@ -353,7 +354,7 @@ public struct SessionLogsSheetView: View {
                 Button(action: {
                     saveLogsAction()
                 }) {
-                    Text("SAVE LOGS")
+                    Text(AppCapitalization.format("SAVE LOGS", enabled: isCaps))
                         .font(.system(size: 13, weight: .heavy, design: .monospaced))
                         .foregroundStyle(Color.primary)
                         .frame(maxWidth: .infinity)

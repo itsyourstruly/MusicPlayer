@@ -10,6 +10,7 @@ public struct SortSelectorBar<Option: Identifiable & Equatable>: View {
     @Binding public var selectedOption: Option
     @Binding public var isReversed: Bool
     public let labelForOption: (Option) -> String
+    @Environment(\.isCapitalizationEnabled) private var isCaps: Bool
 
     // Initialize with configured properties
     public init(
@@ -30,7 +31,7 @@ public struct SortSelectorBar<Option: Identifiable & Equatable>: View {
     public var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 2) {
-                Text(title)
+                Text(AppCapitalization.format(title, enabled: isCaps))
                     .font(.system(size: 11, weight: .bold, design: .monospaced))
                     .foregroundStyle(.secondary)
                     .padding(.trailing, 4)
@@ -50,7 +51,7 @@ public struct SortSelectorBar<Option: Identifiable & Equatable>: View {
                         }
                     }) {
                         HStack(spacing: 4) {
-                            Text(labelForOption(option))
+                            Text(AppCapitalization.format(labelForOption(option), enabled: isCaps))
                                 .font(.system(size: 11, weight: isSelected ? .bold : .regular, design: .monospaced))
                                 .foregroundStyle(
                                     isSelected

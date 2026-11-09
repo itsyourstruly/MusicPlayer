@@ -76,7 +76,7 @@ public struct AllTracksListView: View {
                     text: $localSearchQuery,
                     isPresented: $isSearchPresented,
                     placement: .toolbar,
-                    prompt: Text("SEARCH TRACKS")
+                    prompt: Text(AppCapitalization.format("SEARCH TRACKS", enabled: libraryStore.settings.isCapitalizationEnabled))
                 )
                 .searchToolbarBehavior(.minimize)
                 .searchFocused($isSearchFieldFocused)

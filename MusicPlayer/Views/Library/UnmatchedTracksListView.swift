@@ -6,6 +6,7 @@ public struct UnmatchedTracksListView: View {
     @Bindable var libraryStore: LibraryStore
     @Environment(\.dismiss) private var dismiss
     @Environment(\.appTheme) private var appTheme
+    @Environment(\.isCapitalizationEnabled) private var isCaps: Bool
 
     @State private var selectedTrackForManualSearch: Track? = nil
     @State private var checkingTrackIDs: Set<UUID> = []
@@ -89,11 +90,11 @@ public struct UnmatchedTracksListView: View {
                         .padding(.horizontal, 16)
                         .padding(.vertical, 14)
                     }
-                    .nativeSearchField(text: $searchText, prompt: "SEARCH TRACK, ALBUM, OR ARTIST...")
+                    .nativeSearchField(text: $searchText, prompt: AppCapitalization.format("SEARCH TRACK, ALBUM, OR ARTIST...", enabled: isCaps))
                 }
             }
             .background(appTheme.backgroundColor.ignoresSafeArea())
-            .navigationTitle("UNMATCHED TRACKS")
+            .navigationTitle(AppCapitalization.format("UNMATCHED TRACKS", enabled: isCaps))
             .navigationBarTitleDisplayMode(.inline)
             .sheet(item: $selectedTrackForManualSearch) { track in
                 OnlineMetadataMatchSheet(track: track, libraryStore: libraryStore)
@@ -105,13 +106,13 @@ public struct UnmatchedTracksListView: View {
 
     private var searchBar: some View {
         HStack(spacing: 8) {
-            TextField("SEARCH TRACK, ALBUM, OR ARTIST...", text: $searchText)
+            TextField(AppCapitalization.format("SEARCH TRACK, ALBUM, OR ARTIST...", enabled: isCaps), text: $searchText)
                 .font(.system(size: 12, weight: .medium, design: .monospaced))
                 .textFieldStyle(.plain)
                 .submitLabel(.search)
 
             if !searchText.isEmpty {
-                Button("CLEAR") {
+                Button(AppCapitalization.format("CLEAR", enabled: isCaps)) {
                     searchText = ""
                 }
                 .font(.system(size: 10, weight: .bold, design: .monospaced))
@@ -209,6 +210,7 @@ public struct UnmatchedTrackCardView: View {
     public let onManualSearch: () -> Void
 
     @Environment(\.appTheme) private var appTheme
+    @Environment(\.isCapitalizationEnabled) private var isCaps: Bool
 
     public init(
         track: Track,
@@ -237,30 +239,30 @@ public struct UnmatchedTrackCardView: View {
                 .frame(width: 150, height: 150)
 
                 // Sub-Artwork Status Label
-                Text("ORIGINAL LOCAL METADATA")
+                Text(AppCapitalization.format("ORIGINAL LOCAL METADATA", enabled: isCaps))
                     .font(.system(size: 9, weight: .bold, design: .monospaced))
                     .foregroundStyle(Color.secondary)
             }
 
             // Centered Metadata Rows
             VStack(alignment: .center, spacing: 6) {
-                centeredRow(label: "TITLE", value: track.title)
-                centeredRow(label: "ARTIST", value: track.artist)
-                centeredRow(label: "ALBUM", value: track.album.isEmpty ? "—" : track.album)
-                centeredRow(label: "YEAR", value: track.year.map { String($0) } ?? "—")
+                centeredRow(label: AppCapitalization.format("TITLE", enabled: isCaps), value: track.title)
+                centeredRow(label: AppCapitalization.format("ARTIST", enabled: isCaps), value: track.artist)
+                centeredRow(label: AppCapitalization.format("ALBUM", enabled: isCaps), value: track.album.isEmpty ? "—" : track.album)
+                centeredRow(label: AppCapitalization.format("YEAR", enabled: isCaps), value: track.year.map { String($0) } ?? "—")
 
                 if let g = track.genre, !g.isEmpty && g != "Unknown Genre" && g != "—" {
-                    centeredRow(label: "GENRE", value: g)
+                    centeredRow(label: AppCapitalization.format("GENRE", enabled: isCaps), value: g)
                 }
 
                 if let info = track.fileInfo {
-                    centeredRow(label: "CODEC", value: info.formatDescription)
+                    centeredRow(label: AppCapitalization.format("CODEC", enabled: isCaps), value: info.formatDescription)
                 }
             }
             .frame(maxWidth: .infinity)
 
             if let msg = statusMessage {
-                Text(msg.uppercased())
+                Text(AppCapitalization.format(msg, enabled: isCaps))
                     .font(.system(size: 10, weight: .bold, design: .monospaced))
                     .foregroundStyle(Color.blue)
                     .padding(.vertical, 2)
@@ -271,14 +273,14 @@ public struct UnmatchedTrackCardView: View {
                 Spacer()
 
                 Button(action: onManualSearch) {
-                    Text("CUSTOM SEARCH")
+                    Text(AppCapitalization.format("CUSTOM SEARCH", enabled: isCaps))
                         .font(.system(size: 12, weight: .bold, design: .monospaced))
                         .foregroundStyle(Color.primary)
                 }
                 .buttonStyle(.plain)
 
                 Button(action: onRecheck) {
-                    Text(isChecking ? "RESCANNING..." : "RESCAN")
+                    Text(AppCapitalization.format(isChecking ? "RESCANNING..." : "RESCAN", enabled: isCaps))
                         .font(.system(size: 12, weight: .bold, design: .monospaced))
                         .foregroundStyle(isChecking ? Color.secondary : Color.blue)
                 }

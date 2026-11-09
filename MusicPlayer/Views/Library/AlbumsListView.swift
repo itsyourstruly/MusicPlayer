@@ -6,9 +6,12 @@ public struct AlbumsListView: View {
     @Bindable var playerService: AudioPlayerService
     public let isStandalone: Bool
 
-    private let columns = [
-        GridItem(.adaptive(minimum: 155), spacing: 14)
-    ]
+    private var columns: [GridItem] {
+        if let count = libraryStore.settings.albumsGridColumnCount, (2...4).contains(count) {
+            return Array(repeating: GridItem(.flexible(), spacing: 14), count: count)
+        }
+        return [GridItem(.adaptive(minimum: 155), spacing: 14)]
+    }
 
     @State private var selectedAlbum: Album? = nil
     @State private var selectedArtistForNavigation: Artist? = nil
@@ -77,7 +80,7 @@ public struct AlbumsListView: View {
                     text: $localSearchQuery,
                     isPresented: $isSearchPresented,
                     placement: .toolbar,
-                    prompt: Text("SEARCH ALBUMS")
+                    prompt: Text(AppCapitalization.format("SEARCH ALBUMS", enabled: libraryStore.settings.isCapitalizationEnabled))
                 )
                 .searchToolbarBehavior(.minimize)
                 .searchFocused($isSearchFieldFocused)
@@ -137,7 +140,7 @@ public struct AlbumsListView: View {
                     let searching = libraryStore.searchModel.isSearching
 #endif
                     if !searching {
-                        EmptyStateView(title: "EMPTY", message: "")
+                        EmptyStateView(title: AppCapitalization.format("EMPTY", enabled: libraryStore.settings.isCapitalizationEnabled), message: "")
                     }
                 }
             } else {
@@ -177,7 +180,7 @@ public struct AlbumsListView: View {
                                         .font(.system(size: 12, weight: .medium))
                                         .foregroundStyle(.secondary)
                                         .lineLimit(1)
-                                    Text(album.formattedTrackCount)
+                                    Text(AppCapitalization.format(album.formattedTrackCount, enabled: libraryStore.settings.isCapitalizationEnabled))
                                         .font(.system(size: 11, design: .monospaced))
                                         .foregroundStyle(.tertiary)
                                 }

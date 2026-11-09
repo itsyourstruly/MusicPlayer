@@ -7,9 +7,12 @@ public struct ArtistsListView: View {
     /// When true (Home header push): owns scrolling + album-style toolbar search; ignores Library search drawer.
     public let isStandalone: Bool
 
-    private let columns = [
-        GridItem(.adaptive(minimum: 155), spacing: 14)
-    ]
+    private var columns: [GridItem] {
+        if let count = libraryStore.settings.artistsGridColumnCount, (2...4).contains(count) {
+            return Array(repeating: GridItem(.flexible(), spacing: 14), count: count)
+        }
+        return [GridItem(.adaptive(minimum: 155), spacing: 14)]
+    }
 
     @State private var selectedArtist: Artist? = nil
     @State private var displayLimit: Int = 80
@@ -73,7 +76,7 @@ public struct ArtistsListView: View {
                     text: $localSearchQuery,
                     isPresented: $isSearchPresented,
                     placement: .toolbar,
-                    prompt: Text("SEARCH ARTISTS")
+                    prompt: Text(AppCapitalization.format("SEARCH ARTISTS", enabled: libraryStore.settings.isCapitalizationEnabled))
                 )
                 .searchToolbarBehavior(.minimize)
                 .searchFocused($isSearchFieldFocused)
@@ -136,7 +139,7 @@ public struct ArtistsListView: View {
                     let searching = libraryStore.searchModel.isSearching
 #endif
                     if !searching {
-                        EmptyStateView(title: "EMPTY", message: "")
+                        EmptyStateView(title: AppCapitalization.format("EMPTY", enabled: libraryStore.settings.isCapitalizationEnabled), message: "")
                             .padding(.top, 24)
                     }
                 }

@@ -7,6 +7,7 @@ public struct PlaybackControlsSheetView: View {
     @Bindable var equalizerManager: EqualizerManager = EqualizerManager.shared
     @Environment(\.dismiss) private var dismiss
     @Environment(\.appTheme) private var appTheme
+    @Environment(\.isCapitalizationEnabled) private var isCaps: Bool
     @Environment(LibraryStore.self) private var envLibraryStore: LibraryStore?
     var injectedLibraryStore: LibraryStore? = nil
     private var libraryStore: LibraryStore? { injectedLibraryStore ?? envLibraryStore }
@@ -54,7 +55,7 @@ public struct PlaybackControlsSheetView: View {
                 .padding(.vertical, 16)
             }
             .background(appTheme.backgroundColor.ignoresSafeArea())
-            .navigationTitle("PLAYBACK")
+            .navigationTitle(AppCapitalization.format("PLAYBACK", enabled: isCaps))
             .navigationBarTitleDisplayMode(.inline)
             .sheet(isPresented: $showingPresetsSheet) {
                 EqualizerPresetsSheetView(equalizerManager: equalizerManager)

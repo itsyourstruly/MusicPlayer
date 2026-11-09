@@ -5,6 +5,7 @@ public struct EqualizerPresetsSheetView: View {
     @Bindable var equalizerManager: EqualizerManager
     @Environment(\.dismiss) private var dismiss
     @Environment(\.appTheme) private var appTheme
+    @Environment(\.isCapitalizationEnabled) private var isCaps: Bool
     @State private var renameTarget: EqualizerPreset? = nil
     @State private var renameText: String = ""
 
@@ -40,7 +41,7 @@ public struct EqualizerPresetsSheetView: View {
                 }
             }
             .listStyle(.insetGrouped)
-            .navigationTitle("PRESETS")
+            .navigationTitle(AppCapitalization.format("PRESETS", enabled: isCaps))
             .navigationBarTitleDisplayMode(.inline)
             .alert("RENAME", isPresented: Binding(
                 get: { renameTarget != nil },

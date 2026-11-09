@@ -6,6 +6,7 @@ public struct DuplicateResolverView: View {
     @Bindable var libraryStore: LibraryStore
     @Environment(\.dismiss) private var dismiss
     @Environment(\.appTheme) private var appTheme
+    @Environment(\.isCapitalizationEnabled) private var isCaps: Bool
 
     @State private var trackToDelete: Track? = nil
     @State private var showingDeleteAllAlert: Bool = false
@@ -37,7 +38,7 @@ public struct DuplicateResolverView: View {
                     Image(systemName: "magnifyingglass")
                         .font(.system(size: 13, weight: .bold))
                 }
-                Text(isScanningDuplicates ? "SCANNING LIBRARY FOR DUPLICATES..." : "SCAN LIBRARY FOR DUPLICATES")
+                Text(AppCapitalization.format(isScanningDuplicates ? "SCANNING LIBRARY FOR DUPLICATES..." : "SCAN LIBRARY FOR DUPLICATES", enabled: isCaps))
                     .font(.system(size: 13, weight: .bold, design: .monospaced))
             }
             .foregroundStyle(Color.blue)
@@ -112,11 +113,11 @@ public struct DuplicateResolverView: View {
                 }
             }
             .background(appTheme.backgroundColor.ignoresSafeArea())
-            .navigationTitle("DUPLICATE MANAGER")
+            .navigationTitle(AppCapitalization.format("DUPLICATE MANAGER", enabled: isCaps))
             .navigationBarTitleDisplayMode(.inline)
-            .alert("DELETE ALL DUPLICATES FROM DISK?", isPresented: $showingDeleteAllAlert) {
-                Button("CANCEL", role: .cancel) {}
-                Button("DELETE FILES", role: .destructive) {
+            .alert(AppCapitalization.format("DELETE ALL DUPLICATES FROM DISK?", enabled: isCaps), isPresented: $showingDeleteAllAlert) {
+                Button(AppCapitalization.format("CANCEL", enabled: isCaps), role: .cancel) {}
+                Button(AppCapitalization.format("DELETE FILES", enabled: isCaps), role: .destructive) {
                     deleteAllSecondaryDuplicates()
                 }
             } message: {
@@ -126,12 +127,12 @@ public struct DuplicateResolverView: View {
                 let count = libraryStore.totalDuplicateTracksCount
                 Text("This will permanently move \(count) redundant audio files (\(ByteFormatting.formatFileSize(bytes: bytes))) to Trash. Your selected primary versions will be safely retained in your library.")
             }
-            .alert("DELETE FILE FROM DISK?", isPresented: Binding(
+            .alert(AppCapitalization.format("DELETE FILE FROM DISK?", enabled: isCaps), isPresented: Binding(
                 get: { trackToDelete != nil },
                 set: { if !$0 { trackToDelete = nil } }
             )) {
-                Button("CANCEL", role: .cancel) { trackToDelete = nil }
-                Button("DELETE FILE", role: .destructive) {
+                Button(AppCapitalization.format("CANCEL", enabled: isCaps), role: .cancel) { trackToDelete = nil }
+                Button(AppCapitalization.format("DELETE FILE", enabled: isCaps), role: .destructive) {
                     if let track = trackToDelete {
                         deleteSingleTrack(track)
                     }
@@ -230,6 +231,7 @@ private struct DeletionFeedbackBanner: View {
     let onDismiss: () -> Void
 
     @Environment(\.appTheme) private var appTheme
+    @Environment(\.isCapitalizationEnabled) private var isCaps: Bool
 
     // Body
     var body: some View {
@@ -241,7 +243,7 @@ private struct DeletionFeedbackBanner: View {
 
             Spacer()
 
-            Button("DISMISS") {
+            Button(AppCapitalization.format("DISMISS", enabled: isCaps)) {
                 onDismiss()
             }
             .font(.system(size: 10, weight: .bold, design: .monospaced))
@@ -260,6 +262,7 @@ private struct DeletionFeedbackBanner: View {
 /// Active progress indicator while trashing duplicate files.
 private struct DeletionProcessingBanner: View {
     @Environment(\.appTheme) private var appTheme
+    @Environment(\.isCapitalizationEnabled) private var isCaps: Bool
 
     // Body
     var body: some View {
@@ -267,7 +270,7 @@ private struct DeletionProcessingBanner: View {
             ProgressView()
                 .tint(Color.primary)
 
-            Text("MOVING REDUNDANT FILES TO TRASH...")
+            Text(AppCapitalization.format("MOVING REDUNDANT FILES TO TRASH...", enabled: isCaps))
                 .font(.system(size: 11, weight: .bold, design: .monospaced))
                 .foregroundStyle(.secondary)
 
@@ -295,17 +298,18 @@ private struct DuplicateSummaryHeaderView: View {
     let onDeleteAll: () -> Void
 
     @Environment(\.appTheme) private var appTheme
+    @Environment(\.isCapitalizationEnabled) private var isCaps: Bool
 
     // Body
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("DUPLICATE CLUSTERS DETECTED")
+                    Text(AppCapitalization.format("DUPLICATE CLUSTERS DETECTED", enabled: isCaps))
                         .font(.system(size: 11, weight: .bold, design: .monospaced))
                         .foregroundStyle(.secondary)
 
-                    Text("\(groupsCount) GROUPS • \(redundantCount) REDUNDANT FILES")
+                    Text("\(groupsCount) \(AppCapitalization.format("GROUPS", enabled: isCaps)) • \(redundantCount) \(AppCapitalization.format("REDUNDANT FILES", enabled: isCaps))")
                         .font(.system(size: 14, weight: .bold, design: .monospaced))
                         .foregroundStyle(Color.primary)
                 }
@@ -313,7 +317,7 @@ private struct DuplicateSummaryHeaderView: View {
                 Spacer()
 
                 VStack(alignment: .trailing, spacing: 2) {
-                    Text("RECOVERABLE")
+                    Text(AppCapitalization.format("RECOVERABLE", enabled: isCaps))
                         .font(.system(size: 10, weight: .bold, design: .monospaced))
                         .foregroundStyle(.secondary)
 
@@ -328,7 +332,7 @@ private struct DuplicateSummaryHeaderView: View {
 
             HStack(spacing: 10) {
                 Button(action: onAutoResolve) {
-                    Text("AUTO-RESOLVE BEST")
+                    Text(AppCapitalization.format("AUTO-RESOLVE BEST", enabled: isCaps))
                         .font(.system(size: 11, weight: .bold, design: .monospaced))
                         .frame(maxWidth: .infinity)
                 }
@@ -336,7 +340,7 @@ private struct DuplicateSummaryHeaderView: View {
                 .disabled(isDeleting)
 
                 Button(action: onDeleteAll) {
-                    Text("DELETE ALL DUPLICATES")
+                    Text(AppCapitalization.format("DELETE ALL DUPLICATES", enabled: isCaps))
                         .font(.system(size: 11, weight: .bold, design: .monospaced))
                         .frame(maxWidth: .infinity)
                 }
@@ -362,6 +366,7 @@ public struct DuplicateClusterCardView: View {
     public let onDeleteTrack: (Track) -> Void
 
     @Environment(\.appTheme) private var appTheme
+    @Environment(\.isCapitalizationEnabled) private var isCaps: Bool
 
     public init(
         group: DuplicateGroup,
@@ -395,7 +400,7 @@ public struct DuplicateClusterCardView: View {
                 Spacer()
 
                 if group.potentialSavedBytes > 0 {
-                    Text("+\(ByteFormatting.formatFileSize(bytes: group.potentialSavedBytes)) RECOVERABLE")
+                    Text("+\(ByteFormatting.formatFileSize(bytes: group.potentialSavedBytes)) \(AppCapitalization.format("RECOVERABLE", enabled: isCaps))")
                         .font(.system(size: 10, weight: .bold, design: .monospaced))
                         .foregroundStyle(appTheme.accentColor)
                         .padding(.horizontal, 6)
@@ -452,6 +457,7 @@ public struct CandidateComparisonCard: View {
     public let onDelete: () -> Void
 
     @Environment(\.appTheme) private var appTheme
+    @Environment(\.isCapitalizationEnabled) private var isCaps: Bool
 
     public init(
         candidate: DuplicateCandidate,
@@ -506,11 +512,11 @@ public struct CandidateComparisonCard: View {
 
                 // Sub-Artwork Status Label
                 if isPrimary {
-                    Text("KEEPING THIS VERSION")
+                    Text(AppCapitalization.format("KEEPING THIS VERSION", enabled: isCaps))
                         .font(.system(size: 9, weight: .bold, design: .monospaced))
                         .foregroundStyle(Color.blue)
                 } else {
-                    Text("TAP ARTWORK TO KEEP")
+                    Text(AppCapitalization.format("TAP ARTWORK TO KEEP", enabled: isCaps))
                         .font(.system(size: 9, weight: .bold, design: .monospaced))
                         .foregroundStyle(Color.secondary)
                 }
@@ -518,14 +524,14 @@ public struct CandidateComparisonCard: View {
 
             // Centered Metadata & Quality Summary
             VStack(alignment: .center, spacing: 5) {
-                centeredRow(label: "TITLE", value: candidate.track.title)
-                centeredRow(label: "ARTIST", value: candidate.track.artist)
-                centeredRow(label: "ALBUM", value: candidate.track.album.isEmpty ? "—" : candidate.track.album)
-                centeredRow(label: "FORMAT", value: candidate.formatBadge)
-                centeredRow(label: "SAMPLE RATE", value: candidate.sampleRateString)
+                centeredRow(label: AppCapitalization.format("TITLE", enabled: isCaps), value: candidate.track.title)
+                centeredRow(label: AppCapitalization.format("ARTIST", enabled: isCaps), value: candidate.track.artist)
+                centeredRow(label: AppCapitalization.format("ALBUM", enabled: isCaps), value: candidate.track.album.isEmpty ? "—" : candidate.track.album)
+                centeredRow(label: AppCapitalization.format("FORMAT", enabled: isCaps), value: candidate.formatBadge)
+                centeredRow(label: AppCapitalization.format("SAMPLE RATE", enabled: isCaps), value: candidate.sampleRateString)
 
                 if let size = candidate.track.fileInfo?.fileSizeBytes {
-                    centeredRow(label: "SIZE", value: ByteFormatting.formatFileSize(bytes: size))
+                    centeredRow(label: AppCapitalization.format("SIZE", enabled: isCaps), value: ByteFormatting.formatFileSize(bytes: size))
                 }
             }
             .frame(width: 170)
@@ -533,13 +539,13 @@ public struct CandidateComparisonCard: View {
             // Centered Selection & Deletion Actions
             VStack(spacing: 8) {
                 if isPrimary {
-                    Text("PRIMARY SELECTION")
+                    Text(AppCapitalization.format("PRIMARY SELECTION", enabled: isCaps))
                         .font(.system(size: 11, weight: .bold, design: .monospaced))
                         .foregroundStyle(Color.blue)
                         .padding(.vertical, 4)
                 } else {
                     Button(action: onSelect) {
-                        Text("SELECT AS PRIMARY")
+                        Text(AppCapitalization.format("SELECT AS PRIMARY", enabled: isCaps))
                             .font(.system(size: 11, weight: .bold, design: .monospaced))
                             .foregroundStyle(Color.blue)
                     }
@@ -547,7 +553,7 @@ public struct CandidateComparisonCard: View {
                     .disabled(isDeleting)
 
                     Button(action: onDelete) {
-                        Text("DELETE FROM DISK")
+                        Text(AppCapitalization.format("DELETE FROM DISK", enabled: isCaps))
                             .font(.system(size: 11, weight: .bold, design: .monospaced))
                             .foregroundStyle(Color.red)
                     }
@@ -578,6 +584,7 @@ public struct CandidateComparisonCard: View {
 private struct EmptyDuplicatesStateView: View {
     // Status banner
     let statusBanner: String?
+    @Environment(\.isCapitalizationEnabled) private var isCaps: Bool
 
     // Body
     var body: some View {
@@ -590,7 +597,7 @@ private struct EmptyDuplicatesStateView: View {
                     .padding(.horizontal, 24)
             }
 
-            Text("NO DUPLICATES DETECTED")
+            Text(AppCapitalization.format("NO DUPLICATES DETECTED", enabled: isCaps))
                 .font(.system(size: 14, weight: .bold, design: .monospaced))
                 .foregroundStyle(Color.primary)
 

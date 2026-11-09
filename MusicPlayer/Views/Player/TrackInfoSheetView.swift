@@ -14,6 +14,7 @@ public struct TrackInfoSheetView: View {
     public var libraryStore: LibraryStore?
     @Environment(\.dismiss) private var dismiss
     @Environment(\.appTheme) private var appTheme
+    @Environment(\.isCapitalizationEnabled) private var isCaps: Bool
     @State private var currentTrack: Track
     @State private var copiedPathToast: Bool = false
     @State private var showingOnlineMetadataSheet: Bool = false
@@ -96,7 +97,7 @@ public struct TrackInfoSheetView: View {
                 .padding(.bottom, 40)
             }
             .background(appTheme.backgroundColor.ignoresSafeArea())
-            .navigationTitle("FILE INFO")
+            .navigationTitle(AppCapitalization.format("FILE INFO", enabled: isCaps))
             .navigationBarTitleDisplayMode(.inline)
             // Modal presentation sheet
             .sheet(isPresented: $showingOnlineMetadataSheet) {

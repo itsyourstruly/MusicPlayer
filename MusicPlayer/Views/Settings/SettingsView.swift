@@ -28,6 +28,12 @@ public enum SettingOptionCatalog {
         description: "Sets the global theme for the app. This changes the background color, and accents."
     )
 
+    public static let capitalization = SettingOptionDetail(
+        id: "capitalization",
+        title: "CAPITALIZATION",
+        description: "When enabled, app-owned UI labels appear in ALL CAPS. When disabled, labels appear in Title Case while preserving acronyms."
+    )
+
     public static let homePageSection = SettingOptionDetail(
         id: "homePageSection",
         title: "HOME PAGE",
@@ -57,6 +63,12 @@ public enum SettingOptionCatalog {
         id: "localOrganizationSection",
         title: "LOCAL FOLDER ORGANIZATION",
         description: "This option only affects sources that are available locally on the device and will not affect server sources. Metadata ignores folder heirarchy, instead it scans individual tracks and builds a library based on the metadata available on each track including its Album, and Artist. Folder will use your existing folder heirarchy, whether you store your library by Artist/Album/Track or another method. Option must be saved to apply."
+    )
+
+    public static let artistSeparators = SettingOptionDetail(
+        id: "artistSeparators",
+        title: "ARTIST SEPARATORS",
+        description: "Custom literal characters or phrases (such as //) used to separate multiple artists in local tracks. Built-in delimiters and compound artist names are still respected within each chunk."
     )
 
     public static let storageManagementSection = SettingOptionDetail(
@@ -283,6 +295,7 @@ public struct SettingOptionDetailSheet: View {
     public let expandsToFullScreen: Bool
     @Environment(\.dismiss) private var dismiss
     @Environment(\.appTheme) private var appTheme
+    @Environment(\.isCapitalizationEnabled) private var isCaps: Bool
 
     public init(detail: SettingOptionDetail, expandsToFullScreen: Bool = false) {
         self.detail = detail
@@ -293,7 +306,7 @@ public struct SettingOptionDetailSheet: View {
         // Scrolls only when the text is taller than the sheet (long artist or album descriptions).
         ScrollView(.vertical, showsIndicators: false) {
             VStack(alignment: .leading, spacing: 14) {
-                Text(detail.title)
+                Text(AppCapitalization.format(detail.title, enabled: isCaps))
                     .font(.system(size: 14, weight: .bold, design: .monospaced))
                     .foregroundStyle(Color.primary)
 
@@ -333,6 +346,7 @@ public struct SettingsView: View {
     }
 
     public var body: some View {
+        let isCaps = libraryStore.settings.isCapitalizationEnabled
         NavigationStack {
             ScrollView(.vertical, showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 24) {
@@ -350,16 +364,19 @@ public struct SettingsView: View {
                 .padding(.bottom, 60)
             }
             .background(libraryStore.settings.appTheme.backgroundColor.ignoresSafeArea())
-            .navigationTitle("SETTINGS")
+            .navigationTitle(AppCapitalization.format("SETTINGS", enabled: isCaps))
             .navigationBarTitleDisplayMode(.inline)
+            .environment(\.isCapitalizationEnabled, isCaps)
             .sheet(item: $activeDetail) { detail in
                 SettingOptionDetailSheet(detail: detail)
                     .environment(\.appTheme, libraryStore.settings.appTheme)
+                    .environment(\.isCapitalizationEnabled, isCaps)
             }
             .sheet(isPresented: $showingLogsSheet) {
                 SessionLogsSheetView()
                     .tint(libraryStore.settings.appTheme.accentColor)
                     .environment(\.appTheme, libraryStore.settings.appTheme)
+                    .environment(\.isCapitalizationEnabled, isCaps)
                     .presentationBackground(libraryStore.settings.appTheme.backgroundColor)
             }
         }
@@ -367,7 +384,8 @@ public struct SettingsView: View {
 
     // MARK: - Top Page Navigation Buttons Group
     private var topPageButtonsGroup: some View {
-        VStack(spacing: 10) {
+        let isCaps = libraryStore.settings.isCapitalizationEnabled
+        return VStack(spacing: 10) {
             // 1. Navigation Subpages Grid (Appearance & Playback)
             LazyVGrid(
                 columns: [
@@ -379,8 +397,8 @@ public struct SettingsView: View {
                 // Appearance Subpage
                 NavigationLink(destination: AppearanceSettingsView(libraryStore: libraryStore)) {
                     topButtonContent(
-                        title: "APPEARANCE",
-                        badge: libraryStore.settings.appTheme.displayName
+                        title: AppCapitalization.format("APPEARANCE", enabled: isCaps),
+                        badge: AppCapitalization.format(libraryStore.settings.appTheme.displayName, enabled: isCaps)
                     )
                 }
                 .buttonStyle(.plain)
@@ -388,10 +406,13 @@ public struct SettingsView: View {
                 // Playback Subpage
                 NavigationLink(destination: PlaybackSettingsView(libraryStore: libraryStore, playerService: playerService ?? AudioPlayerService())) {
                     topButtonContent(
-                        title: "PLAYBACK",
-                        badge: libraryStore.settings.isCrossfadeEnabled
-                            ? String(format: "%.1FS FADE", libraryStore.settings.crossfadeDuration)
-                            : "STANDARD"
+                        title: AppCapitalization.format("PLAYBACK", enabled: isCaps),
+                        badge: AppCapitalization.format(
+                            libraryStore.settings.isCrossfadeEnabled
+                                ? String(format: "%.1FS FADE", libraryStore.settings.crossfadeDuration)
+                                : "STANDARD",
+                            enabled: isCaps
+                        )
                     )
                 }
                 .buttonStyle(.plain)
@@ -401,7 +422,7 @@ public struct SettingsView: View {
             NavigationLink(destination: FolderSettingsView(libraryStore: libraryStore)) {
                 VStack(alignment: .leading, spacing: 6) {
                     HStack(alignment: .top) {
-                        Text("SOURCES")
+                        Text(AppCapitalization.format("SOURCES", enabled: isCaps))
                             .font(.system(size: 15, weight: .black, design: .monospaced))
                             .foregroundStyle(Color.black)
 
@@ -413,9 +434,9 @@ public struct SettingsView: View {
                     }
 
                     Text({
-                        let names = libraryStore.settings.linkedFolders.map { $0.name.uppercased() }
-                            + libraryStore.settings.serverSources.map { $0.serverName.uppercased() }
-                        return names.isEmpty ? "NO SOURCES" : names.joined(separator: " - ")
+                        let names = libraryStore.settings.linkedFolders.map { $0.name }
+                            + libraryStore.settings.serverSources.map { $0.serverName }
+                        return names.isEmpty ? AppCapitalization.format("NO SOURCES", enabled: isCaps) : names.joined(separator: " - ")
                     }())
                         .font(.system(size: 11.5, weight: .bold, design: .monospaced))
                         .foregroundStyle(Color.black.opacity(0.7))
@@ -456,10 +477,11 @@ public struct SettingsView: View {
 
     // MARK: - Inline Controls Group
     private var inlineControlsGroup: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        let isCaps = libraryStore.settings.isCapitalizationEnabled
+        return VStack(alignment: .leading, spacing: 18) {
             // HAPTICS Toggle
             TypographicToggleRow(
-                title: "HAPTICS",
+                title: AppCapitalization.format("HAPTICS", enabled: isCaps),
                 isOn: Binding(
                     get: { libraryStore.settings.isHapticsEnabled },
                     set: { newValue in
@@ -479,7 +501,7 @@ public struct SettingsView: View {
             // OFFLINE Toggle (only meaningful with a connected server)
             if !libraryStore.settings.serverSources.isEmpty {
                 TypographicToggleRow(
-                    title: "OFFLINE",
+                    title: AppCapitalization.format("OFFLINE", enabled: isCaps),
                     isOn: Binding(
                         get: { libraryStore.settings.isOfflineModeEnabled },
                         set: { newValue in
@@ -502,7 +524,7 @@ public struct SettingsView: View {
                         libraryStore.saveSettings()
                     }
                 }) {
-                    Text("RESET HOME SHUFFLE TO ALL")
+                    Text(AppCapitalization.format("RESET HOME SHUFFLE TO ALL", enabled: isCaps))
                         .font(.system(size: 14.5, weight: .bold, design: .monospaced))
                         .foregroundStyle(libraryStore.settings.appTheme.accentColor)
                 }
@@ -511,7 +533,7 @@ public struct SettingsView: View {
                     Button {
                         activeDetail = SettingOptionCatalog.resetHomeShuffle
                     } label: {
-                        Text("OPTION INFO")
+                        Text(AppCapitalization.format("OPTION INFO", enabled: isCaps))
                     }
                 }
             }
@@ -519,7 +541,7 @@ public struct SettingsView: View {
             // Info text explaining long press
             HStack {
                 Spacer()
-                Text("Long press options for more info")
+                Text(AppCapitalization.format("LONG PRESS OPTIONS FOR MORE INFO", enabled: isCaps))
                     .font(.system(size: 12, weight: .medium, design: .monospaced))
                     .foregroundStyle(.secondary)
                     .contentShape(Rectangle())
@@ -527,7 +549,7 @@ public struct SettingsView: View {
                         Button {
                             showingLogsSheet = true
                         } label: {
-                            Text("SHOW LOGS")
+                            Text(AppCapitalization.format("SHOW LOGS", enabled: isCaps))
                         }
                     }
                 Spacer()

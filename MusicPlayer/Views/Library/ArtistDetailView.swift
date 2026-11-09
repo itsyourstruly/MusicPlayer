@@ -17,6 +17,7 @@ public struct ArtistDetailView: View {
     @State private var showingDiscographyReviewSheet: Bool = false
     @State private var selectedSectionDestination: ArtistSectionDestination? = nil
     @Environment(\.appTheme) private var appTheme
+    @Environment(\.isCapitalizationEnabled) private var isCaps: Bool
 
     private struct ArtistSectionDestination: Identifiable, Hashable {
         var id: String { title }
@@ -75,7 +76,7 @@ public struct ArtistDetailView: View {
                             playerService.play(track: first, inQueue: activeArtist.tracks)
                         }
                     }) {
-                        Text("PLAY ALL")
+                        Text(AppCapitalization.format("PLAY ALL", enabled: isCaps))
                     }
                     .buttonStyle(TypographicButtonStyle(variant: .primary, size: .regular))
 
@@ -86,7 +87,7 @@ public struct ArtistDetailView: View {
                             playerService.play(track: first, inQueue: shuffled)
                         }
                     }) {
-                        Text("SHUFFLE")
+                        Text(AppCapitalization.format("SHUFFLE", enabled: isCaps))
                     }
                     .buttonStyle(TypographicButtonStyle(variant: .secondary, size: .regular))
 
@@ -97,10 +98,10 @@ public struct ArtistDetailView: View {
                 if !studioAlbumsList.isEmpty {
                     VStack(alignment: .leading, spacing: 10) {
                         Button(action: {
-                            selectedSectionDestination = ArtistSectionDestination(title: "ALBUMS", albums: studioAlbumsList)
+                            selectedSectionDestination = ArtistSectionDestination(title: AppCapitalization.format("ALBUMS", enabled: isCaps), albums: studioAlbumsList)
                         }) {
                             HStack {
-                                Text("ALBUMS (\(studioAlbumsList.count))")
+                                Text(AppCapitalization.format("ALBUMS (\(studioAlbumsList.count))", enabled: isCaps))
                                     .font(.system(size: 12, weight: .bold, design: .monospaced))
                                     .foregroundStyle(.secondary)
 
@@ -135,10 +136,10 @@ public struct ArtistDetailView: View {
                 if !ownSinglesList.isEmpty {
                     VStack(alignment: .leading, spacing: 10) {
                         Button(action: {
-                            selectedSectionDestination = ArtistSectionDestination(title: "SINGLES & EPs", albums: ownSinglesList)
+                            selectedSectionDestination = ArtistSectionDestination(title: AppCapitalization.format("SINGLES & EPs", enabled: isCaps), albums: ownSinglesList)
                         }) {
                             HStack {
-                                Text("SINGLES & EPs (\(ownSinglesList.count))")
+                                Text(AppCapitalization.format("SINGLES & EPs (\(ownSinglesList.count))", enabled: isCaps))
                                     .font(.system(size: 12, weight: .bold, design: .monospaced))
                                     .foregroundStyle(.secondary)
 
@@ -173,10 +174,10 @@ public struct ArtistDetailView: View {
                 if !alternatesList.isEmpty {
                     VStack(alignment: .leading, spacing: 10) {
                         Button(action: {
-                            selectedSectionDestination = ArtistSectionDestination(title: "ALTERNATES", albums: alternatesList)
+                            selectedSectionDestination = ArtistSectionDestination(title: AppCapitalization.format("ALTERNATES", enabled: isCaps), albums: alternatesList)
                         }) {
                             HStack {
-                                Text("ALTERNATES (\(alternatesList.count))")
+                                Text(AppCapitalization.format("ALTERNATES (\(alternatesList.count))", enabled: isCaps))
                                     .font(.system(size: 12, weight: .bold, design: .monospaced))
                                     .foregroundStyle(.secondary)
 
@@ -211,10 +212,10 @@ public struct ArtistDetailView: View {
                 if !featuredAlbumsList.isEmpty {
                     VStack(alignment: .leading, spacing: 10) {
                         Button(action: {
-                            selectedSectionDestination = ArtistSectionDestination(title: "FEATURED ON", albums: featuredAlbumsList)
+                            selectedSectionDestination = ArtistSectionDestination(title: AppCapitalization.format("FEATURED ON", enabled: isCaps), albums: featuredAlbumsList)
                         }) {
                             HStack {
-                                Text("FEATURED ON (\(featuredAlbumsList.count))")
+                                Text(AppCapitalization.format("FEATURED ON (\(featuredAlbumsList.count))", enabled: isCaps))
                                     .font(.system(size: 12, weight: .bold, design: .monospaced))
                                     .foregroundStyle(.secondary)
 

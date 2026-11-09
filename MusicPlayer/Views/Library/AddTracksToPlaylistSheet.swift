@@ -7,6 +7,7 @@ public struct AddTracksToPlaylistSheet: View {
     @Bindable var libraryStore: LibraryStore
     @Environment(\.dismiss) private var dismiss
     @Environment(\.appTheme) private var appTheme
+    @Environment(\.isCapitalizationEnabled) private var isCaps: Bool
 
     @State private var searchQuery: String = ""
 
@@ -163,9 +164,9 @@ public struct AddTracksToPlaylistSheet: View {
                 }
             }
             .background(appTheme.backgroundColor.ignoresSafeArea())
-            .navigationTitle("ADD TO PLAYLIST")
+            .navigationTitle(AppCapitalization.format("ADD TO PLAYLIST", enabled: isCaps))
             .navigationBarTitleDisplayMode(.inline)
-            .nativeSearchField(text: $searchQuery, prompt: "SEARCH ALL TRACKS")
+            .nativeSearchField(text: $searchQuery, prompt: AppCapitalization.format("SEARCH ALL TRACKS", enabled: isCaps))
         }
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)

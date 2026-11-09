@@ -140,7 +140,7 @@ public struct FoldersListView: View {
                     }
                 }
             } label: {
-                Text("RESCAN SOURCE")
+                Text(AppCapitalization.format("RESCAN SOURCE", enabled: libraryStore.settings.isCapitalizationEnabled))
             }
             .disabled(libraryStore.isScanning)
 
@@ -149,7 +149,7 @@ public struct FoldersListView: View {
                     HapticFeedback.selectionChanged()
                     libraryStore.toggleFolderEnabled(source.id)
                 } label: {
-                    Text(isEnabled ? "DISABLE IN LIBRARY" : "ENABLE IN LIBRARY")
+                    Text(AppCapitalization.format(isEnabled ? "DISABLE IN LIBRARY" : "ENABLE IN LIBRARY", enabled: libraryStore.settings.isCapitalizationEnabled))
                 }
             }
         }

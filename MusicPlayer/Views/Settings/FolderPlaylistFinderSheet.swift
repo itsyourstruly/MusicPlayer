@@ -69,6 +69,7 @@ struct FolderPlaylistFinderSheet: View {
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.appTheme) private var appTheme
+    @Environment(\.isCapitalizationEnabled) private var isCaps: Bool
 
     @State private var index: FolderTreeIndex = .empty
     @State private var isLoading: Bool = true
@@ -103,7 +104,7 @@ struct FolderPlaylistFinderSheet: View {
 
         return ScrollView(.vertical, showsIndicators: true) {
             LazyVStack(alignment: .leading, spacing: 0) {
-                Text(isLoading ? "LOADING..." : "\(total) TRACKS • \(children.count) FOLDERS")
+                Text(isLoading ? AppCapitalization.format("LOADING...", enabled: isCaps) : "\(total) \(AppCapitalization.format("TRACKS", enabled: isCaps)) • \(children.count) \(AppCapitalization.format("FOLDERS", enabled: isCaps))")
                     .font(.system(size: 11, weight: .bold, design: .monospaced))
                     .foregroundStyle(.secondary)
                     .padding(.vertical, 12)
@@ -112,7 +113,7 @@ struct FolderPlaylistFinderSheet: View {
                     let childPath = path.isEmpty ? name : path + "/" + name
                     NavigationLink(value: childPath) {
                         HStack(spacing: 12) {
-                            Text(name.uppercased())
+                            Text(AppCapitalization.format(name, enabled: isCaps))
                                 .font(.system(size: 13, weight: .bold, design: .monospaced))
                                 .foregroundStyle(Color.primary)
                                 .lineLimit(2)
@@ -141,13 +142,13 @@ struct FolderPlaylistFinderSheet: View {
             .padding(.bottom, 24)
         }
         .background(appTheme.backgroundColor.ignoresSafeArea())
-        .navigationTitle(title.uppercased())
+        .navigationTitle(AppCapitalization.format(title, enabled: isCaps))
         .navigationBarTitleDisplayMode(.inline)
         .safeAreaInset(edge: .bottom) {
             Button {
                 makePlaylist(folderPath: path, name: title)
             } label: {
-                Text("MAKE PLAYLIST")
+                Text(AppCapitalization.format("MAKE PLAYLIST", enabled: isCaps))
                     .font(.system(size: 14, weight: .black, design: .monospaced))
                     .foregroundStyle(Color.black)
                     .frame(maxWidth: .infinity)

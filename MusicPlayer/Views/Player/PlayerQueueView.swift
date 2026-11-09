@@ -9,6 +9,7 @@ public struct PlayerQueueView: View {
     var libraryStore: LibraryStore? = nil
     @Environment(\.dismiss) private var dismiss
     @Environment(\.appTheme) private var appTheme
+    @Environment(\.isCapitalizationEnabled) private var isCaps: Bool
 
     @State private var viewModel = QueueViewModel()
     @State private var selectedArtist: Artist? = nil
@@ -109,7 +110,7 @@ public struct PlayerQueueView: View {
                                         .listRowBackground(Color.clear)
                                     }
                                 } header: {
-                                    Text("PAST SONGS (\(viewModel.totalPastCount))")
+                                    Text(AppCapitalization.format("PAST SONGS (\(viewModel.totalPastCount))", enabled: isCaps))
                                         .font(.system(size: 11, weight: .bold, design: .monospaced))
                                         .foregroundStyle(.secondary)
                                         .textCase(nil)
@@ -336,7 +337,7 @@ public struct PlayerQueueView: View {
                 queueGeometry.scrollMetrics = metrics
             }
             .environment(\.queueGeometry, queueGeometry)
-            .navigationTitle("QUEUE")
+            .navigationTitle(AppCapitalization.format("QUEUE", enabled: isCaps))
             .navigationBarTitleDisplayMode(.inline)
             .navigationDestination(item: $selectedArtist) { artist in
                 if let store = libraryStore {
@@ -594,7 +595,7 @@ public struct PlayerQueueView: View {
     // MARK: - Section Header View
     private func sectionHeaderView(title: String, titleColor: Color, onClear: @escaping () -> Void) -> some View {
         HStack {
-            Text(title)
+            Text(AppCapitalization.format(title, enabled: isCaps))
                 .font(.system(size: 11, weight: .bold, design: .monospaced))
                 .foregroundStyle(titleColor)
                 .textCase(nil)
@@ -605,7 +606,7 @@ public struct PlayerQueueView: View {
                 HapticFeedback.lightImpact()
                 onClear()
             }) {
-                Text("CLEAR")
+                Text(AppCapitalization.format("CLEAR", enabled: isCaps))
                     .font(.system(size: 11, weight: .bold, design: .monospaced))
                     .foregroundStyle(Color.red)
             }
@@ -816,6 +817,7 @@ private struct NowPlayingQueueRowView: View {
     let track: Track
     @Bindable var playerService: AudioPlayerService
     @Environment(\.appTheme) private var appTheme
+    @Environment(\.isCapitalizationEnabled) private var isCaps: Bool
     @Environment(\.queueGeometry) private var queueGeometry
     let onNavigateToArtist: (String) -> Void
     let onNavigateToAlbum: (String, String) -> Void
@@ -823,7 +825,7 @@ private struct NowPlayingQueueRowView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             // Former section header, drawn in the row so nothing pins over Now Playing when it is at the top.
-            Text("NOW PLAYING")
+            Text(AppCapitalization.format("NOW PLAYING", enabled: isCaps))
                 .font(.system(size: 11, weight: .bold, design: .monospaced))
                 .foregroundStyle(appTheme.accentColor)
                 .textCase(nil)

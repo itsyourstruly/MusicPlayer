@@ -9,6 +9,7 @@ public struct TypographicToggleRow: View {
     @Binding public var isOn: Bool
     public var onToggle: (() -> Void)? = nil
     public var onLongPress: (() -> Void)? = nil
+    @Environment(\.isCapitalizationEnabled) private var isCaps: Bool
 
     // Initialize with configured properties
     public init(
@@ -28,7 +29,7 @@ public struct TypographicToggleRow: View {
     public var body: some View {
         let content = HStack(alignment: .center, spacing: 12) {
             VStack(alignment: .leading, spacing: 4) {
-                Text(title)
+                Text(AppCapitalization.format(title, enabled: isCaps))
                     .font(.system(size: 14.5, weight: .bold, design: .monospaced))
                     .foregroundStyle(Color.primary)
                     .multilineTextAlignment(.leading)
@@ -43,7 +44,7 @@ public struct TypographicToggleRow: View {
 
             Spacer()
 
-            Text(isOn ? "ON" : "OFF")
+            Text(AppCapitalization.format(isOn ? "ON" : "OFF", enabled: isCaps))
                 .font(.system(size: 13, weight: .bold, design: .monospaced))
                 .foregroundStyle(isOn ? Color.blue : Color.red)
         }

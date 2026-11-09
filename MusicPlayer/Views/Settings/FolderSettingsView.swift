@@ -8,6 +8,7 @@ public struct FolderSettingsView: View {
     @Bindable var libraryStore: LibraryStore
     @Environment(\.dismiss) private var dismiss
     @Environment(\.appTheme) private var appTheme
+    @Environment(\.isCapitalizationEnabled) private var isCaps: Bool
 
     @State private var showingFolderPicker: Bool = false
     @State private var pendingOpenFolderPicker: Bool = false
@@ -31,6 +32,9 @@ public struct FolderSettingsView: View {
     // Pending (unsaved) local organization selection; nil = use saved settings
     @State private var pendingMethod: LibraryScanMethod? = nil
     @State private var pendingLayout: FolderHierarchyLayout? = nil
+    @State private var pendingSeparators: [String]? = nil
+    @State private var isArtistSeparatorsExpanded: Bool = false
+    @State private var newSeparatorInput: String = ""
     @State private var isSavingOrganization: Bool = false
     @State private var storageTarget: StorageClearTarget = .metadata
     @State private var isHiddenExpanded: Bool = false
@@ -42,7 +46,7 @@ public struct FolderSettingsView: View {
     public var body: some View {
         sourcesScrollContent
             .background(appTheme.backgroundColor.ignoresSafeArea())
-            .navigationTitle("SOURCES")
+            .navigationTitle(AppCapitalization.format("SOURCES", enabled: isCaps))
             .navigationBarTitleDisplayMode(.inline)
             .fileImporter(
                 isPresented: $showingFolderPicker,
@@ -71,11 +75,11 @@ public struct FolderSettingsView: View {
                     AppLogger.library.error("Folder selection failed: \(error.localizedDescription)")
                 }
             }
-            .alert("UNLINK DIRECTORY?", isPresented: $showingUnlinkAlert) {
-                Button("CANCEL", role: .cancel) {
+            .alert(AppCapitalization.format("UNLINK DIRECTORY?", enabled: isCaps), isPresented: $showingUnlinkAlert) {
+                Button(AppCapitalization.format("CANCEL", enabled: isCaps), role: .cancel) {
                     folderToUnlink = nil
                 }
-                Button("UNLINK", role: .destructive) {
+                Button(AppCapitalization.format("UNLINK", enabled: isCaps), role: .destructive) {
                     if let folder = folderToUnlink {
                         libraryStore.unlinkFolder(id: folder.id)
                         folderToUnlink = nil
@@ -84,7 +88,7 @@ public struct FolderSettingsView: View {
                     }
                 }
             } message: {
-                Text("THIS WILL REMOVE INDEXED TRACKS AND PLAYLISTS FROM THE APP. YOUR AUDIO FILES ON DISK WILL NOT BE MODIFIED OR DELETED.")
+                Text(AppCapitalization.format("THIS WILL REMOVE INDEXED TRACKS AND PLAYLISTS FROM THE APP. YOUR AUDIO FILES ON DISK WILL NOT BE MODIFIED OR DELETED.", enabled: isCaps))
             }
             .modifier(FolderSettingsStorageClearAlerts(
                 libraryStore: libraryStore,
@@ -167,8 +171,8 @@ public struct FolderSettingsView: View {
     private var sourcesScrollContent: some View {
         ScrollView(.vertical, showsIndicators: false) {
             VStack(alignment: .leading, spacing: 20) {
-                // MARK: - 1. Linked To Folder Header with Gear Menu & Transient Scan Status
-                linkedFolderHeaderSection
+                // MARK: - 1. Online Sources (Top of Sheet) & Add Button
+                onlineSourcesSection
 
                 // MARK: - Live Scanning Status Logs
                 scanningStatusLogsView
@@ -176,34 +180,35 @@ public struct FolderSettingsView: View {
                 Divider()
                     .overlay(appTheme.separatorColor.opacity(0.4))
 
-                // MARK: - Server download toggles (only while a server source exists; updates live)
-                if !libraryStore.settings.serverSources.isEmpty {
-                    serverDownloadTogglesSection
-
-                    Divider()
-                        .overlay(appTheme.separatorColor.opacity(0.4))
-                }
-
-                // MARK: - 2. Find Track Tags Button (local sources only)
-                if !libraryStore.settings.linkedFolders.isEmpty {
-                    findTrackTagsButtonSection
-                }
-
-                // MARK: - 5. Library Scan Method (local sources only)
-                if !libraryStore.settings.linkedFolders.isEmpty {
-                    Divider()
-                        .overlay(appTheme.separatorColor.opacity(0.4))
-
-                    scanMethodSelectorSection
-                }
+                // MARK: - 2. Online Sources Options
+                serverDownloadTogglesSection
 
                 Divider()
                     .overlay(appTheme.separatorColor.opacity(0.4))
 
-                // MARK: - 6. Cache Management (CLEAR METADATA CACHE & CLEAR ARTWORK CACHE)
+                // MARK: - 3. Local Sources
+                if !libraryStore.settings.linkedFolders.isEmpty {
+                    localSourcesSection
+
+                    Divider()
+                        .overlay(appTheme.separatorColor.opacity(0.4))
+                }
+
+                // MARK: - 4. Local Sources Options
+                findTrackTagsButtonSection
+
+                Divider()
+                    .overlay(appTheme.separatorColor.opacity(0.4))
+
+                scanMethodSelectorSection
+
+                Divider()
+                    .overlay(appTheme.separatorColor.opacity(0.4))
+
+                // MARK: - 5. App Storage Management
                 cacheManagementSection
 
-                // MARK: - 7. Hidden (only when something is hidden)
+                // MARK: - 6. Hidden Items (only when something is hidden)
                 if !libraryStore.hiddenItems.isEmpty {
                     Divider()
                         .overlay(appTheme.separatorColor.opacity(0.4))
@@ -217,43 +222,32 @@ public struct FolderSettingsView: View {
         }
     }
 
-    // MARK: - 1. Linked Folder & Server Sources Header Section (Top of Sheet, No Background)
-    private var linkedFolderHeaderSection: some View {
+    // MARK: - Online Sources Section (Top of Sheet)
+    private var onlineSourcesSection: some View {
         VStack(alignment: .leading, spacing: 14) {
-            let hasFolders = !libraryStore.settings.linkedFolders.isEmpty
-            let hasServers = !libraryStore.settings.serverSources.isEmpty
+            ForEach(libraryStore.settings.serverSources) { server in
+                serverRow(server: server)
+            }
 
-            if !hasFolders && !hasServers {
-                HStack(alignment: .center) {
-                    Button(action: {
-                        showingAddSourceSheet = true
-                    }) {
-                        Text("ADD SOURCE")
-                            .font(.system(size: 14, weight: .bold, design: .monospaced))
-                            .foregroundStyle(libraryStore.settings.appTheme.accentColor)
-                    }
-                    .buttonStyle(.plain)
+            let hasAnySources = !libraryStore.settings.serverSources.isEmpty || !libraryStore.settings.linkedFolders.isEmpty
+            Button(action: {
+                showingAddSourceSheet = true
+            }) {
+                Text(AppCapitalization.format(hasAnySources ? "ADD ANOTHER SOURCE" : "ADD SOURCE", enabled: isCaps))
+                    .font(.system(size: 13, weight: .bold, design: .monospaced))
+                    .foregroundStyle(libraryStore.settings.appTheme.accentColor)
+            }
+            .buttonStyle(.plain)
+            .padding(.top, 2)
+        }
+        .padding(.vertical, 4)
+    }
 
-                    Spacer()
-                }
-            } else {
-                ForEach(libraryStore.settings.linkedFolders) { folder in
-                    linkedFolderRow(folder: folder)
-                }
-
-                ForEach(libraryStore.settings.serverSources) { server in
-                    serverRow(server: server)
-                }
-
-                Button(action: {
-                    showingAddSourceSheet = true
-                }) {
-                    Text("ADD ANOTHER SOURCE")
-                        .font(.system(size: 13, weight: .bold, design: .monospaced))
-                        .foregroundStyle(libraryStore.settings.appTheme.accentColor)
-                }
-                .buttonStyle(.plain)
-                .padding(.top, 2)
+    // MARK: - Local Sources Section
+    private var localSourcesSection: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            ForEach(libraryStore.settings.linkedFolders) { folder in
+                linkedFolderRow(folder: folder)
             }
         }
         .padding(.vertical, 4)
@@ -262,7 +256,7 @@ public struct FolderSettingsView: View {
     private func serverRow(server: ServerSourceLink) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .center) {
-                Text("\(server.displayLabel) - \(server.username.uppercased())")
+                Text("\(AppCapitalization.format(server.displayLabel, enabled: isCaps)) - \(AppCapitalization.format(server.username, enabled: isCaps))")
                     .font(.system(size: 14, weight: .bold, design: .monospaced))
                     .foregroundStyle(Color.white)
                     .lineLimit(1)
@@ -275,7 +269,7 @@ public struct FolderSettingsView: View {
                         HapticFeedback.selectionChanged()
                         rescanServer(server)
                     } label: {
-                        Text("RESCAN")
+                        Text(AppCapitalization.format("RESCAN", enabled: isCaps))
                     }
                     .disabled(libraryStore.isScanning)
 
@@ -284,7 +278,7 @@ public struct FolderSettingsView: View {
                             HapticFeedback.selectionChanged()
                             Task { @MainActor in await libraryStore.syncServer(server) }
                         } label: {
-                            Text("RETRY")
+                            Text(AppCapitalization.format("RETRY", enabled: isCaps))
                         }
                         .disabled(libraryStore.isScanning)
                     }
@@ -294,7 +288,7 @@ public struct FolderSettingsView: View {
                         serverToUnlink = server
                         showingUnlinkServerAlert = true
                     } label: {
-                        Text("REMOVE SERVER")
+                        Text(AppCapitalization.format("REMOVE SERVER", enabled: isCaps))
                     }
                 } label: {
                     Image(systemName: "gear")
@@ -308,13 +302,13 @@ public struct FolderSettingsView: View {
             let serverTrackCount = libraryStore.trackCount(for: server)
             Text(libraryStore.isScanning && libraryStore.currentlyScanningFolderID == server.id
                  ? scanProgressLine
-                 : "\(serverTrackCount) TRACKS, \(libraryStore.albumCount(for: server)) ALBUMS, \(libraryStore.artistCount(for: server)) ARTISTS")
+                 : "\(serverTrackCount) \(AppCapitalization.format("TRACKS", enabled: isCaps)), \(libraryStore.albumCount(for: server)) \(AppCapitalization.format("ALBUMS", enabled: isCaps)), \(libraryStore.artistCount(for: server)) \(AppCapitalization.format("ARTISTS", enabled: isCaps))")
                 .font(.system(size: 11, design: .monospaced))
                 .lineLimit(1)
                 .foregroundStyle(.secondary)
 
             if libraryStore.serverRescanRecommended.contains(server.id) && !libraryStore.isScanning {
-                Text("RESCAN RECOMMENDED: SONG CREDITS ARE FROM AN OLDER VERSION")
+                Text(AppCapitalization.format("RESCAN RECOMMENDED: SONG CREDITS ARE FROM AN OLDER VERSION", enabled: isCaps))
                     .font(.system(size: 10, weight: .bold, design: .monospaced))
                     .foregroundStyle(.secondary)
             }
@@ -333,7 +327,7 @@ public struct FolderSettingsView: View {
                                 UIApplication.shared.open(url)
                             }
                         } label: {
-                            Text("OPEN SETTINGS")
+                            Text(AppCapitalization.format("OPEN SETTINGS", enabled: isCaps))
                                 .font(.system(size: 9, weight: .bold, design: .monospaced))
                                 .foregroundStyle(Color.white)
                                 .padding(.horizontal, 6)
@@ -355,7 +349,7 @@ public struct FolderSettingsView: View {
 
         return VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .center) {
-                Text(folder.name.uppercased())
+                Text(AppCapitalization.format(folder.name, enabled: isCaps))
                     .font(.system(size: 14, weight: .bold, design: .monospaced))
                     .foregroundStyle(Color.white)
                     .lineLimit(1)
@@ -369,7 +363,7 @@ public struct FolderSettingsView: View {
                         HapticFeedback.selectionChanged()
                         Task { await libraryStore.rescanFolder(id: folder.id) }
                     } label: {
-                        Text(isThisScanning ? "SCANNING..." : "RESCAN")
+                        Text(AppCapitalization.format(isThisScanning ? "SCANNING..." : "RESCAN", enabled: isCaps))
                     }
                     .disabled(libraryStore.isScanning)
 
@@ -377,20 +371,20 @@ public struct FolderSettingsView: View {
                         HapticFeedback.selectionChanged()
                         folderForPlaylistFinder = folder
                     } label: {
-                        Text("FIND PLAYLIST")
+                        Text(AppCapitalization.format("FIND PLAYLIST", enabled: isCaps))
                     }
 
                     Button(action: {
                         folderToChange = folder
                         showingFolderPicker = true
                     }) {
-                        Text("CHANGE FOLDER")
+                        Text(AppCapitalization.format("CHANGE FOLDER", enabled: isCaps))
                     }
 
                     Button {
                         libraryStore.toggleTagEnrichmentExclusion(for: folder.id)
                     } label: {
-                        Text(folder.isExcludedFromTagEnrichment ? "EXCLUDE FROM TAG ENRICHMENT (SELECTED)" : "EXCLUDE FROM TAG ENRICHMENT")
+                        Text(AppCapitalization.format(folder.isExcludedFromTagEnrichment ? "EXCLUDE FROM TAG ENRICHMENT (SELECTED)" : "EXCLUDE FROM TAG ENRICHMENT", enabled: isCaps))
                     }
 
                     Divider()
@@ -398,7 +392,7 @@ public struct FolderSettingsView: View {
                         folderToUnlink = folder
                         showingUnlinkAlert = true
                     } label: {
-                        Text("UNLINK FOLDER")
+                        Text(AppCapitalization.format("UNLINK FOLDER", enabled: isCaps))
                     }
                 } label: {
                     Image(systemName: "gear")
@@ -412,7 +406,7 @@ public struct FolderSettingsView: View {
             // Plain text, slightly gray summary of tracks, albums, and artists
             Text(isThisScanning && libraryStore.isScanning
                  ? scanProgressLine
-                 : "\(libraryStore.trackCount(for: folder)) TRACKS, \(libraryStore.albumCount(for: folder)) ALBUMS, \(libraryStore.artistCount(for: folder)) ARTISTS")
+                 : "\(libraryStore.trackCount(for: folder)) \(AppCapitalization.format("TRACKS", enabled: isCaps)), \(libraryStore.albumCount(for: folder)) \(AppCapitalization.format("ALBUMS", enabled: isCaps)), \(libraryStore.artistCount(for: folder)) \(AppCapitalization.format("ARTISTS", enabled: isCaps))")
                 .font(.system(size: 11, design: .monospaced))
                 .lineLimit(1)
                 .foregroundStyle(.secondary)
@@ -428,7 +422,7 @@ public struct FolderSettingsView: View {
         } label: {
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("FIND TRACK TAGS")
+                    Text(AppCapitalization.format("FIND TRACK TAGS", enabled: isCaps))
                         .font(.system(size: 14, weight: .black, design: .monospaced))
                         .foregroundStyle(Color.black)
 
@@ -443,7 +437,7 @@ public struct FolderSettingsView: View {
                             .font(.system(size: 10.5, weight: .bold, design: .monospaced))
                             .foregroundStyle(Color.black.opacity(0.65))
                     } else {
-                        Text("\(libraryStore.visibleEnrichmentDiffs.count) FOUND • \(libraryStore.visibleVerifiedGoodCount) GOOD • \(libraryStore.unmatchedTracksCount) LOST • \(libraryStore.visibleDuplicateGroups.count) DUPES")
+                        Text("\(libraryStore.visibleEnrichmentDiffs.count) \(AppCapitalization.format("FOUND", enabled: isCaps)) • \(libraryStore.visibleVerifiedGoodCount) \(AppCapitalization.format("GOOD", enabled: isCaps)) • \(libraryStore.unmatchedTracksCount) \(AppCapitalization.format("LOST", enabled: isCaps)) • \(libraryStore.visibleDuplicateGroups.count) \(AppCapitalization.format("DUPES", enabled: isCaps))")
                             .font(.system(size: 10.5, weight: .bold, design: .monospaced))
                             .foregroundStyle(Color.black.opacity(0.65))
                     }
@@ -467,7 +461,7 @@ public struct FolderSettingsView: View {
             Button {
                 activeDetail = SettingOptionCatalog.findTrackTags
             } label: {
-                Text("OPTION INFO")
+                Text(AppCapitalization.format("OPTION INFO", enabled: isCaps))
             }
         }
     }
@@ -502,7 +496,7 @@ public struct FolderSettingsView: View {
             if libraryStore.settings.cacheInAdvanceEnabled {
                 VStack(alignment: .leading, spacing: 8) {
                     HStack {
-                        Text("SONGS TO CACHE")
+                        Text(AppCapitalization.format("SONGS TO CACHE", enabled: isCaps))
                             .font(.system(size: 13, weight: .bold, design: .monospaced))
                             .foregroundStyle(.secondary)
 
@@ -580,18 +574,27 @@ public struct FolderSettingsView: View {
     // MARK: - 5. Library Organization Option Box (METADATA / FOLDER + folder layouts), local folders only
     private var effectiveMethod: LibraryScanMethod { pendingMethod ?? libraryStore.settings.libraryScanMethod }
     private var effectiveLayout: FolderHierarchyLayout { pendingLayout ?? libraryStore.settings.folderHierarchyLayout }
+    private var effectiveSeparators: [String] {
+        pendingSeparators ?? libraryStore.settings.customArtistSeparators
+    }
+    private var hasPendingSeparatorsChange: Bool {
+        if let pending = pendingSeparators {
+            return pending != libraryStore.settings.customArtistSeparators
+        }
+        return false
+    }
     private var hasPendingOrganizationChange: Bool {
         let saved = libraryStore.settings
         if effectiveMethod != saved.libraryScanMethod { return true }
-        // Layout only matters (and only shows) in FOLDER mode
-        return effectiveMethod == .folderHierarchy && effectiveLayout != saved.folderHierarchyLayout
+        if effectiveMethod == .folderHierarchy && effectiveLayout != saved.folderHierarchyLayout { return true }
+        return hasPendingSeparatorsChange
     }
 
     private var scanMethodSelectorSection: some View {
         let isFolder = effectiveMethod == .folderHierarchy
 
         return VStack(alignment: .leading, spacing: 12) {
-            Text("LOCAL FOLDER ORGANIZATION")
+            Text(AppCapitalization.format("LOCAL FOLDER ORGANIZATION", enabled: isCaps))
                 .font(.system(size: 11, weight: .bold, design: .monospaced))
                 .foregroundStyle(.secondary)
                 .onLongPressGesture(minimumDuration: 0.45) {
@@ -600,14 +603,14 @@ public struct FolderSettingsView: View {
                 }
 
             HStack(alignment: .firstTextBaseline) {
-            Menu {
+                Menu {
                     Button {
                         HapticFeedback.selectionChanged()
                         withAnimation(.easeInOut(duration: 0.2)) {
                             pendingMethod = .id3Tags
                         }
                     } label: {
-                        if !isFolder { Label("METADATA", systemImage: "checkmark") } else { Text("METADATA") }
+                        if !isFolder { Label(AppCapitalization.format("METADATA", enabled: isCaps), systemImage: "checkmark") } else { Text(AppCapitalization.format("METADATA", enabled: isCaps)) }
                     }
 
                     Menu {
@@ -620,17 +623,17 @@ public struct FolderSettingsView: View {
                                 }
                             } label: {
                                 if isFolder && effectiveLayout == layout {
-                                    Label(layout.displayName, systemImage: "checkmark")
+                                    Label(AppCapitalization.format(layout.displayName, enabled: isCaps), systemImage: "checkmark")
                                 } else {
-                                    Text(layout.displayName)
+                                    Text(AppCapitalization.format(layout.displayName, enabled: isCaps))
                                 }
                             }
                         }
                     } label: {
-                        if isFolder { Label("FOLDER", systemImage: "checkmark") } else { Text("FOLDER") }
+                        if isFolder { Label(AppCapitalization.format("FOLDER", enabled: isCaps), systemImage: "checkmark") } else { Text(AppCapitalization.format("FOLDER", enabled: isCaps)) }
                     }
                 } label: {
-                    Text(isFolder ? "FOLDER" : "METADATA")
+                    Text(AppCapitalization.format(isFolder ? "FOLDER" : "METADATA", enabled: isCaps))
                         .font(.system(size: 13, weight: .bold, design: .monospaced))
                         .foregroundStyle(Color.white)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -642,7 +645,7 @@ public struct FolderSettingsView: View {
                     Button {
                         saveOrganization()
                     } label: {
-                        Text(isSavingOrganization ? "SAVING..." : "SAVE")
+                        Text(AppCapitalization.format(isSavingOrganization ? "SAVING..." : "SAVE", enabled: isCaps))
                             .font(.system(size: 13, weight: .bold, design: .monospaced))
                             .foregroundStyle(appTheme.accentColor)
                     }
@@ -651,6 +654,112 @@ public struct FolderSettingsView: View {
                     .transition(.opacity)
                 }
             }
+
+            // Collapsible ARTIST SEPARATORS section under LOCAL FOLDER ORGANIZATION
+            VStack(alignment: .leading, spacing: 8) {
+                Button {
+                    HapticFeedback.selectionChanged()
+                    withAnimation(.spring(response: 0.28, dampingFraction: 0.8)) {
+                        isArtistSeparatorsExpanded.toggle()
+                    }
+                } label: {
+                    HStack(spacing: 8) {
+                        Text(AppCapitalization.format("ARTIST SEPARATORS", enabled: isCaps))
+                            .font(.system(size: 11, weight: .bold, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                        if !effectiveSeparators.isEmpty {
+                            Text("(\(effectiveSeparators.count))")
+                                .font(.system(size: 11, weight: .bold, design: .monospaced))
+                                .foregroundStyle(appTheme.accentColor)
+                        }
+                        Spacer(minLength: 0)
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundStyle(.secondary)
+                            .rotationEffect(.degrees(isArtistSeparatorsExpanded ? 180 : 0))
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .contextMenu {
+                    Button {
+                        activeDetail = SettingOptionCatalog.artistSeparators
+                    } label: {
+                        Text(AppCapitalization.format("OPTION INFO", enabled: isCaps))
+                    }
+                }
+
+                if isArtistSeparatorsExpanded {
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(Array(effectiveSeparators.enumerated()), id: \.offset) { index, separator in
+                            HStack {
+                                Text("\"\(separator)\"")
+                                    .font(.system(size: 12, weight: .bold, design: .monospaced))
+                                    .foregroundStyle(Color.white)
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 4)
+                                    .background(Color.white.opacity(0.1))
+                                    .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+
+                                Spacer()
+
+                                Button {
+                                    HapticFeedback.selectionChanged()
+                                    var current = effectiveSeparators
+                                    current.remove(at: index)
+                                    pendingSeparators = current
+                                } label: {
+                                    Image(systemName: "trash")
+                                        .font(.system(size: 12))
+                                        .foregroundStyle(Color.red.opacity(0.8))
+                                }
+                                .buttonStyle(.plain)
+                            }
+                            .padding(.vertical, 2)
+                        }
+
+                        HStack(spacing: 8) {
+                            TextField(AppCapitalization.format("ADD SEPARATOR (E.G. //)", enabled: isCaps), text: $newSeparatorInput)
+                                .font(.system(size: 12, design: .monospaced))
+                                .textFieldStyle(.plain)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 6)
+                                .background(Color.white.opacity(0.08))
+                                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                                .autocorrectionDisabled()
+                                #if os(iOS)
+                                .textInputAutocapitalization(.never)
+                                #endif
+
+                            Button {
+                                let trimmed = newSeparatorInput.trimmingCharacters(in: .whitespacesAndNewlines)
+                                guard !trimmed.isEmpty else { return }
+                                guard !effectiveSeparators.contains(newSeparatorInput) else {
+                                    newSeparatorInput = ""
+                                    return
+                                }
+                                HapticFeedback.selectionChanged()
+                                var current = effectiveSeparators
+                                current.append(newSeparatorInput)
+                                pendingSeparators = current
+                                newSeparatorInput = ""
+                            } label: {
+                                Text(AppCapitalization.format("ADD", enabled: isCaps))
+                                    .font(.system(size: 12, weight: .bold, design: .monospaced))
+                                    .foregroundStyle(appTheme.accentColor)
+                                    .padding(.horizontal, 4)
+                                    .padding(.vertical, 6)
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(newSeparatorInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        }
+                        .padding(.top, 4)
+                    }
+                    .padding(.leading, 8)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+                }
+            }
+            .padding(.top, 6)
         }
         .animation(.easeInOut(duration: 0.2), value: hasPendingOrganizationChange || isSavingOrganization)
     }
@@ -659,13 +768,16 @@ public struct FolderSettingsView: View {
         guard !isSavingOrganization else { return }
         let method = effectiveMethod
         let layout = effectiveLayout
+        let seps = effectiveSeparators
         isSavingOrganization = true
         Task { @MainActor in
-            await libraryStore.applyLocalOrganization(method: method, layout: layout)
+            await libraryStore.applyLocalOrganization(method: method, layout: layout, customSeparators: seps)
             HapticFeedback.notificationSuccess()
             withAnimation(.easeInOut(duration: 0.2)) {
                 pendingMethod = nil
                 pendingLayout = nil
+                pendingSeparators = nil
+                newSeparatorInput = ""
                 isSavingOrganization = false
             }
         }
@@ -721,8 +833,8 @@ public struct FolderSettingsView: View {
     }
 
     private var scanProgressLine: String {
-        let status = libraryStore.scanStatusText.uppercased()
-        return status.isEmpty ? "INDEXING..." : status
+        let status = libraryStore.scanStatusText
+        return status.isEmpty ? AppCapitalization.format("INDEXING...", enabled: isCaps) : AppCapitalization.format(status, enabled: isCaps)
     }
 
     private var scanBelongsToListedRow: Bool {
@@ -737,13 +849,13 @@ public struct FolderSettingsView: View {
         // Only shown when the scan doesn't belong to a listed row (progress otherwise replaces that row's stats line)
         if libraryStore.isScanning && !scanBelongsToListedRow {
             VStack(alignment: .leading, spacing: 4) {
-                Text(libraryStore.scanStatusText.uppercased())
+                Text(AppCapitalization.format(libraryStore.scanStatusText, enabled: isCaps))
                     .font(.system(size: 10, design: .monospaced))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
 
                 HStack {
-                    Text("INDEXING: \(Int(libraryStore.scanProgress * 100))%")
+                    Text(AppCapitalization.format("INDEXING: \(Int(libraryStore.scanProgress * 100))%", enabled: isCaps))
                         .font(.system(size: 11, weight: .bold, design: .monospaced))
                         .foregroundStyle(libraryStore.settings.appTheme.accentColor)
 
@@ -798,25 +910,25 @@ public struct FolderSettingsView: View {
     private var storageTargetDetail: String {
         switch storageTarget {
         case .metadata:
-            return "\(libraryStore.downloadedMetadataCache.totalRecordsCount) RECORDS"
+            return "\(libraryStore.downloadedMetadataCache.totalRecordsCount) \(AppCapitalization.format("RECORDS", enabled: isCaps))"
         case .artwork:
-            return ByteFormatting.formatFileSize(bytes: artworkCacheSizeBytes).uppercased()
+            return AppCapitalization.format(ByteFormatting.formatFileSize(bytes: artworkCacheSizeBytes), enabled: isCaps)
         case .jellyfinOffline:
-            return "\(JellyfinDownloadManager.shared.downloadRecords.count) TRACKS • \(JellyfinDownloadManager.shared.formattedTotalSize.uppercased())"
+            return "\(JellyfinDownloadManager.shared.downloadRecords.count) \(AppCapitalization.format("TRACKS", enabled: isCaps)) • \(AppCapitalization.format(JellyfinDownloadManager.shared.formattedTotalSize, enabled: isCaps))"
         case .merges:
             let groups = libraryStore.settings.albumMergeGroups
             let original = Set(groups.flatMap(\.memberIDs)).count
             let merged = groups.count
-            return "\(original) ALBUMS MERGED INTO \(merged)"
+            return "\(original) \(AppCapitalization.format("ALBUMS MERGED INTO", enabled: isCaps)) \(merged)"
         case .everything:
             let sourceCount = libraryStore.settings.linkedFolders.count + libraryStore.settings.serverSources.count
-            return "\(sourceCount) SOURCES • \(libraryStore.tracks.count) TRACKS • \(libraryStore.albums.count) ALBUMS"
+            return "\(sourceCount) \(AppCapitalization.format("SOURCES", enabled: isCaps)) • \(libraryStore.tracks.count) \(AppCapitalization.format("TRACKS", enabled: isCaps)) • \(libraryStore.albums.count) \(AppCapitalization.format("ALBUMS", enabled: isCaps))"
         }
     }
 
     private var albumMergeModeSection: some View {
         HStack(alignment: .center, spacing: 8) {
-            Text("MERGE ALBUMS")
+            Text(AppCapitalization.format("MERGE ALBUMS", enabled: isCaps))
                 .font(.system(size: 13, weight: .bold, design: .monospaced))
                 .foregroundStyle(Color.primary)
 
@@ -831,12 +943,12 @@ public struct FolderSettingsView: View {
                 }
             )) {
                 ForEach(AlbumMergeMode.allCases) { mode in
-                    Text(mode.rawValue)
+                    Text(AppCapitalization.format(mode.rawValue, enabled: isCaps))
                         .lineLimit(1)
                         .tag(mode)
                 }
             } label: {
-                Text("MERGE ALBUMS")
+                Text(AppCapitalization.format("MERGE ALBUMS", enabled: isCaps))
             }
             .pickerStyle(.menu)
             .labelsHidden()
@@ -850,7 +962,7 @@ public struct FolderSettingsView: View {
     private var cacheManagementSection: some View {
         let available = availableStorageClearTargets
         return VStack(alignment: .leading, spacing: 14) {
-            Text("APP STORAGE MANAGEMENT")
+            Text(AppCapitalization.format("APP STORAGE MANAGEMENT", enabled: isCaps))
                 .font(.system(size: 11, weight: .bold, design: .monospaced))
                 .foregroundStyle(.secondary)
                 .onLongPressGesture(minimumDuration: 0.45) {
@@ -862,7 +974,7 @@ public struct FolderSettingsView: View {
                 EmptyView()
             } else {
                 HStack(alignment: .center, spacing: 8) {
-                    Text("CLEAR")
+                    Text(AppCapitalization.format("CLEAR", enabled: isCaps))
                         .font(.system(size: 13, weight: .bold, design: .monospaced))
                         .foregroundStyle(Color.primary)
 
@@ -871,13 +983,13 @@ public struct FolderSettingsView: View {
                     // Same native menu-picker control as Appearance settings (shows up/down chevrons).
                     Picker(selection: $storageTarget) {
                         ForEach(available) { target in
-                            Text(target.rawValue)
+                            Text(AppCapitalization.format(target.rawValue, enabled: isCaps))
                                 .lineLimit(1)
                                 .minimumScaleFactor(0.75)
                                 .tag(target)
                         }
                     } label: {
-                        Text("CLEAR")
+                        Text(AppCapitalization.format("CLEAR", enabled: isCaps))
                     }
                     .pickerStyle(.menu)
                     .labelsHidden()
@@ -907,7 +1019,7 @@ public struct FolderSettingsView: View {
                         case .everything: showingClearEverythingAlert = true
                         }
                     } label: {
-                        Text("CLEAR")
+                        Text(AppCapitalization.format("CLEAR", enabled: isCaps))
                             .font(.system(size: 13, weight: .bold, design: .monospaced))
                             .foregroundStyle(Color.red)
                     }
@@ -929,7 +1041,7 @@ public struct FolderSettingsView: View {
                 }
             } label: {
                 HStack(spacing: 8) {
-                    Text("HIDDEN (\(libraryStore.hiddenItems.count))")
+                    Text(AppCapitalization.format("HIDDEN (\(libraryStore.hiddenItems.count))", enabled: isCaps))
                         .font(.system(size: 13, weight: .bold, design: .monospaced))
                     Spacer(minLength: 0)
                     Image(systemName: "chevron.down")
@@ -946,7 +1058,7 @@ public struct FolderSettingsView: View {
                 let automatic = libraryStore.hiddenItems.filter { $0.kind == .autoDuplicate }
                 LazyVStack(alignment: .leading, spacing: 10) {
                     if !manual.isEmpty {
-                        Text("MANUALLY HIDDEN")
+                        Text(AppCapitalization.format("MANUALLY HIDDEN", enabled: isCaps))
                             .font(.system(size: 11, weight: .bold, design: .monospaced))
                             .foregroundStyle(.secondary)
                         ForEach(manual) { item in
@@ -959,7 +1071,7 @@ public struct FolderSettingsView: View {
                         }
                     }
                     if !automatic.isEmpty {
-                        Text("AUTOMATICALLY HIDDEN")
+                        Text(AppCapitalization.format("AUTOMATICALLY HIDDEN", enabled: isCaps))
                             .font(.system(size: 11, weight: .bold, design: .monospaced))
                             .foregroundStyle(.secondary)
                             .padding(.top, manual.isEmpty ? 0 : 6)
@@ -994,11 +1106,12 @@ private struct HiddenItemRow: View {
     let item: HiddenLibraryItem
     let onReturn: () -> Void
     @Environment(\.appTheme) private var appTheme
+    @Environment(\.isCapitalizationEnabled) private var isCaps: Bool
 
     private var subtitle: String {
         if item.kind == .album || item.kind == .autoDuplicate {
             let count = item.records.count
-            return "\(item.subtitle) • \(count) \(count == 1 ? "TRACK" : "TRACKS")"
+            return "\(item.subtitle) • \(count) \(count == 1 ? AppCapitalization.format("TRACK", enabled: isCaps) : AppCapitalization.format("TRACKS", enabled: isCaps))"
         }
         return item.subtitle
     }
@@ -1027,7 +1140,7 @@ private struct HiddenItemRow: View {
             Spacer(minLength: 8)
 
             Button(action: onReturn) {
-                Text("RETURN")
+                Text(AppCapitalization.format("RETURN", enabled: isCaps))
                     .font(.system(size: 13, weight: .bold, design: .monospaced))
                     .foregroundStyle(appTheme.accentColor)
             }
@@ -1052,51 +1165,52 @@ private struct FolderSettingsStorageClearAlerts: ViewModifier {
     @Binding var showingClearEverythingAlert: Bool
     let refreshArtworkCacheSize: () async -> Void
     let onClearedMerges: () -> Void
+    @Environment(\.isCapitalizationEnabled) private var isCaps: Bool
 
     func body(content: Content) -> some View {
         content
-            .alert("CLEAR METADATA CACHE?", isPresented: $showingClearMetadataAlert) {
-                Button("CANCEL", role: .cancel) {}
-                Button("CLEAR", role: .destructive) {
+            .alert(AppCapitalization.format("CLEAR METADATA CACHE?", enabled: isCaps), isPresented: $showingClearMetadataAlert) {
+                Button(AppCapitalization.format("CANCEL", enabled: isCaps), role: .cancel) {}
+                Button(AppCapitalization.format("CLEAR", enabled: isCaps), role: .destructive) {
                     libraryStore.clearDownloadedMetadataCache()
                 }
             } message: {
-                Text("THIS WILL REMOVE ALL LOCALLY CACHED ONLINE METADATA MATCHES AND RESET ENRICHMENT QUEUES.")
+                Text(AppCapitalization.format("THIS WILL REMOVE ALL LOCALLY CACHED ONLINE METADATA MATCHES AND RESET ENRICHMENT QUEUES.", enabled: isCaps))
             }
-            .alert("CLEAR ARTWORK CACHE?", isPresented: $showingClearArtworkAlert) {
-                Button("CANCEL", role: .cancel) {}
-                Button("CLEAR", role: .destructive) {
+            .alert(AppCapitalization.format("CLEAR ARTWORK CACHE?", enabled: isCaps), isPresented: $showingClearArtworkAlert) {
+                Button(AppCapitalization.format("CANCEL", enabled: isCaps), role: .cancel) {}
+                Button(AppCapitalization.format("CLEAR", enabled: isCaps), role: .destructive) {
                     libraryStore.clearArtworkCache()
                     Task { await refreshArtworkCacheSize() }
                 }
             } message: {
-                Text("THIS WILL REMOVE ALL CACHED COVER ARTWORKS FROM DISK. ARTWORKS WILL BE RE-EXTRACTED AS NEEDED.")
+                Text(AppCapitalization.format("THIS WILL REMOVE ALL CACHED COVER ARTWORKS FROM DISK. ARTWORKS WILL BE RE-EXTRACTED AS NEEDED.", enabled: isCaps))
             }
-            .alert("CLEAR ALL DOWNLOADS?", isPresented: $showingClearDownloadsAlert) {
-                Button("CANCEL", role: .cancel) {}
-                Button("CLEAR", role: .destructive) {
+            .alert(AppCapitalization.format("CLEAR ALL DOWNLOADS?", enabled: isCaps), isPresented: $showingClearDownloadsAlert) {
+                Button(AppCapitalization.format("CANCEL", enabled: isCaps), role: .cancel) {}
+                Button(AppCapitalization.format("CLEAR", enabled: isCaps), role: .destructive) {
                     JellyfinDownloadManager.shared.deleteAllDownloads()
                 }
             } message: {
-                Text("THIS WILL REMOVE ALL DOWNLOADED SERVER TRACKS FROM DEVICE STORAGE. TRACKS WILL REMAIN IN YOUR LIBRARY AND CAN STILL BE STREAMED.")
+                Text(AppCapitalization.format("THIS WILL REMOVE ALL DOWNLOADED SERVER TRACKS FROM DEVICE STORAGE. TRACKS WILL REMAIN IN YOUR LIBRARY AND CAN STILL BE STREAMED.", enabled: isCaps))
             }
-            .alert("CLEAR MERGES?", isPresented: $showingClearMergesAlert) {
-                Button("CANCEL", role: .cancel) {}
-                Button("CLEAR", role: .destructive) {
+            .alert(AppCapitalization.format("CLEAR MERGES?", enabled: isCaps), isPresented: $showingClearMergesAlert) {
+                Button(AppCapitalization.format("CANCEL", enabled: isCaps), role: .cancel) {}
+                Button(AppCapitalization.format("CLEAR", enabled: isCaps), role: .destructive) {
                     libraryStore.clearAllAlbumMerges()
                     onClearedMerges()
                 }
             } message: {
-                Text("THIS WILL UNMERGE ALL MANUALLY MERGED ALBUMS AND SHOW MERGE SUGGESTIONS AGAIN WHERE CANDIDATES EXIST.")
+                Text(AppCapitalization.format("THIS WILL UNMERGE ALL MANUALLY MERGED ALBUMS AND SHOW MERGE SUGGESTIONS AGAIN WHERE CANDIDATES EXIST.", enabled: isCaps))
             }
-            .alert("CLEAR EVERYTHING?", isPresented: $showingClearEverythingAlert) {
-                Button("CANCEL", role: .cancel) {}
-                Button("CLEAR EVERYTHING", role: .destructive) {
+            .alert(AppCapitalization.format("CLEAR EVERYTHING?", enabled: isCaps), isPresented: $showingClearEverythingAlert) {
+                Button(AppCapitalization.format("CANCEL", enabled: isCaps), role: .cancel) {}
+                Button(AppCapitalization.format("CLEAR EVERYTHING", enabled: isCaps), role: .destructive) {
                     libraryStore.clearEverything()
                     Task { await refreshArtworkCacheSize() }
                 }
             } message: {
-                Text("THIS WILL PERMANENTLY REMOVE ALL SOURCES, TRACKS, ALBUMS, PLAYLISTS, ARTWORKS, AND ALL DATA SAVED IN THE APP. THIS ACTION CANNOT BE UNDONE.")
+                Text(AppCapitalization.format("THIS WILL PERMANENTLY REMOVE ALL SOURCES, TRACKS, ALBUMS, PLAYLISTS, ARTWORKS, AND ALL DATA SAVED IN THE APP. THIS ACTION CANNOT BE UNDONE.", enabled: isCaps))
             }
     }
 }

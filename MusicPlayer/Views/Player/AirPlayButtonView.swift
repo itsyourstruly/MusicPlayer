@@ -91,6 +91,7 @@ public struct AirPlayButtonView: View {
     public let onTap: (() -> Void)?
     /// When true, shows the airplay.audio symbol instead of the route name (the name stays as the VoiceOver label).
     public let useIcon: Bool
+    @Environment(\.isCapitalizationEnabled) private var isCaps: Bool
 
     // Initialize with configured properties
     public init(
@@ -118,7 +119,7 @@ public struct AirPlayButtonView: View {
                 .contentShape(Rectangle())
                 .accessibilityLabel(routeName)
         } else {
-            Text(routeName)
+            Text(AppCapitalization.format(routeName, enabled: isCaps))
                 .font(font)
                 .foregroundStyle(foregroundColor)
                 .lineLimit(1)
@@ -200,6 +201,7 @@ public struct AirPlayButtonView: View {
     public let onTap: (() -> Void)?
     /// When true, shows the airplay.audio symbol instead of the route name (the name stays as the VoiceOver label).
     public let useIcon: Bool
+    @Environment(\.isCapitalizationEnabled) private var isCaps: Bool
 
     // Initialize with configured properties
     public init(
@@ -227,7 +229,7 @@ public struct AirPlayButtonView: View {
                 .contentShape(Rectangle())
                 .accessibilityLabel(routeName)
         } else {
-            Text(routeName)
+            Text(AppCapitalization.format(routeName, enabled: isCaps))
                 .font(font)
                 .foregroundStyle(foregroundColor)
                 .lineLimit(1)

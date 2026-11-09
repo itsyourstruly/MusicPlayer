@@ -473,23 +473,19 @@ public final class LibraryStore {
     }
 
     public var visibleEnrichmentDiffs: [MetadataDiff] {
-        guard hasExcludedFolders else { return enrichmentDiffs }
-        return enrichmentDiffs.filter { !isTrackExcludedFromTagEnrichment($0.localTrack) }
+        enrichmentDiffs.filter { !isTrackExcludedFromTagEnrichment($0.localTrack) }
     }
 
     public var visibleVerifiedGoodDiffs: [MetadataDiff] {
-        guard hasExcludedFolders else { return verifiedGoodDiffs }
-        return verifiedGoodDiffs.filter { !isTrackExcludedFromTagEnrichment($0.localTrack) }
+        verifiedGoodDiffs.filter { !isTrackExcludedFromTagEnrichment($0.localTrack) }
     }
 
     public var visibleVerifiedGoodCount: Int {
-        guard hasExcludedFolders else { return verifiedGoodDiffs.count }
-        return visibleVerifiedGoodDiffs.count
+        visibleVerifiedGoodDiffs.count
     }
 
     public var visibleDuplicateGroups: [DuplicateGroup] {
-        guard hasExcludedFolders else { return duplicateGroups }
-        return duplicateGroups.compactMap { (group: DuplicateGroup) -> DuplicateGroup? in
+        duplicateGroups.compactMap { (group: DuplicateGroup) -> DuplicateGroup? in
             let nonExcludedCandidates = group.candidates.filter { !isTrackExcludedFromTagEnrichment($0.track) }
             if nonExcludedCandidates.count < 2 {
                 return nil
@@ -506,12 +502,11 @@ public final class LibraryStore {
 
     public var unmatchedTracks: [Track] {
         let idSet = unmatchedTrackIDs
-        guard hasExcludedFolders else { return tracks.filter { idSet.contains($0.id) } }
         return tracks.filter { idSet.contains($0.id) && !isTrackExcludedFromTagEnrichment($0) }
     }
 
     public var unmatchedTracksCount: Int {
-        unmatchedTrackIDs.count
+        unmatchedTracks.count
     }
 
     // Fast O(1) index mapping normalized artist name variants and IDs to Artist entities
@@ -825,6 +820,98 @@ public final class LibraryStore {
             joinedArtists: self.settings.joinedArtists
         )
         SearchEngine.shared.updateIndex(searchEntries: state.searchEntries, playlists: self.playlists, context: searchCtx)
+        self.reextractLocalMetadataIfNeeded()
+    }
+
+    /// One-time background re-extraction of accessible local audio files under upgraded metadata rules (revision 2).
+    private func reextractLocalMetadataIfNeeded() {
+        guard settings.localMetadataExtractionVersion < 2 else { return }
+        guard !settings.linkedFolders.isEmpty else {
+            settings.localMetadataExtractionVersion = 2
+            saveSettings()
+            return
+        }
+
+        let localAccessibleTracks = self.tracks.filter { !$0.isJellyfinItem && $0.metadataSource != .server && CloudFileAvailability.isLocal(url: $0.url) }
+        guard !localAccessibleTracks.isEmpty else {
+            settings.localMetadataExtractionVersion = 2
+            saveSettings()
+            return
+        }
+
+        let loadedGood = self.verifiedGoodDiffs
+        let loadedMetaCache = self.downloadedMetadataCache
+
+        Task.detached(priority: .utility) { [weak self] in
+            var updatedTracks: [Track] = []
+            updatedTracks.reserveCapacity(min(localAccessibleTracks.count, 20_000))
+
+            for track in localAccessibleTracks {
+                guard FileManager.default.fileExists(atPath: track.url.path) else { continue }
+                if let newMeta = FastAudioMetadataReader.readMetadata(from: track.url) {
+                    let newArtist = newMeta.artist?.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let newAlbumArtist = newMeta.albumArtist?.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let newAlbum = newMeta.album?.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let newTitle = newMeta.title?.trimmingCharacters(in: .whitespacesAndNewlines)
+
+                    var changed = false
+                    var t = track
+                    if let a = newArtist, !a.isEmpty, a != track.artist {
+                        t = t.withArtist(a)
+                        changed = true
+                    }
+                    if let aa = newAlbumArtist, !aa.isEmpty, aa != track.albumArtist {
+                        t = t.withAlbumArtist(aa)
+                        changed = true
+                    }
+                    if let alb = newAlbum, !alb.isEmpty, alb != track.album {
+                        t = t.withAlbum(alb)
+                        changed = true
+                    }
+                    if let tit = newTitle, !tit.isEmpty, tit != track.title {
+                        t = t.withUpdatedTags(
+                            title: tit,
+                            artist: t.artist,
+                            album: t.album,
+                            albumArtist: t.albumArtist,
+                            composer: t.composer,
+                            performer: t.performer,
+                            genre: t.genre,
+                            year: t.year,
+                            trackNumber: t.trackNumber,
+                            totalTracks: t.totalTracks,
+                            discNumber: t.discNumber,
+                            discTotal: t.discTotal
+                        )
+                        changed = true
+                    }
+                    if changed {
+                        updatedTracks.append(t)
+                    }
+                }
+            }
+
+            await MainActor.run {
+                guard let self = self else { return }
+                self.settings.localMetadataExtractionVersion = 2
+                self.saveSettings()
+
+                if !updatedTracks.isEmpty {
+                    Task {
+                        let newState = await LibraryRepository.shared.applyChangeSet(
+                            upserted: updatedTracks,
+                            removedIDs: [],
+                            settings: self.settings,
+                            verifiedGoodDiffs: loadedGood,
+                            downloadedMetadataCache: loadedMetaCache
+                        )
+                        self.applyLoadedLibraryState(newState)
+                        self.saveLibrary()
+                        AppLogger.library.info("Re-extracted local metadata for \(updatedTracks.count) tracks to revision 2.")
+                    }
+                }
+            }
+        }
     }
 
     /// Fast O(1) indexed lookup for a track by its UUID.
@@ -1212,11 +1299,11 @@ public final class LibraryStore {
     }
 
     public var totalDuplicateSavingsBytes: Int64 {
-        duplicateGroups.reduce(0) { $0 + $1.potentialSavedBytes }
+        visibleDuplicateGroups.reduce(0) { $0 + $1.potentialSavedBytes }
     }
 
     public var totalDuplicateTracksCount: Int {
-        duplicateGroups.reduce(0) { $0 + $1.duplicateCandidates.count }
+        visibleDuplicateGroups.reduce(0) { $0 + $1.duplicateCandidates.count }
     }
 
     public var tracksMissingArtworkCount: Int {
@@ -1382,6 +1469,44 @@ public final class LibraryStore {
         return nil
     }
 
+    /// Finds an unambiguous Artist matching the specified name within the source context of a given track (local vs specific server source).
+    public func findUnambiguousFeaturedArtist(name: String, forTrack track: Track) -> Artist? {
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty, !ArtistParser.isGenericArtistName(trimmedName) else { return nil }
+        let canonicalKey = ArtistParser.canonicalArtistKey(trimmedName)
+        guard !canonicalKey.isEmpty else { return nil }
+
+        // Filter known library artists that match this name
+        let matchingCandidates: [Artist] = artists.filter { artist in
+            artist.id == canonicalKey ||
+            artist.name.localizedCaseInsensitiveCompare(trimmedName) == .orderedSame ||
+            ArtistParser.canonicalArtistKey(artist.name) == canonicalKey
+        }
+
+        guard !matchingCandidates.isEmpty else { return nil }
+
+        // Source context constraint:
+        // If track is a server track, candidate must have tracks from that same server.
+        // If track is a local track, candidate must have local tracks.
+        let sourceFiltered: [Artist]
+        if track.isJellyfinItem || track.metadataSource == .server {
+            sourceFiltered = matchingCandidates.filter { candidate in
+                candidate.tracks.contains { cTrack in
+                    (cTrack.isJellyfinItem || cTrack.metadataSource == .server) &&
+                    (cTrack.folderID == track.folderID || track.folderID == nil)
+                }
+            }
+        } else {
+            sourceFiltered = matchingCandidates.filter { candidate in
+                candidate.tracks.contains { !($0.isJellyfinItem || $0.metadataSource == .server) }
+            }
+        }
+
+        // Must be unambiguous (exactly 1 match)
+        guard sourceFiltered.count == 1 else { return nil }
+        return sourceFiltered.first
+    }
+
     // MARK: - Directory Linking & Scanning
 
     /// Returns the linked folder entity that owns this track, if matched.
@@ -1468,6 +1593,10 @@ public final class LibraryStore {
 
     /// Determines if a track should be excluded from tag enrichment sheets and scans.
     public func isTrackExcludedFromTagEnrichment(_ track: Track) -> Bool {
+        // Online / media server tracks are strictly excluded from local tag enrichment & duplicates
+        if track.isJellyfinItem || track.metadataSource == .server {
+            return true
+        }
         guard hasExcludedFolders else { return false }
         guard let f = folder(for: track) else { return false }
         return f.isExcludedFromTagEnrichment
@@ -1668,7 +1797,7 @@ public final class LibraryStore {
             AppLogger.library.warning("Unable to resolve URL for folder: \(folder.name)")
             return
         }
-        await rescanSingleFolder(folder: folder, url: url)
+        await rescanSingleFolder(folder: folder, url: url, forceFullScan: true)
     }
 
     /// Changes the target directory of an existing linked folder and rescans it.
@@ -1685,7 +1814,7 @@ public final class LibraryStore {
         settings.linkedFolderName = settings.linkedFolders.first?.name
         saveSettings()
 
-        await rescanSingleFolder(folder: settings.linkedFolders[index], url: newURL)
+        await rescanSingleFolder(folder: settings.linkedFolders[index], url: newURL, forceFullScan: true)
     }
 
     /// Purges tracks and all associated references across player queue, recent albums (LATEST PLAYS),
@@ -2332,7 +2461,7 @@ public final class LibraryStore {
     }
 
     // Rescans an individual folder directory and integrates its tracks
-    private func rescanSingleFolder(folder: LinkedFolder, url: URL) async {
+    private func rescanSingleFolder(folder: LinkedFolder, url: URL, forceFullScan: Bool = false) async {
         guard !isScanning else { return }
         self.isScanning = true
         self.currentlyScanningFolderID = folder.id
@@ -2407,20 +2536,23 @@ public final class LibraryStore {
         }
 
         // Execute scanning and tag enrichment in background
-        let scannedTracks = await Task.detached(priority: .userInitiated) { () -> [Track] in
-            let tracks = await AudioScannerService.shared.scanDirectory(
+        let scanResult = await Task.detached(priority: .userInitiated) { () -> AudioScanResult in
+            let res = await AudioScannerService.shared.scanDirectory(
                 at: url,
+                folderID: folderID,
                 existingTracks: folderTracks,
-                scanMethod: scanMethod
+                scanMethod: scanMethod,
+                forceFullScan: forceFullScan
             ) { current, total, name in
                 progressContinuation.yield((current: current, total: total, name: name))
             }
             progressContinuation.finish()
-            return tracks
+            return res
         }.value
 
         _ = await progressTask.result
         let tScanDone = Date()
+        let scannedTracks = scanResult.tracks
         AppLogger.library.debug("SCAN TIMING: file scan finished, \(scannedTracks.count) tracks")
 
         var filteredTracks = scannedTracks
@@ -2504,7 +2636,18 @@ public final class LibraryStore {
         }
         let existingFolderIDs = Set(folderTracks.map(\.id))
         let scannedIDs = Set(filteredTracks.map(\.id))
-        let removedFolderIDs = existingFolderIDs.subtracting(scannedIDs)
+        let removedFolderIDs: Set<UUID>
+
+        if scanResult.isComplete && !scanResult.reachedCap && scanResult.errorCount == 0 {
+            removedFolderIDs = existingFolderIDs.subtracting(scannedIDs)
+        } else {
+            // Partial scan or cap reached: retain cached tracks rather than deleting them
+            removedFolderIDs = []
+            let scannedURLs = Set(filteredTracks.map { $0.url.standardizedFileURL.path })
+            let preservedTracks = folderTracks.filter { !scannedURLs.contains($0.url.standardizedFileURL.path) }
+            filteredTracks.append(contentsOf: preservedTracks)
+            AppLogger.scanner.warning("Scan of [\(folderName)] was partial (complete: \(scanResult.isComplete), reachedCap: \(scanResult.reachedCap), errors: \(scanResult.errorCount)). Preserved \(preservedTracks.count) cached tracks.")
+        }
 
         // Fast path: nothing in this folder changed, so skip the full library rebuild and saves.
         if removedFolderIDs.isEmpty && Set(filteredTracks) == Set(folderTracks) {
@@ -2543,14 +2686,20 @@ public final class LibraryStore {
         self.settings.lastScanDate = Date()
         self.settings.totalScannedFiles = self.tracks.count
         self.scanProgress = 1.0
-        self.scanStatusText = "Scan complete for \(folderName). Indexed \(filteredTracks.count) tracks."
+        if scanResult.reachedCap {
+            self.scanStatusText = "Scan partial (reached 200,000 limit) for \(folderName)."
+        } else if !scanResult.isComplete {
+            self.scanStatusText = "Scan finished with \(scanResult.errorCount) errors for \(folderName)."
+        } else {
+            self.scanStatusText = "Scan complete for \(folderName). Indexed \(filteredTracks.count) tracks."
+        }
 
         // Save state non-blockingly
         saveLibrary()
         saveSettings()
         saveEnrichmentCache()
 
-        let currentTracksToSearch = self.tracks
+        let currentTracksToSearch = self.tracks.filter { !$0.isJellyfinItem && $0.metadataSource != .server && !self.isTrackExcludedFromTagEnrichment($0) }
 
         Task.detached(priority: .utility) { [weak self] in
             guard let self = self else { return }
@@ -2969,7 +3118,8 @@ public final class LibraryStore {
         downloadedMetadataCache: PersistentDownloadedMetadataCache,
         scanMethod: LibraryScanMethod = .id3Tags,
         serverSourceOrder: [UUID] = [],
-        albumMergeGroups: [AlbumMergeGroup] = []
+        albumMergeGroups: [AlbumMergeGroup] = [],
+        customArtistSeparators: [String] = []
     ) -> AlbumsAndArtistsResult {
         var localTracks: [Track] = []
         var serverTracks: [Track] = []
@@ -2983,7 +3133,8 @@ public final class LibraryStore {
             manualCollaborativeAlbumIDs: manualCollaborativeAlbumIDs,
             verifiedGoodDiffs: verifiedGoodDiffs,
             downloadedMetadataCache: downloadedMetadataCache,
-            scanMethod: scanMethod
+            scanMethod: scanMethod,
+            customSeparators: customArtistSeparators
         )
         let base: AlbumsAndArtistsResult
         if serverTracks.isEmpty {
@@ -3091,7 +3242,8 @@ public final class LibraryStore {
         manualCollaborativeAlbumIDs: Set<String>,
         verifiedGoodDiffs: [MetadataDiff],
         downloadedMetadataCache: PersistentDownloadedMetadataCache,
-        scanMethod: LibraryScanMethod
+        scanMethod: LibraryScanMethod,
+        customSeparators: [String] = []
     ) -> AlbumsAndArtistsResult {
         var workingTracks = tracks
         let trackIndexByID: [UUID: Int] = Dictionary(workingTracks.enumerated().map { ($0.element.id, $0.offset) }, uniquingKeysWith: { first, _ in first })
@@ -3108,7 +3260,7 @@ public final class LibraryStore {
                 let folderKey = (track.folderID?.uuidString ?? "") + "_" + parsed.albumDirectory
                 let item = TrackClusterItem(
                     track: track,
-                    canonicalArtists: Set(ArtistParser.parseArtists(from: track.artist).map { ArtistParser.canonicalArtistKey($0) }),
+                    canonicalArtists: Set(ArtistParser.parseArtists(from: track.artist, customSeparators: customSeparators).map { ArtistParser.canonicalArtistKey($0) }),
                     canonicalAlbumArtist: track.albumArtist.flatMap { ArtistParser.canonicalArtistKey($0) },
                     cleanFolder: folderKey,
                     artworkKey: track.artworkKey
@@ -3128,7 +3280,7 @@ public final class LibraryStore {
             let cleanFolder = cleanFolderForTrack(url: track.url)
             let item = TrackClusterItem(
                 track: track,
-                canonicalArtists: Set(ArtistParser.parseArtists(from: track.artist).map { ArtistParser.canonicalArtistKey($0) }),
+                canonicalArtists: Set(ArtistParser.parseArtists(from: track.artist, customSeparators: customSeparators).map { ArtistParser.canonicalArtistKey($0) }),
                 canonicalAlbumArtist: track.albumArtist.flatMap { ArtistParser.canonicalArtistKey($0) },
                 cleanFolder: cleanFolder,
                 artworkKey: track.artworkKey
@@ -3220,7 +3372,8 @@ public final class LibraryStore {
             let resolvedArtists = ArtistParser.resolveAlbumArtists(
                 for: uniqueClusterTracks,
                 explicitAlbumArtist: explicitAlbumArtist,
-                joinedArtists: joinedArtists
+                joinedArtists: joinedArtists,
+                customSeparators: customSeparators
             )
             let displayArtist = ArtistParser.formatDisplayArtist(resolvedArtists)
 
@@ -3279,21 +3432,7 @@ public final class LibraryStore {
                 }
             }
 
-            let sortedAlbumTracks = uniqueClusterTracks.sorted { t1, t2 in
-                let d1 = t1.discNumber ?? 1
-                let d2 = t2.discNumber ?? 1
-                if d1 != d2 { return d1 < d2 }
-
-                let n1 = t1.trackNumber ?? 0
-                let n2 = t2.trackNumber ?? 0
-                if n1 > 0 && n2 > 0 && n1 != n2 {
-                    return n1 < n2
-                }
-                if n1 > 0 && n2 == 0 { return true }
-                if n1 == 0 && n2 > 0 { return false }
-
-                return t1.title.localizedCaseInsensitiveCompare(t2.title) == .orderedAscending
-            }
+            let sortedAlbumTracks = uniqueClusterTracks.sorted(by: Album.areTracksInOrder)
 
             let groupKey: String? = {
                 if scanMethod == .folderHierarchy, let firstRel = first.relativePath {
@@ -3332,7 +3471,7 @@ public final class LibraryStore {
                     var distinctArtists: [String] = []
                     var seen = Set<String>()
                     for track in uniqueAlbums[i].tracks {
-                        for a in ArtistParser.parseArtists(from: track.artist) {
+                        for a in ArtistParser.parseArtists(from: track.artist, customSeparators: customSeparators) {
                             let clean = a.trimmingCharacters(in: .whitespacesAndNewlines)
                             let canon = ArtistParser.canonicalArtistKey(clean)
                             if !canon.isEmpty && !ArtistParser.isGenericArtistName(clean) && seen.insert(canon).inserted {
@@ -3412,10 +3551,10 @@ public final class LibraryStore {
                     matchedJoinedArtist = joinedRule
                     break
                 }
-                let joinedParts = ArtistParser.parseArtists(from: joinedRule).map { ArtistParser.canonicalArtistKey($0) }
+                let joinedParts = ArtistParser.parseArtists(from: joinedRule, customSeparators: customSeparators).map { ArtistParser.canonicalArtistKey($0) }
                 if joinedParts.count > 1 {
-                    let trackParts = ArtistParser.parseArtists(from: trackRawArtist).map { ArtistParser.canonicalArtistKey($0) }
-                    let albumParts = ArtistParser.parseArtists(from: albumRawArtist).map { ArtistParser.canonicalArtistKey($0) }
+                    let trackParts = ArtistParser.parseArtists(from: trackRawArtist, customSeparators: customSeparators).map { ArtistParser.canonicalArtistKey($0) }
+                    let albumParts = ArtistParser.parseArtists(from: albumRawArtist, customSeparators: customSeparators).map { ArtistParser.canonicalArtistKey($0) }
                     if Set(joinedParts).isSubset(of: Set(trackParts)) || (!albumParts.isEmpty && Set(joinedParts).isSubset(of: Set(albumParts))) {
                         matchedJoinedArtist = joinedRule
                         break
@@ -3430,7 +3569,8 @@ public final class LibraryStore {
                 allTrackArtists = ArtistParser.allArtists(
                     forTitle: track.title,
                     artist: track.artist,
-                    albumArtist: track.albumArtist
+                    albumArtist: track.albumArtist,
+                    customSeparators: customSeparators
                 )
             }
 
@@ -3567,7 +3707,8 @@ public final class LibraryStore {
                         downloadedMetadataCache: downloadedMetadataCache,
                         scanMethod: settingsSnapshot.libraryScanMethod,
                         serverSourceOrder: settingsSnapshot.serverSources.map(\.id),
-                        albumMergeGroups: settingsSnapshot.albumMergeGroups
+                        albumMergeGroups: settingsSnapshot.albumMergeGroups,
+                        customArtistSeparators: settingsSnapshot.customArtistSeparators
                     )
                 }.value
                 res = (built.tracks, built.albums, built.artists, built.artistLookupIndex)
@@ -4040,8 +4181,9 @@ public final class LibraryStore {
 
     /// Re-evaluates all indexed tracks to detect duplicate clusters.
     public func recalculateDuplicates() async {
-        // Groups
-        let groups = await DuplicateDetectionService.shared.analyzeDuplicates(in: tracks)
+        // Evaluate only local non-excluded tracks (online server sources are strictly excluded)
+        let localTracks = tracks.filter { !$0.isJellyfinItem && $0.metadataSource != .server && !isTrackExcludedFromTagEnrichment($0) }
+        let groups = await DuplicateDetectionService.shared.analyzeDuplicates(in: localTracks)
         self.duplicateGroups = groups
         saveDuplicates()
     }
@@ -4074,15 +4216,8 @@ public final class LibraryStore {
         var deletedIDs = Set<UUID>()
 
         for track in tracksToDelete {
-            if track.isJellyfinItem || track.metadataSource == .server {
-                if let itemId = track.jellyfinItemId ?? JellyfinPlaybackReporter.extractItemId(from: track) {
-                    self.settings.removedJellyfinItemIDs.insert(itemId)
-                    // Deleted copies are not "hidden": keep them out of the HIDDEN list
-                    self.recordDeletedServerItemID(itemId)
-                }
-                JellyfinDownloadManager.shared.deleteDownload(trackId: track.id)
-                deletedIDs.insert(track.id)
-                successCount += 1
+            // Strictly local files only: never delete or touch online server tracks
+            guard !track.isJellyfinItem && track.metadataSource != .server else {
                 continue
             }
 
@@ -6569,60 +6704,185 @@ public final class LibraryStore {
         saveSettings()
     }
 
-    /// Among currently visible/loaded tracks, hide server duplicates (same title+artist+album).
+    /// Among currently visible/loaded tracks, hide server duplicates (same base title + compatible artist + album).
     /// Keeps the best quality/metadata copy. Does not merge albums or rewrite artwork.
     public func hideVisibleServerDuplicateTracks(among tracks: [Track]) {
         guard settings.hideServerAlbumDuplicates else { return }
         let serverTracks = tracks.filter { $0.isJellyfinItem || $0.metadataSource == .server }
         guard serverTracks.count >= 2 else { return }
 
-        var buckets: [String: [Track]] = [:]
+        // Deduplicate input tracks by ID to prevent duplicate collisions
+        var uniqueServerTracks: [Track] = []
+        var seenIDs = Set<UUID>()
         for track in serverTracks {
+            if seenIDs.insert(track.id).inserted {
+                uniqueServerTracks.append(track)
+            }
+        }
+        guard uniqueServerTracks.count >= 2 else { return }
+
+        // Group by base duplicate key
+        var buckets: [String: [Track]] = [:]
+        for track in uniqueServerTracks {
             buckets[Self.serverDuplicateTrackKey(track), default: []].append(track)
         }
 
         var losers: [Track] = []
         for (_, group) in buckets where group.count >= 2 {
-            let ranked = group.sorted { Self.duplicateTrackQualityScore($0) > Self.duplicateTrackQualityScore($1) }
-            losers.append(contentsOf: ranked.dropFirst())
+            // Further partition into truly compatible clusters (checking featured-credit compatibility)
+            var clusters: [[Track]] = []
+            for track in group {
+                var added = false
+                for i in 0..<clusters.count {
+                    if let first = clusters[i].first, Self.areServerTracksFeaturedCompatible(first, track) {
+                        clusters[i].append(track)
+                        added = true
+                        break
+                    }
+                }
+                if !added {
+                    clusters.append([track])
+                }
+            }
+
+            for cluster in clusters where cluster.count >= 2 {
+                let ranked = cluster.sorted { Self.isBetterServerDuplicate(lhs: $0, rhs: $1) }
+                losers.append(contentsOf: ranked.dropFirst())
+            }
         }
         guard !losers.isEmpty else { return }
 
         // Skip tracks already exempted via RETURN of an auto-hidden row.
         let exempt = settings.hideServerDuplicateExemptAlbumIDs
         let toHide = losers.filter { track in
-            if let aid = track.jellyfinAlbumId, exempt.contains(aid) { return false }
+            let aid = Self.effectiveServerAlbumID(for: track)
+            if exempt.contains(aid) { return false }
             return true
         }
         guard !toHide.isEmpty else { return }
         hideAutomaticDuplicateTracks(toHide)
     }
 
+    nonisolated private static func effectiveServerAlbumID(for track: Track) -> String {
+        track.jellyfinAlbumId ?? Album(title: track.album, artist: track.artist, year: track.year).id
+    }
+
     nonisolated private static func serverDuplicateTrackKey(_ track: Track) -> String {
-        let title = ServerCredits.nameKey(track.title)
+        let titleCredit = ArtistParser.parseTitleFeaturedCredit(track.title)
+        let baseTitle = ServerCredits.nameKey(titleCredit.baseTitle)
         let artist = ServerCredits.nameKey(
             (track.albumArtist?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
                 ? (track.albumArtist ?? track.artist) : track.artist
         )
         let album = ServerCredits.nameKey(track.album)
-        return "\(artist)|\(album)|\(title)"
+        return "\(artist)|\(album)|\(baseTitle)"
     }
 
-    nonisolated private static func duplicateTrackQualityScore(_ track: Track) -> Int {
-        var n = 0
-        if track.trackNumber != nil { n += 10 }
-        if track.discNumber != nil { n += 5 }
-        if track.year != nil { n += 5 }
-        if let g = track.genre, !g.isEmpty { n += 5 }
-        if track.artworkKey != nil { n += 15 }
-        if let aa = track.albumArtist, !aa.isEmpty { n += 5 }
-        n += track.serverCredits?.bitDepth ?? 0
-        let info = track.fileInfo
-        let ext = (info?.fileExtension ?? "").uppercased()
-        if ["FLAC", "ALAC", "WAV", "AIFF", "AIF", "APE", "WV"].contains(ext) { n += 100 }
-        n += Int((info?.sampleRate ?? 0) / 1000)
-        n += Int((info?.bitRate ?? 0) / 10)
-        return n
+    nonisolated private static func areServerTracksFeaturedCompatible(_ t1: Track, _ t2: Track) -> Bool {
+        let c1 = ArtistParser.parseTitleFeaturedCredit(t1.title)
+        let c2 = ArtistParser.parseTitleFeaturedCredit(t2.title)
+        guard ServerCredits.nameKey(c1.baseTitle) == ServerCredits.nameKey(c2.baseTitle) else { return false }
+        guard ServerCredits.nameKey(t1.album) == ServerCredits.nameKey(t2.album) else { return false }
+
+        // If both have featured credits in title, verify they don't credit conflicting artists
+        if c1.hasFeaturedCredit && c2.hasFeaturedCredit {
+            let s1 = Set(c1.featuredArtists.map { ArtistParser.canonicalArtistKey($0) })
+            let s2 = Set(c2.featuredArtists.map { ArtistParser.canonicalArtistKey($0) })
+            return !s1.isDisjoint(with: s2) || s1 == s2
+        }
+
+        // If one has title credit and one does not
+        if c1.hasFeaturedCredit != c2.hasFeaturedCredit {
+            let plainTrack = c1.hasFeaturedCredit ? t2 : t1
+            let featuredInfo = c1.hasFeaturedCredit ? c1 : c2
+
+            // Check if plainTrack has these featured artists in metadata
+            let plainArtists = Set(ArtistParser.allArtists(
+                forTitle: plainTrack.title,
+                artist: plainTrack.artist,
+                albumArtist: plainTrack.albumArtist
+            ).map { ArtistParser.canonicalArtistKey($0) })
+
+            let guestKeys = Set(featuredInfo.featuredArtists.map { ArtistParser.canonicalArtistKey($0) })
+            if !guestKeys.isDisjoint(with: plainArtists) {
+                return true
+            }
+
+            // Alternatively, if they have matching track/disc number and duration within 3 seconds
+            let d1 = t1.discNumber ?? 1
+            let d2 = t2.discNumber ?? 1
+            let n1 = t1.trackNumber ?? 0
+            let n2 = t2.trackNumber ?? 0
+            if d1 == d2 && n1 > 0 && n1 == n2 && abs(t1.duration - t2.duration) <= 3.0 {
+                return true
+            }
+            return false
+        }
+
+        // Neither has featured credits in title: same song on same album
+        return true
+    }
+
+    nonisolated private static func isBetterServerDuplicate(lhs: Track, rhs: Track) -> Bool {
+        // 1. Measurable Audio Quality
+        let losslessExts = ["FLAC", "ALAC", "WAV", "AIFF", "AIF", "APE", "WV"]
+        let lhsExt = (lhs.fileInfo?.fileExtension ?? "").uppercased()
+        let rhsExt = (rhs.fileInfo?.fileExtension ?? "").uppercased()
+        let lhsLossless = losslessExts.contains(lhsExt)
+        let rhsLossless = losslessExts.contains(rhsExt)
+        if lhsLossless != rhsLossless { return lhsLossless }
+
+        let lhsDepth = lhs.serverCredits?.bitDepth ?? 0
+        let rhsDepth = rhs.serverCredits?.bitDepth ?? 0
+        if lhsDepth > 0 && rhsDepth > 0 && lhsDepth != rhsDepth {
+            return lhsDepth > rhsDepth
+        }
+
+        let lhsRate = lhs.fileInfo?.sampleRate ?? 0
+        let rhsRate = rhs.fileInfo?.sampleRate ?? 0
+        if lhsRate > 0 && rhsRate > 0 && lhsRate != rhsRate {
+            return lhsRate > rhsRate
+        }
+
+        let lhsBitrate = lhs.fileInfo?.bitRate ?? 0
+        let rhsBitrate = rhs.fileInfo?.bitRate ?? 0
+        if lhsBitrate > 0 && rhsBitrate > 0 && lhsBitrate != rhsBitrate {
+            return lhsBitrate > rhsBitrate
+        }
+
+        // 2. Artist credits in metadata over title-only featuring credits
+        let lhsTitleCredit = ArtistParser.parseTitleFeaturedCredit(lhs.title).hasFeaturedCredit
+        let rhsTitleCredit = ArtistParser.parseTitleFeaturedCredit(rhs.title).hasFeaturedCredit
+        let lhsMetaCredits = (lhs.serverCredits?.artists.count ?? 0) > 1 || (ArtistParser.parseArtists(from: lhs.artist).count > 1)
+        let rhsMetaCredits = (rhs.serverCredits?.artists.count ?? 0) > 1 || (ArtistParser.parseArtists(from: rhs.artist).count > 1)
+
+        if lhsMetaCredits != rhsMetaCredits {
+            return lhsMetaCredits
+        }
+        if lhsTitleCredit != rhsTitleCredit {
+            return !lhsTitleCredit // clean title preferred when metadata has the credits
+        }
+
+        // 3. Richer valid metadata
+        func validFieldCount(_ t: Track) -> Int {
+            var c = 0
+            if let n = t.trackNumber, n > 0 { c += 1 }
+            if let d = t.discNumber, d > 0 { c += 1 }
+            if let y = t.year, y > 0 { c += 1 }
+            if let g = t.genre, !g.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { c += 1 }
+            if let aa = t.albumArtist, !aa.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { c += 1 }
+            if let art = t.artworkKey, !art.isEmpty { c += 1 }
+            if let lyr = t.lyrics, !lyr.isEmpty { c += 1 }
+            return c
+        }
+        let lhsFields = validFieldCount(lhs)
+        let rhsFields = validFieldCount(rhs)
+        if lhsFields != rhsFields {
+            return lhsFields > rhsFields
+        }
+
+        // 4. Stable tie-breaker
+        return lhs.id.uuidString < rhs.id.uuidString
     }
 
     /// Persists losers as automatic HIDDEN rows and removes them from the live library (one rebuild).
@@ -7492,11 +7752,20 @@ public final class LibraryStore {
         Task { await applyLocalOrganization(method: settings.libraryScanMethod, layout: layout) }
     }
 
-    /// Applies a local organization mode + folder layout together in ONE incremental reorganize pass.
-    public func applyLocalOrganization(method: LibraryScanMethod, layout: FolderHierarchyLayout) async {
+    /// Applies a local organization mode + folder layout + custom artist separators together in ONE incremental reorganize pass.
+    public func applyLocalOrganization(
+        method: LibraryScanMethod,
+        layout: FolderHierarchyLayout,
+        customSeparators: [String]? = nil
+    ) async {
         let methodChanged = settings.libraryScanMethod != method
         let layoutChanged = settings.folderHierarchyLayout != layout
-        guard methodChanged || layoutChanged else { return }
+        let separatorsChanged = (customSeparators != nil) && (settings.customArtistSeparators != customSeparators!)
+        guard methodChanged || layoutChanged || separatorsChanged else { return }
+
+        if let seps = customSeparators {
+            settings.customArtistSeparators = seps
+        }
 
         if methodChanged {
             // Snapshot current mode state (pins/recents) and restore the target mode's
@@ -7522,9 +7791,20 @@ public final class LibraryStore {
             saveRecentAlbums()
         }
 
-        // Layout only matters in FOLDER mode; album clustering itself depends on the mode.
-        guard methodChanged || method == .folderHierarchy else { return }
-        await reorganizeLocalTracks(forceRebuild: methodChanged)
+        // Layout only matters in FOLDER mode; album clustering itself depends on the mode or custom separators.
+        let needsRebuild = methodChanged || separatorsChanged || (method == .folderHierarchy && layoutChanged)
+        guard needsRebuild else { return }
+
+        if methodChanged || (method == .folderHierarchy && layoutChanged) {
+            for folder in settings.linkedFolders {
+                if let url = SecurityScopedBookmark.shared.resolveAndAccessBookmark(folderID: folder.id, bookmarkData: folder.bookmarkData) ??
+                      (folder.path.map { URL(fileURLWithPath: $0) }) {
+                    await rescanSingleFolder(folder: folder, url: url, forceFullScan: true)
+                }
+            }
+        } else {
+            await reorganizeLocalTracks(forceRebuild: separatorsChanged)
+        }
     }
 
     /// Incrementally re-organizes LOCAL (non-Jellyfin) tracks off the main actor. Only tracks whose

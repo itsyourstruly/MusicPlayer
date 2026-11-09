@@ -21,6 +21,7 @@ public struct HomeView: View {
     @State private var showingShuffleTargetPicker: Bool = false
 
     @Binding var navigateToSearch: Bool
+    @Environment(\.isCapitalizationEnabled) private var isCaps: Bool
 
     /// Cap horizontal carousels so Home stays light.
     private static let carouselLimit = 24
@@ -91,7 +92,7 @@ public struct HomeView: View {
             .padding(.bottom, 140) // Padding for floating mini player and tab bar
         }
         .background(libraryStore.settings.appTheme.backgroundColor.ignoresSafeArea())
-        .navigationTitle("HOME")
+        .navigationTitle(AppCapitalization.format("HOME", enabled: isCaps))
         .navigationBarTitleDisplayMode(.large)
         // Modal presentation sheet
         .sheet(isPresented: $showingShuffleTargetPicker) {
@@ -129,19 +130,19 @@ public struct HomeView: View {
             switch destination {
             case .artists:
                 ArtistsListView(libraryStore: libraryStore, playerService: playerService, isStandalone: true)
-                    .navigationTitle("ARTISTS")
+                    .navigationTitle(AppCapitalization.format("ARTISTS", enabled: isCaps))
                     .navigationBarTitleDisplayMode(.inline)
             case .albums:
                 AlbumsListView(libraryStore: libraryStore, playerService: playerService, isStandalone: true)
-                    .navigationTitle("ALBUMS")
+                    .navigationTitle(AppCapitalization.format("ALBUMS", enabled: isCaps))
                     .navigationBarTitleDisplayMode(.inline)
             case .playlists:
                 PlaylistsListView(libraryStore: libraryStore, playerService: playerService, isStandalone: true)
-                    .navigationTitle("PLAYLISTS")
+                    .navigationTitle(AppCapitalization.format("PLAYLISTS", enabled: isCaps))
                     .navigationBarTitleDisplayMode(.inline)
             case .tracks:
                 AllTracksListView(libraryStore: libraryStore, playerService: playerService, isStandalone: true)
-                    .navigationTitle("TRACKS")
+                    .navigationTitle(AppCapitalization.format("TRACKS", enabled: isCaps))
                     .navigationBarTitleDisplayMode(.inline)
             }
         }
@@ -203,7 +204,7 @@ public struct HomeView: View {
                     libraryListDestination = destination
                 } label: {
                     HStack {
-                        Text(title)
+                        Text(AppCapitalization.format(title, enabled: isCaps))
                             .font(.system(size: 13, weight: .black, design: .monospaced))
                             .foregroundStyle(.secondary)
                         Spacer()
@@ -216,7 +217,7 @@ public struct HomeView: View {
                 }
                 .buttonStyle(.plain)
             } else {
-                Text(title)
+                Text(AppCapitalization.format(title, enabled: isCaps))
                     .font(.system(size: 13, weight: .black, design: .monospaced))
                     .foregroundStyle(.secondary)
                     .padding(.horizontal, 2)
@@ -424,7 +425,7 @@ public struct HomeView: View {
 #if os(iOS)
         // Enabled Latest Plays always shows its header, even when empty.
         VStack(alignment: .leading, spacing: 12) {
-            Text("LATEST PLAYS")
+            Text(AppCapitalization.format("LATEST PLAYS", enabled: isCaps))
                 .font(.system(size: 13, weight: .black, design: .monospaced))
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 2)
@@ -470,7 +471,7 @@ public struct HomeView: View {
 #else
         if !recent.isEmpty {
             VStack(alignment: .leading, spacing: 12) {
-                Text("LATEST PLAYS")
+                Text(AppCapitalization.format("LATEST PLAYS", enabled: isCaps))
                     .font(.system(size: 13, weight: .black, design: .monospaced))
                     .foregroundStyle(.secondary)
                     .padding(.horizontal, 2)
@@ -523,13 +524,13 @@ public struct HomeView: View {
     /// Centered empty state (no background): title and a large ADD SOURCE button that opens Settings.
     private var emptyLibraryBanner: some View {
         VStack(spacing: 20) {
-            Text("NO SOURCE CONNECTED")
+            Text(AppCapitalization.format("NO SOURCE CONNECTED", enabled: isCaps))
                 .font(.system(size: 14, weight: .bold, design: .monospaced))
                 .foregroundStyle(Color.primary)
                 .multilineTextAlignment(.center)
 
             Button(action: onOpenSettings) {
-                Text("ADD SOURCE")
+                Text(AppCapitalization.format("ADD SOURCE", enabled: isCaps))
                     .font(.system(size: 17, weight: .bold, design: .monospaced))
                     .foregroundStyle(libraryStore.settings.appTheme.accentColor)
                     .padding(.horizontal, 22)
@@ -569,17 +570,19 @@ public struct HomeView: View {
     }
 
     private var shuffleButtonTitle: String {
+        let title: String
         switch libraryStore.settings.customShuffleTarget {
         case .all:
-            return "SHUFFLE ALL"
+            title = "SHUFFLE ALL"
         case .artist(let name):
-            return "SHUFFLE \(name.uppercased())"
+            title = "SHUFFLE \(name)"
         // Display title of the song
-        case .album(let title, _):
-            return "SHUFFLE \(title.uppercased())"
+        case .album(let albumTitle, _):
+            title = "SHUFFLE \(albumTitle)"
         case .playlist(_, let name):
-            return "SHUFFLE \(name.uppercased())"
+            title = "SHUFFLE \(name)"
         }
+        return AppCapitalization.format(title, enabled: isCaps)
     }
 
     private var shuffleButtonSubtitle: String {
@@ -596,16 +599,18 @@ public struct HomeView: View {
         case .playlist(let id, _):
             count = libraryStore.playlists.first(where: { $0.id == id })?.trackIDs.count ?? 0
         }
+        let raw: String
         switch libraryStore.settings.customShuffleTarget {
         case .all:
-            return "\(count) TRACKS"
+            raw = "\(count) TRACKS"
         case .artist:
-            return "ARTIST • \(count) TRACKS"
+            raw = "ARTIST • \(count) TRACKS"
         case .album:
-            return "ALBUM • \(count) TRACKS"
+            raw = "ALBUM • \(count) TRACKS"
         case .playlist:
-            return "PLAYLIST • \(count) TRACKS"
+            raw = "PLAYLIST • \(count) TRACKS"
         }
+        return AppCapitalization.format(raw, enabled: isCaps)
     }
 
     private var quickActionsDeck: some View {
@@ -642,7 +647,7 @@ public struct HomeView: View {
                 Button(action: {
                     showingShuffleTargetPicker = true
                 }) {
-                    Text("SET")
+                    Text(AppCapitalization.format("SET", enabled: isCaps))
                 }
 
                 if !libraryStore.settings.customShuffleTarget.isAll {
@@ -651,7 +656,7 @@ public struct HomeView: View {
                         libraryStore.settings.customShuffleTarget = .all
                         libraryStore.saveSettings()
                     }) {
-                        Text("RESET TO ALL TRACKS")
+                        Text(AppCapitalization.format("RESET TO ALL TRACKS", enabled: isCaps))
                     }
                 }
             }
@@ -662,11 +667,11 @@ public struct HomeView: View {
                 navigateToSearch = true
             }) {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("SEARCH")
+                    Text(AppCapitalization.format("SEARCH", enabled: isCaps))
                         .font(.system(size: 13, weight: .bold, design: .monospaced))
                         .foregroundStyle(Color.primary)
 
-                    Text("LIBRARY")
+                    Text(AppCapitalization.format("LIBRARY", enabled: isCaps))
                         .font(.system(size: 11, design: .monospaced))
                         .foregroundStyle(.secondary)
                 }

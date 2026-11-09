@@ -10,6 +10,10 @@ private struct AppThemeEnvironmentKey: EnvironmentKey {
     static let defaultValue: AppTheme = .dark
 }
 
+private struct CapitalizationEnvironmentKey: EnvironmentKey {
+    static let defaultValue: Bool = true
+}
+
 public extension EnvironmentValues {
     // App theme
     var appTheme: AppTheme {
@@ -17,11 +21,180 @@ public extension EnvironmentValues {
         set { self[AppThemeEnvironmentKey.self] = newValue }
     }
 
+    /// Capitalization toggle: true = ALL CAPS UI labels (default); false = Title Case
+    var isCapitalizationEnabled: Bool {
+        get { self[CapitalizationEnvironmentKey.self] }
+        set { self[CapitalizationEnvironmentKey.self] = newValue }
+    }
+
     /// Indicates whether the full-screen player is actively being dragged, swiped down to dismiss,
     /// or in the process of collapsing, allowing descendant buttons to suppress accidental triggers.
     var isPlayerDraggingOrDismissing: Bool {
         get { self[PlayerDraggingOrDismissingKey.self] }
         set { self[PlayerDraggingOrDismissingKey.self] = newValue }
+    }
+}
+
+// MARK: - AppCapitalization
+
+/// Display-only text formatter for app-owned UI labels supporting the CAPITALIZATION setting.
+/// When enabled (default ON), retains ALL CAPS appearance.
+/// When disabled (OFF), converts ALL CAPS UI labels to Title Case while strictly preserving acronyms,
+/// technical identifiers, and canonical brand names.
+public enum AppCapitalization {
+    /// Preserved acronyms and canonical representations
+    private static let canonicalWords: [String: String] = [
+        "url": "URL",
+        "urls": "URLs",
+        "id3": "ID3",
+        "flac": "FLAC",
+        "alac": "ALAC",
+        "wav": "WAV",
+        "aiff": "AIFF",
+        "aif": "AIF",
+        "aac": "AAC",
+        "mp3": "MP3",
+        "m4a": "M4A",
+        "ogg": "Ogg",
+        "opus": "Opus",
+        "dj": "DJ",
+        "api": "API",
+        "apis": "APIs",
+        "ios": "iOS",
+        "macos": "macOS",
+        "tvos": "tvOS",
+        "watchos": "watchOS",
+        "wi-fi": "Wi-Fi",
+        "wifi": "Wi-Fi",
+        "eq": "EQ",
+        "dsp": "DSP",
+        "uuid": "UUID",
+        "jellyfin": "Jellyfin",
+        "subsonic": "Subsonic",
+        "navidrome": "Navidrome",
+        "plex": "Plex",
+        "deezer": "Deezer",
+        "musicbrainz": "MusicBrainz",
+        "shazam": "Shazam",
+        "airplay": "AirPlay",
+        "icloud": "iCloud",
+        "ok": "OK",
+        "ep": "EP",
+        "eps": "EPs",
+        "lp": "LP",
+        "lps": "LPs",
+        "bpm": "BPM",
+        "kbps": "kbps",
+        "hz": "Hz",
+        "khz": "kHz"
+    ]
+
+    /// Minor words that can remain lowercase unless at the start or after punctuation
+    private static let minorWords: Set<String> = [
+        "a", "an", "and", "as", "at", "but", "by", "for", "in", "nor", "of", "on", "or", "so", "the", "to", "up", "yet", "via"
+    ]
+
+    /// Formats an app-owned UI label. If `enabled` is true, returns `label` as-is.
+    /// If `enabled` is false, transforms uppercase text into Title Case while preserving acronyms.
+    public static func format(_ label: String, enabled: Bool) -> String {
+        guard !enabled else { return label }
+        guard !label.isEmpty else { return label }
+
+        var result = ""
+        let lines = label.split(separator: "\n", omittingEmptySubsequences: false)
+        for (lineIdx, line) in lines.enumerated() {
+            if lineIdx > 0 { result += "\n" }
+            let words = line.split(separator: " ", omittingEmptySubsequences: false)
+            for (wordIdx, wordSubstring) in words.enumerated() {
+                if wordIdx > 0 { result += " " }
+                let word = String(wordSubstring)
+                result += formatWord(word, isFirst: wordIdx == 0)
+            }
+        }
+        return result
+    }
+
+    private static func formatWord(_ word: String, isFirst: Bool) -> String {
+        guard !word.isEmpty else { return word }
+
+        var leadingCount = 0
+        for ch in word {
+            if ch.isLetter || ch.isNumber { break }
+            leadingCount += 1
+        }
+        let trimmedLeading = word.prefix(leadingCount)
+        let rest = word.dropFirst(leadingCount)
+
+        var trailingCount = 0
+        for ch in rest.reversed() {
+            if ch.isLetter || ch.isNumber { break }
+            trailingCount += 1
+        }
+        let trimmedTrailing = rest.suffix(trailingCount)
+        let core = String(rest.dropLast(trailingCount))
+
+        guard !core.isEmpty else { return word }
+
+        let lower = core.lowercased()
+        if let canonical = canonicalWords[lower] {
+            return String(trimmedLeading) + canonical + String(trimmedTrailing)
+        }
+
+        if core.contains("/") {
+            let parts = core.split(separator: "/", omittingEmptySubsequences: false)
+            let formattedParts = parts.map { part -> String in
+                let p = String(part)
+                if let can = canonicalWords[p.lowercased()] { return can }
+                return p.prefix(1).uppercased() + p.dropFirst().lowercased()
+            }
+            return String(trimmedLeading) + formattedParts.joined(separator: "/") + String(trimmedTrailing)
+        }
+        if core.contains("-") {
+            let parts = core.split(separator: "-", omittingEmptySubsequences: false)
+            let formattedParts = parts.enumerated().map { idx, part -> String in
+                let p = String(part)
+                if let can = canonicalWords[p.lowercased()] { return can }
+                if idx > 0 && minorWords.contains(p.lowercased()) {
+                    return p.lowercased()
+                }
+                return p.prefix(1).uppercased() + p.dropFirst().lowercased()
+            }
+            return String(trimmedLeading) + formattedParts.joined(separator: "-") + String(trimmedTrailing)
+        }
+
+        if !isFirst && minorWords.contains(lower) {
+            return String(trimmedLeading) + lower + String(trimmedTrailing)
+        }
+
+        let capitalized = core.prefix(1).uppercased() + core.dropFirst().lowercased()
+        return String(trimmedLeading) + capitalized + String(trimmedTrailing)
+    }
+}
+
+extension String {
+    public func appCapitalized(enabled: Bool) -> String {
+        AppCapitalization.format(self, enabled: enabled)
+    }
+}
+
+extension Text {
+    public init(caps text: String, enabled: Bool) {
+        self.init(AppCapitalization.format(text, enabled: enabled))
+    }
+}
+
+/// Standalone view for app-owned constant UI labels that automatically transforms
+/// based on the `isCapitalizationEnabled` environment setting (ALL CAPS vs Title Case).
+public struct AppUILabel: View {
+    @Environment(\.isCapitalizationEnabled) private var isCaps: Bool
+    public let text: String
+
+    public init(_ text: String) {
+        self.text = text
+    }
+
+    public var body: some View {
+        Text(AppCapitalization.format(text, enabled: isCaps))
     }
 }
 
@@ -52,13 +225,14 @@ public struct SemanticCardModifier: ViewModifier {
 /// Subtle badge modifier for tags, categories, counts, and status indicators.
 public struct TypographicBadgeModifier: ViewModifier {
     @Environment(\.appTheme) private var appTheme
+    @Environment(\.isCapitalizationEnabled) private var isCapitalizationEnabled
     public var isHighlighted: Bool = false
 
     // Body
     public func body(content: Content) -> some View {
         content
             .font(.system(size: 11, weight: .bold, design: .monospaced))
-            .textCase(.uppercase)
+            .textCase(isCapitalizationEnabled ? .uppercase : nil)
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
             .background(
@@ -148,6 +322,7 @@ public struct AlbumContextMenuModifier: ViewModifier {
     public var hidingArtistNamed: String? = nil
     @State private var showingPlaylistPicker: Bool = false
     @Environment(LibrarySelectionStore.self) private var librarySelection: LibrarySelectionStore?
+    @Environment(\.isCapitalizationEnabled) private var isCaps: Bool
 
     // Body
     public func body(content: Content) -> some View {
@@ -163,21 +338,21 @@ public struct AlbumContextMenuModifier: ViewModifier {
                         playerService.play(track: first, inQueue: shuffled)
                     }
                 }) {
-                    Text("SHUFFLE")
+                    Text(AppCapitalization.format("SHUFFLE", enabled: isCaps))
                 }
 
                 Button(action: {
                     HapticFeedback.notificationSuccess()
                     playerService.insertPlayNextFront(tracks: album.tracks)
                 }) {
-                    Text("PLAY NEXT")
+                    Text(AppCapitalization.format("PLAY NEXT", enabled: isCaps))
                 }
 
                 Button(action: {
                     HapticFeedback.notificationSuccess()
                     playerService.appendToQueue(tracks: album.tracks)
                 }) {
-                    Text("QUEUE")
+                    Text(AppCapitalization.format("QUEUE", enabled: isCaps))
                 }
 
                 if let onGoToArtist {
@@ -189,7 +364,7 @@ public struct AlbumContextMenuModifier: ViewModifier {
                         Button(action: {
                             if let artist = libraryStore.findArtist(name: name) { onGoToArtist(artist) }
                         }) {
-                            Text("GO TO ARTIST")
+                            Text(AppCapitalization.format("GO TO ARTIST", enabled: isCaps))
                         }
                     } else if artistNames.count > 1 {
                         Menu {
@@ -201,7 +376,7 @@ public struct AlbumContextMenuModifier: ViewModifier {
                                 }
                             }
                         } label: {
-                            Text("GO TO ARTIST")
+                            Text(AppCapitalization.format("GO TO ARTIST", enabled: isCaps))
                         }
                     }
                 }
@@ -209,7 +384,7 @@ public struct AlbumContextMenuModifier: ViewModifier {
                 Button(action: {
                     showingPlaylistPicker = true
                 }) {
-                    Text("ADD TO PLAYLIST")
+                    Text(AppCapitalization.format("ADD TO PLAYLIST", enabled: isCaps))
                 }
 
                 QuickAddToPlaylistMenu(tracks: album.tracks, libraryStore: libraryStore)
@@ -222,7 +397,7 @@ public struct AlbumContextMenuModifier: ViewModifier {
                         libraryStore.togglePinAlbum(album)
                     }
                 }) {
-                    Text(libraryStore.isAlbumPinned(album) ? "UNPIN" : "PIN")
+                    Text(AppCapitalization.format(libraryStore.isAlbumPinned(album) ? "UNPIN" : "PIN", enabled: isCaps))
                 }
 
                 if let librarySelection {
@@ -388,6 +563,7 @@ public struct PlaylistContextMenuModifier: ViewModifier {
     public let libraryStore: LibraryStore
     public let playerService: AudioPlayerService
     @State private var showingDeleteAlert: Bool = false
+    @Environment(\.isCapitalizationEnabled) private var isCaps: Bool
 
     public func body(content: Content) -> some View {
         content
@@ -398,21 +574,21 @@ public struct PlaylistContextMenuModifier: ViewModifier {
                         playerService.play(track: first, inQueue: tracks)
                     }
                 }) {
-                    Text("SHUFFLE")
+                    Text(AppCapitalization.format("SHUFFLE", enabled: isCaps))
                 }
 
                 Button(action: {
                     HapticFeedback.notificationSuccess()
                     playerService.insertPlayNextFront(tracks: libraryStore.tracks(for: playlist))
                 }) {
-                    Text("PLAY NEXT")
+                    Text(AppCapitalization.format("PLAY NEXT", enabled: isCaps))
                 }
 
                 Button(action: {
                     HapticFeedback.notificationSuccess()
                     playerService.appendToQueue(tracks: libraryStore.tracks(for: playlist))
                 }) {
-                    Text("QUEUE")
+                    Text(AppCapitalization.format("QUEUE", enabled: isCaps))
                 }
 
                 Button(action: {
@@ -421,18 +597,18 @@ public struct PlaylistContextMenuModifier: ViewModifier {
                         libraryStore.togglePinPlaylist(id: playlist.id)
                     }
                 }) {
-                    Text(playlist.isPinned ? "UNPIN" : "PIN")
+                    Text(AppCapitalization.format(playlist.isPinned ? "UNPIN" : "PIN", enabled: isCaps))
                 }
 
                 Button(role: .destructive, action: {
                     showingDeleteAlert = true
                 }) {
-                    Text("DELETE")
+                    Text(AppCapitalization.format("DELETE", enabled: isCaps))
                 }
             }
-            .alert("DELETE PLAYLIST", isPresented: $showingDeleteAlert) {
-                Button("CANCEL", role: .cancel) {}
-                Button("DELETE", role: .destructive) {
+            .alert(AppCapitalization.format("DELETE PLAYLIST", enabled: isCaps), isPresented: $showingDeleteAlert) {
+                Button(AppCapitalization.format("CANCEL", enabled: isCaps), role: .cancel) {}
+                Button(AppCapitalization.format("DELETE", enabled: isCaps), role: .destructive) {
                     libraryStore.deletePlaylist(id: playlist.id)
                 }
             } message: {

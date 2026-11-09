@@ -16,6 +16,7 @@ public struct TrackTagFinderSheetView: View {
     var libraryStore: LibraryStore
     @Environment(\.dismiss) private var dismiss
     @Environment(\.appTheme) private var appTheme
+    @Environment(\.isCapitalizationEnabled) private var isCaps: Bool
 
     // Navigation & Tab State
     @State private var selectedTab: TrackTagFinderTab = .found
@@ -137,9 +138,9 @@ public struct TrackTagFinderSheetView: View {
                 }
             }
             .background(appTheme.backgroundColor.ignoresSafeArea())
-            .navigationTitle("FIND TRACK TAGS")
+            .navigationTitle(AppCapitalization.format("FIND TRACK TAGS", enabled: isCaps))
             .navigationBarTitleDisplayMode(.inline)
-            .nativeSearchField(text: $searchText, prompt: "SEARCH TRACK, ALBUM, OR ARTIST...")
+            .nativeSearchField(text: $searchText, prompt: AppCapitalization.format("SEARCH TRACK, ALBUM, OR ARTIST...", enabled: isCaps))
             .sheet(item: $selectedTrackForCustomSearch) { track in
                 OnlineMetadataMatchSheet(track: track, libraryStore: libraryStore, initialSource: selectedSourceForCustomSearch)
                     .tint(appTheme.accentColor)
@@ -148,9 +149,9 @@ public struct TrackTagFinderSheetView: View {
             .onAppear {
                 libraryStore.indexCompleteTracksIntoVerifiedGood()
             }
-            .alert("DELETE DUPLICATES FROM DISK?", isPresented: $showingDeleteAllDuplicatesAlert) {
-                Button("CANCEL", role: .cancel) {}
-                Button("DELETE FILES", role: .destructive) {
+            .alert(AppCapitalization.format("DELETE DUPLICATES FROM DISK?", enabled: isCaps), isPresented: $showingDeleteAllDuplicatesAlert) {
+                Button(AppCapitalization.format("CANCEL", enabled: isCaps), role: .cancel) {}
+                Button(AppCapitalization.format("DELETE FILES", enabled: isCaps), role: .destructive) {
                     deleteAllSecondaryDuplicates()
                 }
             } message: {
@@ -158,12 +159,12 @@ public struct TrackTagFinderSheetView: View {
                 let count = libraryStore.totalDuplicateTracksCount
                 Text("This will permanently delete \(count) redundant duplicate audio files (\(ByteFormatting.formatFileSize(bytes: bytes))) from disk. Your primary versions will be safely preserved.")
             }
-            .alert("DELETE FILE FROM DISK?", isPresented: Binding(
+            .alert(AppCapitalization.format("DELETE FILE FROM DISK?", enabled: isCaps), isPresented: Binding(
                 get: { trackToDelete != nil },
                 set: { if !$0 { trackToDelete = nil } }
             )) {
-                Button("CANCEL", role: .cancel) {}
-                Button("DELETE", role: .destructive) {
+                Button(AppCapitalization.format("CANCEL", enabled: isCaps), role: .cancel) {}
+                Button(AppCapitalization.format("DELETE", enabled: isCaps), role: .destructive) {
                     if let track = trackToDelete {
                         deleteSingleTrack(track)
                     }
@@ -173,8 +174,8 @@ public struct TrackTagFinderSheetView: View {
                     Text("Are you sure you want to permanently delete \"\(track.title)\" from disk? This cannot be undone.")
                 }
             }
-            .alert("ICLOUD STORAGE DETECTED", isPresented: $showingCloudDiskWriteAlert) {
-                Button("OK", role: .cancel) {}
+            .alert(AppCapitalization.format("ICLOUD STORAGE DETECTED", enabled: isCaps), isPresented: $showingCloudDiskWriteAlert) {
+                Button(AppCapitalization.format("OK", enabled: isCaps), role: .cancel) {}
             } message: {
                 Text(cloudDiskWriteAlertMessage)
             }
@@ -189,13 +190,13 @@ public struct TrackTagFinderSheetView: View {
                 .font(.system(size: 12, weight: .bold))
                 .foregroundStyle(.secondary)
 
-            TextField("SEARCH TRACK, ALBUM, OR ARTIST...", text: $searchText)
+            TextField(AppCapitalization.format("SEARCH TRACK, ALBUM, OR ARTIST...", enabled: isCaps), text: $searchText)
                 .font(.system(size: 12, weight: .medium, design: .monospaced))
                 .textFieldStyle(.plain)
                 .submitLabel(.search)
 
             if !searchText.isEmpty {
-                Button("CLEAR") {
+                Button(AppCapitalization.format("CLEAR", enabled: isCaps)) {
                     searchText = ""
                 }
                 .font(.system(size: 10, weight: .bold, design: .monospaced))
@@ -224,7 +225,7 @@ public struct TrackTagFinderSheetView: View {
                         selectedTab = tab
                     }
                 }) {
-                    Text(tab.rawValue)
+                    Text(AppCapitalization.format(tab.rawValue, enabled: isCaps))
                         .font(.system(size: 13, weight: .bold, design: .monospaced))
                         .foregroundStyle(selectedTab == tab ? Color.white : Color.secondary)
                 }
@@ -243,13 +244,13 @@ public struct TrackTagFinderSheetView: View {
             Group {
                 switch selectedTab {
                 case .lost:
-                    Text("\(libraryStore.unmatchedTracksCount) LOST")
+                    Text("\(libraryStore.unmatchedTracksCount) \(AppCapitalization.format("LOST", enabled: isCaps))")
                 case .found:
-                    Text("\(libraryStore.visibleEnrichmentDiffs.count) FOUND")
+                    Text("\(libraryStore.visibleEnrichmentDiffs.count) \(AppCapitalization.format("FOUND", enabled: isCaps))")
                 case .good:
-                    Text("\(libraryStore.visibleVerifiedGoodCount) GOOD")
+                    Text("\(libraryStore.visibleVerifiedGoodCount) \(AppCapitalization.format("GOOD", enabled: isCaps))")
                 case .duplicates:
-                    Text("FOUND \(libraryStore.totalDuplicateTracksCount) DUPLICATES")
+                    Text("\(AppCapitalization.format("FOUND", enabled: isCaps)) \(libraryStore.totalDuplicateTracksCount) \(AppCapitalization.format("DUPLICATES", enabled: isCaps))")
                 }
             }
             .font(.system(size: 14, weight: .bold, design: .monospaced))
@@ -292,18 +293,18 @@ public struct TrackTagFinderSheetView: View {
                 )
 
             case .good:
-                Text("LOCAL AUDIO TAGS MATCH OFFICIAL ONLINE RECORDS. YOU CAN REVIEW MATCHES, CUSTOM SEARCH, OR RESCAN.")
+                Text(AppCapitalization.format("LOCAL AUDIO TAGS MATCH OFFICIAL ONLINE RECORDS. YOU CAN REVIEW MATCHES, CUSTOM SEARCH, OR RESCAN.", enabled: isCaps))
                     .font(.system(size: 11, design: .monospaced))
                     .foregroundStyle(.secondary)
 
             case .lost:
-                Text("TRACKS WITHOUT AUTOMATIC EXACT ONLINE MATCHES. YOU CAN RUN TARGETED SEARCHES OR RECHECK INDIVIDUALLY.")
+                Text(AppCapitalization.format("TRACKS WITHOUT AUTOMATIC EXACT ONLINE MATCHES. YOU CAN RUN TARGETED SEARCHES OR RECHECK INDIVIDUALLY.", enabled: isCaps))
                     .font(.system(size: 11, design: .monospaced))
                     .foregroundStyle(.secondary)
 
             case .duplicates:
                 HStack {
-                    Text("\(libraryStore.visibleDuplicateGroups.count) CLUSTERS • \(ByteFormatting.formatFileSize(bytes: libraryStore.totalDuplicateSavingsBytes)) SAVINGS")
+                    Text("\(libraryStore.visibleDuplicateGroups.count) \(AppCapitalization.format("CLUSTERS", enabled: isCaps)) • \(ByteFormatting.formatFileSize(bytes: libraryStore.totalDuplicateSavingsBytes)) \(AppCapitalization.format("SAVINGS", enabled: isCaps))")
                         .font(.system(size: 11, weight: .bold, design: .monospaced))
                         .foregroundStyle(.secondary)
                     Spacer()
@@ -325,7 +326,7 @@ public struct TrackTagFinderSheetView: View {
                 }) {
                     let current = enrichProcessedCount > 0 ? enrichProcessedCount : libraryStore.enrichProcessedCount
                     let total = enrichTotalCount > 0 ? enrichTotalCount : (libraryStore.enrichTotalCount > 0 ? libraryStore.enrichTotalCount : libraryStore.visibleEnrichmentDiffs.count)
-                    Text(isBusy ? "\(current)/\(total)" : "ENRICH ALL \(libraryStore.visibleEnrichmentDiffs.count) TRACKS")
+                    Text(isBusy ? "\(current)/\(total)" : "\(AppCapitalization.format("ENRICH ALL", enabled: isCaps)) \(libraryStore.visibleEnrichmentDiffs.count) \(AppCapitalization.format("TRACKS", enabled: isCaps))")
                         .font(.system(size: 13, weight: .bold, design: .monospaced))
                         .foregroundStyle(Color.black)
                         .frame(maxWidth: .infinity)
@@ -344,7 +345,7 @@ public struct TrackTagFinderSheetView: View {
                 // Interactive "SCAN ALL TRACKS ONLINE" Button with Progress, Pause/Play, and Cancel
                 scanAllTracksButton
 
-                Text("LAP WILL COMPARE YOUR LOCAL TRACK METADATA INCLUDING TRACK TITLE, ARTIST, AND ALBUM TO FIND THE MOST ACCURATE MATCH ACROSS APPLE MUSIC, DEEZER, AND MUSICBRAINZ. RESULTS WILL NOT BE PERFECT. I HIGHLY RECOMMEND YOU DOUBLE CHECK BEFORE ENRICHING. FOR BETTER RESULTS, SEARCH ALBUMS OR TRACKS INDIVIDUALLY.")
+                Text(AppCapitalization.format("LAP WILL COMPARE YOUR LOCAL TRACK METADATA INCLUDING TRACK TITLE, ARTIST, AND ALBUM TO FIND THE MOST ACCURATE MATCH ACROSS APPLE MUSIC, DEEZER, AND MUSICBRAINZ. RESULTS WILL NOT BE PERFECT. I HIGHLY RECOMMEND YOU DOUBLE CHECK BEFORE ENRICHING. FOR BETTER RESULTS, SEARCH ALBUMS OR TRACKS INDIVIDUALLY.", enabled: isCaps))
                     .font(.system(size: 10, weight: .medium, design: .monospaced))
                     .foregroundStyle(Color.secondary)
                     .lineSpacing(3)
@@ -372,9 +373,9 @@ public struct TrackTagFinderSheetView: View {
                         ProgressView()
                             .tint(Color.black)
                             .scaleEffect(0.85)
-                        Text("SCANNING LIBRARY FOR DUPLICATES...")
+                        Text(AppCapitalization.format("SCANNING LIBRARY FOR DUPLICATES...", enabled: isCaps))
                     } else {
-                        Text("SCAN LIBRARY FOR DUPLICATES")
+                        Text(AppCapitalization.format("SCAN LIBRARY FOR DUPLICATES", enabled: isCaps))
                     }
                 }
                 .font(.system(size: 13, weight: .bold, design: .monospaced))
@@ -385,7 +386,7 @@ public struct TrackTagFinderSheetView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
             }
             .buttonStyle(.plain)
-            .disabled(isScanningDuplicates || libraryStore.tracks.isEmpty)
+            .disabled(isScanningDuplicates || !libraryStore.tracks.contains(where: { !$0.isJellyfinItem && $0.metadataSource != .server && !libraryStore.isTrackExcludedFromTagEnrichment($0) }))
 
             // Side-by-Side Action Buttons: "AUTO-RESOLVE" and "DELETE DUPLICATES"
             HStack(spacing: 10) {
@@ -394,7 +395,7 @@ public struct TrackTagFinderSheetView: View {
                     HapticFeedback.notificationSuccess()
                     libraryStore.autoResolveAllDuplicates()
                 }) {
-                    Text("AUTO-RESOLVE")
+                    Text(AppCapitalization.format("AUTO-RESOLVE", enabled: isCaps))
                         .font(.system(size: 12, weight: .bold, design: .monospaced))
                         .foregroundStyle(Color.white)
                         .frame(maxWidth: .infinity)
@@ -415,9 +416,9 @@ public struct TrackTagFinderSheetView: View {
                             ProgressView()
                                 .tint(Color.red)
                                 .scaleEffect(0.8)
-                            Text("DELETING...")
+                            Text(AppCapitalization.format("DELETING...", enabled: isCaps))
                         } else {
-                            Text("DELETE DUPLICATES")
+                            Text(AppCapitalization.format("DELETE DUPLICATES", enabled: isCaps))
                         }
                     }
                     .font(.system(size: 12, weight: .bold, design: .monospaced))
@@ -444,7 +445,7 @@ public struct TrackTagFinderSheetView: View {
                     HapticFeedback.notificationSuccess()
                     libraryStore.rescanAllMetadata()
                 }) {
-                    Text("SCAN ALL TRACKS ONLINE")
+                    Text(AppCapitalization.format("SCAN ALL TRACKS ONLINE", enabled: isCaps))
                         .font(.system(size: 13, weight: .bold, design: .monospaced))
                         .foregroundStyle(Color.black)
                         .frame(maxWidth: .infinity)
@@ -472,7 +473,7 @@ public struct TrackTagFinderSheetView: View {
                                 libraryStore.pauseBackgroundMetadataScan()
                             }
                         }) {
-                            Text(libraryStore.isBackgroundCheckingMetadataPaused ? "PLAY" : "PAUSE")
+                            Text(AppCapitalization.format(libraryStore.isBackgroundCheckingMetadataPaused ? "PLAY" : "PAUSE", enabled: isCaps))
                                 .font(.system(size: 11, weight: .bold, design: .monospaced))
                                 .foregroundStyle(libraryStore.isBackgroundCheckingMetadataPaused ? libraryStore.settings.appTheme.accentColor : Color.gray)
                                 .padding(.horizontal, 6)
@@ -495,7 +496,7 @@ public struct TrackTagFinderSheetView: View {
                             HapticFeedback.notificationWarning()
                             libraryStore.cancelBackgroundMetadataScan()
                         }) {
-                            Text("CANCEL")
+                            Text(AppCapitalization.format("CANCEL", enabled: isCaps))
                                 .font(.system(size: 13, weight: .heavy, design: .monospaced))
                                 .foregroundStyle(Color.red)
                                 .frame(maxWidth: .infinity)
@@ -533,7 +534,7 @@ public struct TrackTagFinderSheetView: View {
         LazyVStack(spacing: 16) {
             if filteredUnmatchedTracks.isEmpty {
                 VStack(spacing: 8) {
-                    Text(searchText.isEmpty ? "NO UNMATCHED TRACKS" : "NO MATCHING TRACKS FOUND")
+                    Text(AppCapitalization.format(searchText.isEmpty ? "NO UNMATCHED TRACKS" : "NO MATCHING TRACKS FOUND", enabled: isCaps))
                         .font(.system(size: 13, weight: .bold, design: .monospaced))
                         .foregroundStyle(Color.primary)
                     Text(searchText.isEmpty ? "All tracks in your library have either been matched or verified." : "No unmatched track matches '\(searchText)'.")
@@ -570,7 +571,7 @@ public struct TrackTagFinderSheetView: View {
         LazyVStack(spacing: 16) {
             if filteredEnrichmentDiffs.isEmpty {
                 VStack(spacing: 8) {
-                    Text(searchText.isEmpty ? "NO PENDING ENRICHMENTS" : "NO MATCHING TRACKS FOUND")
+                    Text(AppCapitalization.format(searchText.isEmpty ? "NO PENDING ENRICHMENTS" : "NO MATCHING TRACKS FOUND", enabled: isCaps))
                         .font(.system(size: 13, weight: .bold, design: .monospaced))
                         .foregroundStyle(Color.primary)
                     Text(searchText.isEmpty ? "Scan all tracks online to search for tag improvements and high-res artwork." : "No pending track matches '\(searchText)'.")
@@ -615,7 +616,7 @@ public struct TrackTagFinderSheetView: View {
         LazyVStack(spacing: 16) {
             if filteredVerifiedGoodDiffs.isEmpty {
                 VStack(spacing: 8) {
-                    Text(searchText.isEmpty ? "NO VERIFIED TRACKS" : "NO MATCHING TRACKS FOUND")
+                    Text(AppCapitalization.format(searchText.isEmpty ? "NO VERIFIED TRACKS" : "NO MATCHING TRACKS FOUND", enabled: isCaps))
                         .font(.system(size: 13, weight: .bold, design: .monospaced))
                         .foregroundStyle(Color.primary)
                     Text(searchText.isEmpty ? "Tracks that already match online records will appear here." : "No verified track matches '\(searchText)'.")
@@ -654,7 +655,7 @@ public struct TrackTagFinderSheetView: View {
         LazyVStack(spacing: 16) {
             if filteredDuplicateGroups.isEmpty {
                 VStack(spacing: 8) {
-                    Text(searchText.isEmpty ? "NO DUPLICATE TRACKS FOUND" : "NO MATCHING DUPLICATES")
+                    Text(AppCapitalization.format(searchText.isEmpty ? "NO DUPLICATE TRACKS FOUND" : "NO MATCHING DUPLICATES", enabled: isCaps))
                         .font(.system(size: 13, weight: .bold, design: .monospaced))
                         .foregroundStyle(Color.primary)
                     Text(searchText.isEmpty ? "Your library has no detected duplicate tracks." : "No duplicate cluster matches '\(searchText)'.")

@@ -12,6 +12,7 @@ public struct PinnedSection: View {
     public let onSelectArtist: ((Artist) -> Void)?
 
     @State private var draggedItem: PinnedItem? = nil
+    @Environment(\.isCapitalizationEnabled) private var isCaps: Bool
 
     // Columns
     private let columns = [
@@ -38,7 +39,7 @@ public struct PinnedSection: View {
     public var body: some View {
         if !libraryStore.pinnedItems.isEmpty {
             VStack(alignment: .leading, spacing: 12) {
-                Text("PINS")
+                Text(AppCapitalization.format("PINS", enabled: isCaps))
                     .font(.system(size: 13, weight: .bold, design: .monospaced))
                     .foregroundStyle(.secondary)
 

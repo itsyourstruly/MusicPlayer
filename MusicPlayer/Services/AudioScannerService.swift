@@ -18,6 +18,21 @@ public struct AudioFileStat: Sendable {
     }
 }
 
+/// Explicit scan result containing parsed tracks and discovery completeness information.
+public struct AudioScanResult: Sendable {
+    public let tracks: [Track]
+    public let isComplete: Bool
+    public let reachedCap: Bool
+    public let errorCount: Int
+
+    public init(tracks: [Track], isComplete: Bool, reachedCap: Bool = false, errorCount: Int = 0) {
+        self.tracks = tracks
+        self.isComplete = isComplete
+        self.reachedCap = reachedCap
+        self.errorCount = errorCount
+    }
+}
+
 /// Thread-safe artwork key deduplicator to prevent worker threads from queueing duplicate writes
 public final class ArtworkKeyDeduplicator: @unchecked Sendable {
     private let lock = NSLock()
@@ -140,8 +155,9 @@ public struct AudioScannerService: Sendable {
         folderID: UUID? = nil,
         existingTracks: [Track] = [],
         scanMethod: LibraryScanMethod = .id3Tags,
+        forceFullScan: Bool = false,
         onProgress: (@Sendable (Int, Int, String) -> Void)? = nil
-    ) async -> [Track] {
+    ) async -> AudioScanResult {
         AppLogger.scanner.info("Starting high-speed audio scan at: \(folderURL.path) (with \(existingTracks.count) cached tracks)")
 
         // Ensure security-scoped root folder access is active
@@ -165,6 +181,9 @@ public struct AudioScannerService: Sendable {
         var seenAudioFilePaths = Set<String>()
         var visitedDirectories = Set<String>()
         var isDir: ObjCBool = false
+        var reachedCap = false
+        var errorCount = 0
+        var isComplete = true
 
         let rootPath = folderURL.standardizedFileURL.path
         visitedDirectories.insert(rootPath)
@@ -192,11 +211,19 @@ public struct AudioScannerService: Sendable {
                         .fileSizeKey, .contentModificationDateKey, .creationDateKey,
                         .isUbiquitousItemKey, .ubiquitousItemDownloadingStatusKey, .ubiquitousItemIsDownloadingKey
                     ],
-                    options: [.skipsPackageDescendants]
+                    options: [.skipsPackageDescendants],
+                    errorHandler: { url, error in
+                        errorCount += 1
+                        isComplete = false
+                        AppLogger.scanner.warning("Enumerator error at \(url.path): \(error.localizedDescription)")
+                        return true
+                    }
                 ) {
                     while let fileURL = enumerator.nextObject() as? URL {
                         // Safety ceiling to prevent runaway allocations on corrupted filesystems
                         if audioFiles.count >= 200_000 {
+                            reachedCap = true
+                            isComplete = false
                             AppLogger.scanner.warning("Reached safety limit of 200,000 files during scanning.")
                             break
                         }
@@ -280,32 +307,35 @@ public struct AudioScannerService: Sendable {
         var filesNeedingParsing: [AudioFileStat] = []
         filesNeedingParsing.reserveCapacity(min(totalFiles, 50_000))
 
+        let expectedSource: MetadataSource = (scanMethod == .folderHierarchy) ? .folderStructure : .embeddedTags
+
         for fileStat in audioFiles {
             let stdPath = fileStat.url.standardizedFileURL.path
             let cachedTrack = existingTrackMap[stdPath] ?? existingTrackMap[stdPath.lowercased()] ?? existingTrackMap[fileStat.url.path]
 
-            if !CloudFileAvailability.isLocal(url: fileStat.url) {
-                // If cloud-only file is already in cache with real tags, keep it!
-                if let cached = cachedTrack, cached.tagSnapshot != nil || cached.metadataSource == .embeddedTags {
-                    scannedTracks.append(cached)
-                    continue
-                }
-            } else if let cached = cachedTrack, !(cached.metadataSource == .folderStructure && cached.tagSnapshot != nil) {
-                // (Legacy folder-scanned tracks stored folder values as their tag snapshot; re-parse them once.)
-                let cachedSize = cached.fileInfo?.fileSizeBytes ?? 0
-                let currentSize = fileStat.size
+            if !forceFullScan {
+                if !CloudFileAvailability.isLocal(url: fileStat.url) {
+                    // If cloud-only file is already in cache with real tags, keep it!
+                    if let cached = cachedTrack, cached.tagSnapshot != nil || cached.metadataSource == .embeddedTags {
+                        scannedTracks.append(cached)
+                        continue
+                    }
+                } else if let cached = cachedTrack, cached.metadataSource == expectedSource {
+                    let cachedSize = cached.fileInfo?.fileSizeBytes ?? 0
+                    let currentSize = fileStat.size
 
-                if cachedSize > 0 && currentSize == cachedSize {
-                    // Check modification dates if both exist
-                    if let cachedMod = cached.fileInfo?.modificationDate, let curMod = fileStat.modificationDate {
-                        if abs(cachedMod.timeIntervalSince(curMod)) < 2.0 {
+                    if cachedSize > 0 && currentSize == cachedSize {
+                        // Check modification dates if both exist
+                        if let cachedMod = cached.fileInfo?.modificationDate, let curMod = fileStat.modificationDate {
+                            if abs(cachedMod.timeIntervalSince(curMod)) < 2.0 {
+                                scannedTracks.append(cached)
+                                continue
+                            }
+                        } else {
+                            // File size matches and is non-zero
                             scannedTracks.append(cached)
                             continue
                         }
-                    } else {
-                        // File size matches and is non-zero
-                        scannedTracks.append(cached)
-                        continue
                     }
                 }
             }
@@ -381,7 +411,12 @@ public struct AudioScannerService: Sendable {
         }
 
         AppLogger.scanner.info("Completed scan. Total indexed: \(scannedTracks.count) tracks (\(reusedCount) reused, \(toParseCount) parsed).")
-        return scannedTracks
+        return AudioScanResult(
+            tracks: scannedTracks,
+            isComplete: isComplete,
+            reachedCap: reachedCap,
+            errorCount: errorCount
+        )
     }
 
     /// Parses an audio file with pure-Swift binary extraction and lightweight fallback.
@@ -478,22 +513,51 @@ public struct AudioScannerService: Sendable {
                 let keyLower = (item.keyString ?? (item.key as? String) ?? "").lowercased()
                 let idLower = item.identifier?.rawValue.lowercased() ?? ""
 
-                if fallback.title == nil && (commonKey == .commonKeyTitle || keyLower.contains("titl") || keyLower.contains("name") || idLower.contains("titl") || idLower.contains("name")) {
-                    fallback.title = await extractString(from: item)
-                }
-                if fallback.artist == nil && (commonKey == .commonKeyArtist || commonKey == .commonKeyAuthor || keyLower.contains("art") || keyLower.contains("author") || keyLower.contains("auth") || idLower.contains("art") || idLower.contains("author") || idLower.contains("auth")) {
-                    let str = await extractString(from: item)
-                    if fallback.author == nil && (commonKey == .commonKeyAuthor || keyLower.contains("author") || keyLower.contains("auth") || idLower.contains("author") || idLower.contains("auth")) {
-                        fallback.author = str
+                // 1. Title
+                if fallback.title == nil {
+                    let isTitleKey = commonKey == .commonKeyTitle
+                        || keyLower == "tit2" || keyLower == "tt2" || keyLower == "©nam" || keyLower == "title"
+                        || idLower.contains("tit2") || idLower.contains("title")
+                    if isTitleKey {
+                        fallback.title = await extractString(from: item)
                     }
-                    fallback.artist = str
                 }
-                if fallback.album == nil && (commonKey == .commonKeyAlbumName || keyLower.contains("alb") || idLower.contains("alb") || keyLower == "talb" || keyLower == "©alb") {
-                    fallback.album = await extractString(from: item)
+
+                // 2. Artist (Lead Performer)
+                let isArtistKey = commonKey == .commonKeyArtist
+                    || keyLower == "tpe1" || keyLower == "tp1" || keyLower == "©art" || keyLower == "artist"
+                    || idLower.contains("tpe1") || idLower.contains("artist")
+                if fallback.artist == nil && isArtistKey {
+                    fallback.artist = await extractString(from: item)
                 }
-                if fallback.albumArtist == nil && (keyLower.contains("aart") || keyLower.contains("albumartist") || keyLower.contains("album_artist") || keyLower.contains("band") || idLower.contains("aart") || idLower.contains("albumartist") || idLower.contains("band") || commonKey?.rawValue.lowercased().contains("albumartist") == true) {
+
+                // 3. Author (fallback only if artist is nil)
+                let isAuthorKey = commonKey == .commonKeyAuthor
+                    || keyLower == "iaut" || keyLower == "auth" || keyLower == "author" || keyLower == "©aut"
+                    || idLower.contains("author")
+                if fallback.author == nil && isAuthorKey {
+                    fallback.author = await extractString(from: item)
+                }
+
+                // 4. Album Artist
+                let isAlbumArtistKey = keyLower == "tpe2" || keyLower == "tp2" || keyLower == "aart"
+                    || keyLower == "albumartist" || keyLower == "album_artist" || keyLower == "band"
+                    || idLower.contains("albumartist") || idLower.contains("aart")
+                if fallback.albumArtist == nil && isAlbumArtistKey {
                     fallback.albumArtist = await extractString(from: item)
                 }
+
+                // 5. Album Name (never match albumartist)
+                if fallback.album == nil && !isAlbumArtistKey {
+                    let isAlbumKey = commonKey == .commonKeyAlbumName
+                        || keyLower == "talb" || keyLower == "tal" || keyLower == "©alb" || keyLower == "album"
+                        || idLower.contains("talb") || idLower.contains("album")
+                    if isAlbumKey {
+                        fallback.album = await extractString(from: item)
+                    }
+                }
+
+                // 6. Year
                 if fallback.year == nil {
                     if let str = await extractString(from: item) {
                         let digits = str.filter { $0.isNumber }
@@ -502,9 +566,16 @@ public struct AudioScannerService: Sendable {
                         }
                     }
                 }
-                if CloudFileAvailability.isLocal(url: url) && fallback.artworkData == nil && (commonKey == .commonKeyArtwork || keyLower.contains("art") || keyLower.contains("covr") || idLower.contains("art") || idLower.contains("covr") || keyLower.contains("apic")) {
+
+                // 7. Artwork (never match "art" / artist)
+                let isArtworkKey = commonKey == .commonKeyArtwork
+                    || keyLower == "covr" || keyLower == "apic" || keyLower == "artwork" || keyLower == "cover"
+                    || idLower.contains("artwork") || idLower.contains("covr") || idLower.contains("apic")
+                if CloudFileAvailability.isLocal(url: url) && fallback.artworkData == nil && isArtworkKey {
                     fallback.artworkData = await extractArtwork(from: item)
                 }
+
+                // 8. Lyrics
                 if fallback.lyrics == nil {
                     if keyLower.contains("lyr") || keyLower.contains("uslt") || keyLower.contains("sylt") || idLower.contains("lyr") {
                         fallback.lyrics = await extractString(from: item)
@@ -512,6 +583,11 @@ public struct AudioScannerService: Sendable {
                         fallback.lyrics = str
                     }
                 }
+            }
+
+            // Fallback artist to author only if artist is nil (never use composer as artist)
+            if fallback.artist == nil {
+                fallback.artist = fallback.author
             }
 
             if var existing = parsedMeta {
@@ -563,35 +639,31 @@ public struct AudioScannerService: Sendable {
             }
         }
         let fileNameWithoutExtension = cleanFileName
-        let fnMetadata = parseFilenameMetadata(filename: fileNameWithoutExtension)
 
-        // Resolve Final Title: embedded tag -> filename parsed title -> raw filename
-        let finalTitle: String = {
-            if let t = meta.title?.trimmingCharacters(in: .whitespacesAndNewlines), !t.isEmpty, !isGenericTitle(t) {
-                return t
-            }
-            if let t = fnMetadata.title, !t.isEmpty {
-                return t
-            }
-            return fileNameWithoutExtension
-        }()
-
-        // Resolve Final Artist: embedded tag (artist/author/albumArtist) -> filename parsed artist/albumArtist -> Unknown Artist
-        let finalArtist: String = {
+        let rawTaggedArtist: String? = {
             if let a = meta.artist?.trimmingCharacters(in: .whitespacesAndNewlines), !a.isEmpty, !isGenericArtist(a) {
                 return a
             }
             if let a = meta.author?.trimmingCharacters(in: .whitespacesAndNewlines), !a.isEmpty, !isGenericArtist(a) {
                 return a
             }
-            if let a = meta.albumArtist?.trimmingCharacters(in: .whitespacesAndNewlines), !a.isEmpty, !isGenericArtist(a) {
-                return a
-            }
-            if let a = fnMetadata.artist, !a.isEmpty {
-                return a
-            }
-            return "Unknown Artist"
+            return nil
         }()
+
+        let extractedMeta = TrackMetadataExtractor.extract(
+            rawTitle: meta.title,
+            existingArtist: rawTaggedArtist,
+            existingAlbum: meta.album,
+            existingAlbumArtist: meta.albumArtist,
+            existingTrackNumber: meta.trackNumber,
+            existingDiscNumber: meta.discNumber,
+            existingYear: meta.year,
+            fallbackFilename: fileNameWithoutExtension
+        )
+
+        // Resolve Final Title and Artist through intelligent extractor
+        let finalTitle = extractedMeta.cleanTitle
+        let finalArtist = extractedMeta.artist ?? "Unknown Artist"
 
         // Resolve Final Album: strictly from embedded metadata attached to the file
         let finalAlbum: String = {
@@ -601,7 +673,9 @@ public struct AudioScannerService: Sendable {
             return "Unknown Album"
         }()
 
-        let finalTrackNumber = meta.trackNumber ?? fnMetadata.trackNumber
+        let finalTrackNumber = extractedMeta.trackNumber
+        let finalDiscNumber = extractedMeta.discNumber
+        let finalYear = extractedMeta.year
 
         // Attach embedded artwork or folder artwork and cache raw bytes deduplicated by album
         let isLocalAudio = CloudFileAvailability.isLocal(url: url)
@@ -653,9 +727,9 @@ public struct AudioScannerService: Sendable {
             artist: finalArtist,
             album: finalAlbum,
             albumArtist: meta.albumArtist,
-            year: meta.year,
+            year: finalYear,
             trackNumber: finalTrackNumber,
-            discNumber: meta.discNumber
+            discNumber: finalDiscNumber
         )
 
         return Track(
@@ -665,10 +739,10 @@ public struct AudioScannerService: Sendable {
             album: finalAlbum,
             albumArtist: meta.albumArtist,
             genre: meta.genre,
-            year: meta.year,
+            year: finalYear,
             trackNumber: finalTrackNumber,
             totalTracks: meta.totalTracks,
-            discNumber: meta.discNumber,
+            discNumber: finalDiscNumber,
             duration: meta.duration,
             url: url,
             artworkKey: artworkKey,
@@ -740,51 +814,8 @@ public struct AudioScannerService: Sendable {
 
     /// Parses track number, artist, and title from standard file name patterns.
     private func parseFilenameMetadata(filename: String) -> (trackNumber: Int?, artist: String?, title: String?) {
-        // Clean
-        var clean = filename.trimmingCharacters(in: .whitespacesAndNewlines)
-        // Track number
-        var trackNumber: Int?
-        // Primary artist name
-        var artist: String?
-        // Display title
-        var title: String?
-
-        // Check leading digits (e.g. "01 - ", "01. ", "01 ", "1-01 ")
-        let digitsPattern = #"^(\d{1,3})[\s\-\.\_]+"#
-        if let regex = try? NSRegularExpression(pattern: digitsPattern),
-           // Match
-           let match = regex.firstMatch(in: clean, options: [], range: NSRange(location: 0, length: clean.utf16.count)) {
-            if let numRange = Range(match.range(at: 1), in: clean), let num = Int(clean[numRange]), num > 0 {
-                trackNumber = num
-                if let fullRange = Range(match.range, in: clean) {
-                    clean = String(clean[fullRange.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
-                }
-            }
-        }
-
-        // Split on standard delimiters (" - ", " — ", " – ")
-        let delimiters = [" - ", " — ", " – "]
-        for delim in delimiters {
-            if clean.contains(delim) {
-                // Parts
-                let parts = clean.components(separatedBy: delim).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
-                if parts.count == 2 {
-                    artist = parts[0]
-                    title = parts[1]
-                    return (trackNumber, artist, title)
-                } else if parts.count >= 3 {
-                    artist = parts[0]
-                    title = parts[1...].joined(separator: " - ")
-                    return (trackNumber, artist, title)
-                }
-            }
-        }
-
-        if !clean.isEmpty {
-            title = clean
-        }
-
-        return (trackNumber, artist, title)
+        let extracted = TrackMetadataExtractor.extract(rawTitle: filename)
+        return (extracted.trackNumber, extracted.artist, extracted.cleanTitle)
     }
 
     // Is generic title

@@ -119,6 +119,7 @@ public struct ContentView: View {
         )
         .tint(libraryStore.settings.appTheme.accentColor)
         .environment(\.appTheme, libraryStore.settings.appTheme)
+        .environment(\.isCapitalizationEnabled, libraryStore.settings.isCapitalizationEnabled)
         .environment(libraryStore)
         // Async lifecycle task
         .task {
@@ -217,12 +218,14 @@ public struct ContentView: View {
         }
         .tint(libraryStore.settings.appTheme.accentColor)
         .environment(\.appTheme, libraryStore.settings.appTheme)
+        .environment(\.isCapitalizationEnabled, libraryStore.settings.isCapitalizationEnabled)
         .environment(libraryStore)
         // Modal presentation sheet
         .sheet(isPresented: $showingSettings) {
             SettingsView(libraryStore: libraryStore, playerService: playerService)
                 .tint(libraryStore.settings.appTheme.accentColor)
                 .environment(\.appTheme, libraryStore.settings.appTheme)
+                .environment(\.isCapitalizationEnabled, libraryStore.settings.isCapitalizationEnabled)
         }
         // Async lifecycle task
         .task {

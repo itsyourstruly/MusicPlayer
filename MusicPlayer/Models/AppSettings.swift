@@ -457,6 +457,39 @@ public struct AppSettings: Codable, Sendable {
     /// Album ids exempt from HIDE DUPLICATES after RETURN from an automatic HIDDEN row.
     public var hideServerDuplicateExemptAlbumIDs: Set<String>
 
+    /// Feature A: Capitalization toggle (default ON = ALL CAPS, OFF = Title Case UI labels)
+    public var isCapitalizationEnabled: Bool
+    /// Feature B: Local custom artist separator literals (e.g. "//")
+    public var customArtistSeparators: [String]
+    /// Feature C: Independent Library column count preferences (nil = adaptive 155pt, 2...4 = fixed count)
+    public var artistsGridColumnCount: Int?
+    public var albumsGridColumnCount: Int?
+    public var playlistsGridColumnCount: Int?
+    /// Feature D: Local metadata extraction revision version (default 1, bump to 2 for improved extraction)
+    public var localMetadataExtractionVersion: Int
+
+    public func gridColumnCount(for category: LibraryCategory) -> Int? {
+        switch category {
+        case .artists: return artistsGridColumnCount
+        case .albums: return albumsGridColumnCount
+        case .playlists: return playlistsGridColumnCount
+        default: return nil
+        }
+    }
+
+    public mutating func setGridColumnCount(_ count: Int?, for category: LibraryCategory) {
+        let validated: Int? = {
+            guard let count, (2...4).contains(count) else { return nil }
+            return count
+        }()
+        switch category {
+        case .artists: artistsGridColumnCount = validated
+        case .albums: albumsGridColumnCount = validated
+        case .playlists: playlistsGridColumnCount = validated
+        default: break
+        }
+    }
+
     /// Backwards compatibility property
     public var accentTheme: AppTheme {
         get { appTheme }
@@ -521,7 +554,13 @@ public struct AppSettings: Codable, Sendable {
         dismissedAlbumMergeKeys: Set<String> = [],
         albumMergeMode: AlbumMergeMode = .manually,
         hideServerAlbumDuplicates: Bool = false,
-        hideServerDuplicateExemptAlbumIDs: Set<String> = []
+        hideServerDuplicateExemptAlbumIDs: Set<String> = [],
+        isCapitalizationEnabled: Bool = true,
+        customArtistSeparators: [String] = [],
+        artistsGridColumnCount: Int? = nil,
+        albumsGridColumnCount: Int? = nil,
+        playlistsGridColumnCount: Int? = nil,
+        localMetadataExtractionVersion: Int = 1
     ) {
         self.appTheme = appTheme
         self.defaultLibraryCategory = defaultLibraryCategory
@@ -580,6 +619,12 @@ public struct AppSettings: Codable, Sendable {
         self.albumMergeMode = albumMergeMode
         self.hideServerAlbumDuplicates = hideServerAlbumDuplicates
         self.hideServerDuplicateExemptAlbumIDs = hideServerDuplicateExemptAlbumIDs
+        self.isCapitalizationEnabled = isCapitalizationEnabled
+        self.customArtistSeparators = customArtistSeparators
+        self.artistsGridColumnCount = artistsGridColumnCount.flatMap { (2...4).contains($0) ? $0 : nil }
+        self.albumsGridColumnCount = albumsGridColumnCount.flatMap { (2...4).contains($0) ? $0 : nil }
+        self.playlistsGridColumnCount = playlistsGridColumnCount.flatMap { (2...4).contains($0) ? $0 : nil }
+        self.localMetadataExtractionVersion = localMetadataExtractionVersion
     }
 
     // MARK: - Custom Codable to seamlessly decode older settings JSON
@@ -674,6 +719,12 @@ public struct AppSettings: Codable, Sendable {
         case albumMergeMode
         case hideServerAlbumDuplicates
         case hideServerDuplicateExemptAlbumIDs
+        case isCapitalizationEnabled
+        case customArtistSeparators
+        case artistsGridColumnCount
+        case albumsGridColumnCount
+        case playlistsGridColumnCount
+        case localMetadataExtractionVersion
     }
 
     // Initialize with configured properties
@@ -770,6 +821,24 @@ public struct AppSettings: Codable, Sendable {
         self.albumMergeMode = (try? container.decodeIfPresent(AlbumMergeMode.self, forKey: .albumMergeMode)) ?? .manually
         self.hideServerAlbumDuplicates = (try? container.decodeIfPresent(Bool.self, forKey: .hideServerAlbumDuplicates)) ?? false
         self.hideServerDuplicateExemptAlbumIDs = (try? container.decodeIfPresent(Set<String>.self, forKey: .hideServerDuplicateExemptAlbumIDs)) ?? []
+        self.isCapitalizationEnabled = (try? container.decodeIfPresent(Bool.self, forKey: .isCapitalizationEnabled)) ?? true
+        self.customArtistSeparators = (try? container.decodeIfPresent([String].self, forKey: .customArtistSeparators)) ?? []
+        if let count = try? container.decodeIfPresent(Int.self, forKey: .artistsGridColumnCount), (2...4).contains(count) {
+            self.artistsGridColumnCount = count
+        } else {
+            self.artistsGridColumnCount = nil
+        }
+        if let count = try? container.decodeIfPresent(Int.self, forKey: .albumsGridColumnCount), (2...4).contains(count) {
+            self.albumsGridColumnCount = count
+        } else {
+            self.albumsGridColumnCount = nil
+        }
+        if let count = try? container.decodeIfPresent(Int.self, forKey: .playlistsGridColumnCount), (2...4).contains(count) {
+            self.playlistsGridColumnCount = count
+        } else {
+            self.playlistsGridColumnCount = nil
+        }
+        self.localMetadataExtractionVersion = (try? container.decodeIfPresent(Int.self, forKey: .localMetadataExtractionVersion)) ?? 1
     }
 
     // Encode
@@ -833,6 +902,12 @@ public struct AppSettings: Codable, Sendable {
         try container.encode(albumMergeMode, forKey: .albumMergeMode)
         try container.encode(hideServerAlbumDuplicates, forKey: .hideServerAlbumDuplicates)
         try container.encode(hideServerDuplicateExemptAlbumIDs, forKey: .hideServerDuplicateExemptAlbumIDs)
+        try container.encode(isCapitalizationEnabled, forKey: .isCapitalizationEnabled)
+        try container.encode(customArtistSeparators, forKey: .customArtistSeparators)
+        try container.encodeIfPresent(artistsGridColumnCount, forKey: .artistsGridColumnCount)
+        try container.encodeIfPresent(albumsGridColumnCount, forKey: .albumsGridColumnCount)
+        try container.encodeIfPresent(playlistsGridColumnCount, forKey: .playlistsGridColumnCount)
+        try container.encode(localMetadataExtractionVersion, forKey: .localMetadataExtractionVersion)
     }
 }
 
