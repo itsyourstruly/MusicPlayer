@@ -169,46 +169,53 @@ public struct FolderSettingsView: View {
     }
 
     private var sourcesScrollContent: some View {
-        ScrollView(.vertical, showsIndicators: false) {
+        let hasServers = !libraryStore.settings.serverSources.isEmpty
+        let hasFolders = !libraryStore.settings.linkedFolders.isEmpty
+        let hasAnySources = hasServers || hasFolders
+
+        return ScrollView(.vertical, showsIndicators: false) {
             VStack(alignment: .leading, spacing: 20) {
-                // MARK: - 1. Online Sources (Top of Sheet) & Add Button
+                // MARK: - 1. Online Sources (Top) & Add Button
                 onlineSourcesSection
 
                 // MARK: - Live Scanning Status Logs
                 scanningStatusLogsView
 
-                Divider()
-                    .overlay(appTheme.separatorColor.opacity(0.4))
+                if hasAnySources {
+                    // MARK: - 2. Online Sources Options
+                    if hasServers {
+                        Divider()
+                            .overlay(appTheme.separatorColor.opacity(0.4))
 
-                // MARK: - 2. Online Sources Options
-                serverDownloadTogglesSection
+                        serverDownloadTogglesSection
+                    }
 
-                Divider()
-                    .overlay(appTheme.separatorColor.opacity(0.4))
+                    // MARK: - 3. Local Sources & Options
+                    if hasFolders {
+                        Divider()
+                            .overlay(appTheme.separatorColor.opacity(0.4))
 
-                // MARK: - 3. Local Sources
-                if !libraryStore.settings.linkedFolders.isEmpty {
-                    localSourcesSection
+                        localSourcesSection
 
+                        Divider()
+                            .overlay(appTheme.separatorColor.opacity(0.4))
+
+                        findTrackTagsButtonSection
+
+                        Divider()
+                            .overlay(appTheme.separatorColor.opacity(0.4))
+
+                        scanMethodSelectorSection
+                    }
+
+                    // MARK: - 4. App Storage Management
                     Divider()
                         .overlay(appTheme.separatorColor.opacity(0.4))
+
+                    cacheManagementSection
                 }
 
-                // MARK: - 4. Local Sources Options
-                findTrackTagsButtonSection
-
-                Divider()
-                    .overlay(appTheme.separatorColor.opacity(0.4))
-
-                scanMethodSelectorSection
-
-                Divider()
-                    .overlay(appTheme.separatorColor.opacity(0.4))
-
-                // MARK: - 5. App Storage Management
-                cacheManagementSection
-
-                // MARK: - 6. Hidden Items (only when something is hidden)
+                // MARK: - 5. Hidden Items (only when something is hidden)
                 if !libraryStore.hiddenItems.isEmpty {
                     Divider()
                         .overlay(appTheme.separatorColor.opacity(0.4))
@@ -234,11 +241,11 @@ public struct FolderSettingsView: View {
                 showingAddSourceSheet = true
             }) {
                 Text(AppCapitalization.format(hasAnySources ? "ADD ANOTHER SOURCE" : "ADD SOURCE", enabled: isCaps))
-                    .font(.system(size: 13, weight: .bold, design: .monospaced))
+                    .font(.system(size: hasAnySources ? 13 : 14, weight: .bold, design: .monospaced))
                     .foregroundStyle(libraryStore.settings.appTheme.accentColor)
             }
             .buttonStyle(.plain)
-            .padding(.top, 2)
+            .padding(.top, hasAnySources && !libraryStore.settings.serverSources.isEmpty ? 2 : 0)
         }
         .padding(.vertical, 4)
     }
@@ -543,7 +550,8 @@ public struct FolderSettingsView: View {
                     set: { newValue in
                         libraryStore.setHideServerAlbumDuplicates(newValue)
                     }
-                )
+                ),
+                onLongPress: { activeDetail = SettingOptionCatalog.hideDuplicates }
             )
             albumMergeModeSection
         }
@@ -957,6 +965,18 @@ public struct FolderSettingsView: View {
             .tint(appTheme.accentColor)
         }
         .padding(.vertical, 4)
+        .contentShape(Rectangle())
+        .onLongPressGesture(minimumDuration: 0.45) {
+            HapticFeedback.softImpact(intensity: 0.50)
+            activeDetail = SettingOptionCatalog.mergeAlbums
+        }
+        .contextMenu {
+            Button {
+                activeDetail = SettingOptionCatalog.mergeAlbums
+            } label: {
+                Text(AppCapitalization.format("OPTION INFO", enabled: isCaps))
+            }
+        }
     }
 
     private var cacheManagementSection: some View {

@@ -206,11 +206,13 @@ public struct FullScreenPlayerView: View {
                 TrackInfoSheetView(track: track, libraryStore: libraryStore)
                     .tint(libraryStore.settings.appTheme.accentColor)
                     .environment(\.appTheme, libraryStore.settings.appTheme)
+                    .environment(\.isCapitalizationEnabled, libraryStore.settings.isCapitalizationEnabled)
             }
         }
         .sheet(isPresented: $showingPlaybackSheet) {
             PlaybackControlsSheetView(playerService: playerService)
                 .environment(\.appTheme, libraryStore.settings.appTheme)
+                .environment(\.isCapitalizationEnabled, libraryStore.settings.isCapitalizationEnabled)
                 .presentationDetents([.large])
                 .presentationDragIndicator(.visible)
         }
@@ -620,7 +622,7 @@ public struct FullScreenPlayerView: View {
                     }
                 }
             }) {
-                Text("LYRICS")
+                Text(AppCapitalization.format("LYRICS", enabled: isCaps))
                     .font(.system(size: 19, weight: .bold, design: .monospaced))
                     .foregroundStyle(isLyricsViewPreferred ? Color.blue : Color.white.opacity(0.40))
                     .frame(minHeight: 34)
@@ -642,7 +644,7 @@ public struct FullScreenPlayerView: View {
                     }
                 }
             }) {
-                Text("ANIMATE ARTWORK")
+                Text(AppCapitalization.format("ANIMATE ARTWORK", enabled: isCaps))
                     .font(.system(size: 14, weight: .bold, design: .monospaced))
                     .foregroundStyle(isArtworkAnimationEnabled ? Color.blue : Color.white.opacity(0.40))
                     .frame(minHeight: 28)
@@ -652,7 +654,7 @@ public struct FullScreenPlayerView: View {
 
             // 3. BACKGROUND Picker (Large text, gray when unselected, white when selected)
             VStack(spacing: 8) {
-                Text("BACKGROUND")
+                Text(AppCapitalization.format("BACKGROUND", enabled: isCaps))
                     .font(.system(size: 12, weight: .bold, design: .monospaced))
                     .foregroundStyle(Color.white.opacity(0.40))
 
@@ -666,7 +668,7 @@ public struct FullScreenPlayerView: View {
                                 libraryStore.saveSettings()
                             }
                         }) {
-                            Text(style.displayName.uppercased())
+                            Text(AppCapitalization.format(style.displayName, enabled: isCaps))
                                 .font(.system(size: 11, weight: .bold, design: .monospaced))
                                 .lineLimit(1)
                                 .minimumScaleFactor(0.80)
@@ -692,7 +694,7 @@ public struct FullScreenPlayerView: View {
                     isArtworkRounded.toggle()
                 }
             }) {
-                Text("ROUNDED")
+                Text(AppCapitalization.format("ROUNDED", enabled: isCaps))
                     .font(.system(size: 14, weight: .bold, design: .monospaced))
                     .foregroundStyle(isArtworkRounded ? Color.blue : Color.white.opacity(0.40))
                     .frame(minHeight: 28)
@@ -718,7 +720,7 @@ public struct FullScreenPlayerView: View {
                     isArtworkFlipped = false
                 }
             }) {
-                Text("TAP ANYWHERE TO FLIP BACK")
+                Text(AppCapitalization.format("TAP ANYWHERE TO FLIP BACK", enabled: isCaps))
                     .font(.system(size: 10, weight: .bold, design: .monospaced))
                     .foregroundStyle(Color.white.opacity(0.30))
                     .padding(.bottom, 6)
@@ -846,7 +848,7 @@ public struct FullScreenPlayerView: View {
                             .buttonStyle(.plain)
                             .transition(.opacity)
                         } else {
-                            Text("NOW PLAYING")
+                            Text(AppCapitalization.format("NOW PLAYING", enabled: isCaps))
                                 .font(.system(size: 10, weight: .bold, design: .monospaced))
                                 .foregroundStyle(palette.secondaryForegroundColor)
 
@@ -870,7 +872,7 @@ public struct FullScreenPlayerView: View {
                                     HapticFeedback.notificationSuccess()
                                     playAlbumNext(for: track)
                                 } label: {
-                                    Text("PLAY ALBUM NEXT")
+                                    Text(AppCapitalization.format("PLAY ALBUM NEXT", enabled: isCaps))
                                 }
                             }
                             .transition(.opacity)
@@ -932,14 +934,14 @@ public struct FullScreenPlayerView: View {
                                 showingPlaybackSheet = true
                             }
                         }) {
-                            Text("PLAYBACK")
+                            Text(AppCapitalization.format("PLAYBACK", enabled: isCaps))
                         }
                         Button(action: {
                             guard canTriggerButtonPress else { return }
                             HapticFeedback.lightImpact()
                             handleAddToPlaylist(track: track)
                         }) {
-                            Text("ADD TO PLAYLIST")
+                            Text(AppCapitalization.format("ADD TO PLAYLIST", enabled: isCaps))
                         }
                         Button(action: {
                             guard canTriggerButtonPress else { return }
@@ -948,10 +950,10 @@ public struct FullScreenPlayerView: View {
                                 showingFileInfo = true
                             }
                         }) {
-                            Text("FILE INFO")
+                            Text(AppCapitalization.format("FILE INFO", enabled: isCaps))
                         }
                     } label: {
-                        Text("INFO")
+                        Text(AppCapitalization.format("INFO", enabled: isCaps))
                             .font(.system(size: 13, weight: .bold, design: .monospaced))
                             .foregroundStyle(palette.foregroundColor)
                             .padding(.horizontal, 6)
@@ -1042,7 +1044,7 @@ public struct FullScreenPlayerView: View {
                                         .font(.system(size: 14, weight: .semibold))
                                         .foregroundStyle(isCurrent ? Color.blue : Color.primary)
                                     if isCurrent {
-                                        Text("CURRENT PLAYLIST")
+                                        Text(AppCapitalization.format("CURRENT PLAYLIST", enabled: isCaps))
                                             .font(.system(size: 10, weight: .bold, design: .monospaced))
                                             .foregroundStyle(Color.blue)
                                     }

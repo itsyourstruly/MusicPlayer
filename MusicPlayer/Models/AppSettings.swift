@@ -338,13 +338,34 @@ public struct HomeSectionPreference: Codable, Sendable, Identifiable, Equatable 
 public struct AlbumMergeGroup: Codable, Sendable, Equatable, Identifiable {
     public var primaryID: String
     public var memberIDs: [String]
+    public var preferredArtworkKey: String?
+    public var availableArtworkKeys: [String]
 
     public var id: String { primaryID }
 
-    public init(primaryID: String, memberIDs: [String]) {
+    public init(
+        primaryID: String,
+        memberIDs: [String],
+        preferredArtworkKey: String? = nil,
+        availableArtworkKeys: [String] = []
+    ) {
         self.primaryID = primaryID
         let unique = Array(Set(memberIDs + [primaryID]))
         self.memberIDs = unique.sorted()
+        self.preferredArtworkKey = preferredArtworkKey
+        self.availableArtworkKeys = availableArtworkKeys
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case primaryID, memberIDs, preferredArtworkKey, availableArtworkKeys
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.primaryID = try container.decode(String.self, forKey: .primaryID)
+        self.memberIDs = try container.decode([String].self, forKey: .memberIDs)
+        self.preferredArtworkKey = try container.decodeIfPresent(String.self, forKey: .preferredArtworkKey)
+        self.availableArtworkKeys = try container.decodeIfPresent([String].self, forKey: .availableArtworkKeys) ?? []
     }
 
     public static func suggestionKey(albumIDs: [String]) -> String {

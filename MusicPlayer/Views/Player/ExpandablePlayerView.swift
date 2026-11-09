@@ -1721,13 +1721,13 @@ private struct MorphingPlayerCard: View, Animatable {
                                 guard canTriggerButtonPress() else { return }
                                 onOpenPlaylistPicker()
                             }) {
-                                Text("ADD TO PLAYLIST")
+                                Text(AppCapitalization.format("ADD TO PLAYLIST", enabled: isCaps))
                             }
                             Button(action: {
                                 guard canTriggerButtonPress() else { return }
                                 onOpenInfo()
                             }) {
-                                Text("FILE INFO")
+                                Text(AppCapitalization.format("FILE INFO", enabled: isCaps))
                             }
                         } label: {
                             Text("i")

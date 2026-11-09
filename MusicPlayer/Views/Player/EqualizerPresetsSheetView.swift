@@ -21,7 +21,7 @@ public struct EqualizerPresetsSheetView: View {
                         HapticFeedback.notificationSuccess()
                         equalizerManager.saveCurrentAsPreset()
                     } label: {
-                        Text("SAVE")
+                        Text(AppCapitalization.format("SAVE", enabled: isCaps))
                             .font(.system(size: 14, weight: .bold, design: .monospaced))
                             .foregroundStyle(appTheme.accentColor)
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -30,7 +30,7 @@ public struct EqualizerPresetsSheetView: View {
 
                 Section {
                     if equalizerManager.userPresets.isEmpty {
-                        Text("NO SAVED PRESETS")
+                        Text(AppCapitalization.format("NO SAVED PRESETS", enabled: isCaps))
                             .font(.system(size: 12, weight: .bold, design: .monospaced))
                             .foregroundStyle(.secondary)
                     } else {
@@ -43,13 +43,13 @@ public struct EqualizerPresetsSheetView: View {
             .listStyle(.insetGrouped)
             .navigationTitle(AppCapitalization.format("PRESETS", enabled: isCaps))
             .navigationBarTitleDisplayMode(.inline)
-            .alert("RENAME", isPresented: Binding(
+            .alert(AppCapitalization.format("RENAME", enabled: isCaps), isPresented: Binding(
                 get: { renameTarget != nil },
                 set: { if !$0 { renameTarget = nil } }
             )) {
-                TextField("NAME", text: $renameText)
-                Button("CANCEL", role: .cancel) { renameTarget = nil }
-                Button("SAVE") {
+                TextField(AppCapitalization.format("NAME", enabled: isCaps), text: $renameText)
+                Button(AppCapitalization.format("CANCEL", enabled: isCaps), role: .cancel) { renameTarget = nil }
+                Button(AppCapitalization.format("SAVE", enabled: isCaps)) {
                     if let target = renameTarget {
                         equalizerManager.renamePreset(id: target.id, to: renameText)
                     }
@@ -80,7 +80,7 @@ public struct EqualizerPresetsSheetView: View {
                     Spacer()
 
                     if isApplied {
-                        Text("ACTIVE")
+                        Text(AppCapitalization.format("ACTIVE", enabled: isCaps))
                             .font(.system(size: 10, weight: .bold, design: .monospaced))
                             .foregroundStyle(appTheme.accentColor)
                             .padding(.horizontal, 6)
@@ -88,7 +88,7 @@ public struct EqualizerPresetsSheetView: View {
                             .background(appTheme.accentColor.opacity(0.12))
                             .clipShape(Capsule())
                     } else {
-                        Text("APPLY")
+                        Text(AppCapitalization.format("APPLY", enabled: isCaps))
                             .font(.system(size: 10, weight: .bold, design: .monospaced))
                             .foregroundStyle(Color.secondary)
                     }
@@ -102,11 +102,11 @@ public struct EqualizerPresetsSheetView: View {
         }
         .buttonStyle(.plain)
         .contextMenu {
-            Button("RENAME") {
+            Button(AppCapitalization.format("RENAME", enabled: isCaps)) {
                 renameText = preset.name
                 renameTarget = preset
             }
-            Button("DELETE", role: .destructive) {
+            Button(AppCapitalization.format("DELETE", enabled: isCaps), role: .destructive) {
                 HapticFeedback.selectionChanged()
                 equalizerManager.deletePreset(id: preset.id)
             }

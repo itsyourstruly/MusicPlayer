@@ -3176,16 +3176,30 @@ public final class LibraryStore {
             guard present.count >= 2 else { continue }
             let primary = byID[group.primaryID] ?? present.max(by: { $0.tracks.count < $1.tracks.count })!
             let primaryID = primary.id
-            var allTracks = primary.tracks
+            let effectiveArtworkKey = group.preferredArtworkKey ?? primary.artworkKey
+            var allTracks = primary.tracks.map { track in
+                effectiveArtworkKey != nil ? track.withArtworkKey(effectiveArtworkKey) : track
+            }
             var seen = Set(allTracks.map(\.id))
             for album in present where album.id != primaryID {
                 for track in album.tracks where seen.insert(track.id).inserted {
-                    allTracks.append(track)
+                    allTracks.append(effectiveArtworkKey != nil ? track.withArtworkKey(effectiveArtworkKey) : track)
                 }
                 absorbedToPrimary[album.id] = primaryID
                 byID.removeValue(forKey: album.id)
             }
-            byID[primaryID] = primary.withTracks(allTracks)
+            byID[primaryID] = Album(
+                title: primary.title,
+                artist: primary.artist,
+                year: primary.year,
+                genre: primary.genre,
+                artworkKey: effectiveArtworkKey,
+                tracks: allTracks,
+                groupKey: primary.groupKey,
+                albumArtistKeys: primary.albumArtistKeys,
+                featuredArtistKeys: primary.featuredArtistKeys,
+                sortName: primary.sortName
+            )
         }
         guard !absorbedToPrimary.isEmpty else { return result }
 
@@ -6203,7 +6217,18 @@ public final class LibraryStore {
 
     /// True when automatic mode should merge this album's candidates on open.
     public func shouldAutoMergeAlbum(for album: Album) -> Bool {
-        settings.albumMergeMode == .automatically && !mergeCandidates(for: album).isEmpty
+        settings.albumMergeMode == .automatically && !autoMergeCandidates(for: album).isEmpty
+    }
+
+    /// Candidates eligible for automatic merge (excludes pairs explicitly unmerged/dismissed by the user).
+    public func autoMergeCandidates(for album: Album) -> [Album] {
+        let candidates = mergeCandidates(for: album)
+        guard !candidates.isEmpty else { return [] }
+        return candidates.filter { candidate in
+            let pairKey = AlbumMergeGroup.suggestionKey(albumIDs: [album.id, candidate.id])
+            let groupKey = AlbumMergeGroup.suggestionKey(albumIDs: [album.id] + candidates.map(\.id))
+            return !settings.dismissedAlbumMergeKeys.contains(pairKey) && !settings.dismissedAlbumMergeKeys.contains(groupKey)
+        }
     }
 
     public func dismissAlbumMergeSuggestion(for album: Album) {
@@ -6218,7 +6243,24 @@ public final class LibraryStore {
     public func mergeAlbums(into primary: Album, otherIDs: [String]) {
         let others = Array(Set(otherIDs)).filter { $0 != primary.id }
         guard !others.isEmpty else { return }
+        for otherID in others {
+            let pairKey = AlbumMergeGroup.suggestionKey(albumIDs: [primary.id, otherID])
+            settings.dismissedAlbumMergeKeys.remove(pairKey)
+        }
         var memberIDs = Set(others + [primary.id])
+
+        // Collect artworks: primary album's artwork is first and default
+        var artworkKeys: [String] = []
+        if let primaryArt = primary.artworkKey, !primaryArt.isEmpty {
+            artworkKeys.append(primaryArt)
+        }
+        for otherID in others {
+            if let otherAlbum = albumsByID[otherID] ?? albums.first(where: { $0.id == otherID }),
+               let art = otherAlbum.artworkKey, !art.isEmpty, !artworkKeys.contains(art) {
+                artworkKeys.append(art)
+            }
+        }
+
         // Fold any existing groups that touch these ids into the new primary group.
         var remaining: [AlbumMergeGroup] = []
         for group in settings.albumMergeGroups {
@@ -6228,24 +6270,112 @@ public final class LibraryStore {
             } else {
                 memberIDs.formUnion(group.memberIDs)
                 memberIDs.insert(group.primaryID)
+                for key in group.availableArtworkKeys where !artworkKeys.contains(key) {
+                    artworkKeys.append(key)
+                }
             }
         }
-        let group = AlbumMergeGroup(primaryID: primary.id, memberIDs: Array(memberIDs))
+        let group = AlbumMergeGroup(
+            primaryID: primary.id,
+            memberIDs: Array(memberIDs),
+            preferredArtworkKey: primary.artworkKey,
+            availableArtworkKeys: artworkKeys
+        )
         remaining.append(group)
         settings.albumMergeGroups = remaining
         // Dismiss this suggestion key so pill stays gone after merge.
         let key = AlbumMergeGroup.suggestionKey(albumIDs: Array(memberIDs))
         settings.dismissedAlbumMergeKeys.insert(key)
         saveSettings()
-        // Instant UI: apply merges in-place, then async full rebuild for repository consistency.
+        // Instant UI: apply merges in-place
         applyPersistedAlbumMergesLocally()
-        rebuildAlbumsAndArtists()
         saveLibrary()
     }
 
     /// True when this album is the primary of a persisted merge group with at least one other member still relevant.
     public func hasUndoableAlbumMerge(_ album: Album) -> Bool {
         settings.albumMergeGroups.contains { $0.primaryID == album.id && $0.memberIDs.count > 1 }
+    }
+
+    /// True when this album is part of an active merge group with multiple members.
+    public func isMergedAlbum(_ album: Album) -> Bool {
+        settings.albumMergeGroups.contains { group in
+            (group.primaryID == album.id || group.memberIDs.contains(album.id)) && group.memberIDs.count > 1
+        }
+    }
+
+    /// All distinct album artwork keys for the merged releases in this group.
+    public func mergedArtworkKeys(for album: Album) -> [String] {
+        var result: [String] = []
+        if let group = settings.albumMergeGroups.first(where: { $0.primaryID == album.id || $0.memberIDs.contains(album.id) }) {
+            for key in group.availableArtworkKeys where !key.isEmpty && !result.contains(key) {
+                result.append(key)
+            }
+        }
+        if let current = album.artworkKey, !current.isEmpty, !result.contains(current) {
+            result.append(current)
+        }
+        for track in album.tracks {
+            if let key = track.artworkKey, !key.isEmpty, !result.contains(key) {
+                result.append(key)
+            }
+        }
+        return result
+    }
+
+    /// Updates the preferred artwork for a merged album and propagates it to the album and all its tracks.
+    public func setMergedAlbumArtwork(key: String, for album: Album) {
+        var modified = false
+        var updatedGroups: [AlbumMergeGroup] = []
+        for var group in settings.albumMergeGroups {
+            if group.primaryID == album.id || group.memberIDs.contains(album.id) {
+                group.preferredArtworkKey = key
+                if !group.availableArtworkKeys.contains(key) {
+                    group.availableArtworkKeys.append(key)
+                }
+                modified = true
+            }
+            updatedGroups.append(group)
+        }
+        guard modified else { return }
+        settings.albumMergeGroups = updatedGroups
+        saveSettings()
+        applyPersistedAlbumMergesLocally()
+        saveLibrary()
+    }
+
+    /// Unmerges a specific member album from a merged album group.
+    public func unmergeAlbum(id otherID: String, from primaryAlbum: Album) {
+        unmergeAlbums(ids: [otherID], from: primaryAlbum)
+    }
+
+    /// Unmerges multiple member albums from a merged album group efficiently.
+    public func unmergeAlbums(ids otherIDs: [String], from primaryAlbum: Album) {
+        let idSet = Set(otherIDs)
+        guard !idSet.isEmpty else { return }
+        var modified = false
+        var updatedGroups: [AlbumMergeGroup] = []
+        for var group in settings.albumMergeGroups {
+            if group.primaryID == primaryAlbum.id || group.memberIDs.contains(primaryAlbum.id) {
+                group.memberIDs.removeAll { idSet.contains($0) }
+                if group.memberIDs.count > 1 {
+                    updatedGroups.append(group)
+                }
+                modified = true
+            } else {
+                updatedGroups.append(group)
+            }
+        }
+        guard modified else { return }
+        settings.albumMergeGroups = updatedGroups
+        for otherID in otherIDs {
+            let pairKey = AlbumMergeGroup.suggestionKey(albumIDs: [primaryAlbum.id, otherID])
+            settings.dismissedAlbumMergeKeys.insert(pairKey)
+        }
+        saveSettings()
+        // Fast local regroup from tracks — updates albums/artists immediately without blocking SQLite
+        rebuildAlbumStructureLocallyFromTracks()
+        saveLibrary()
     }
 
     public func undoAlbumMerge(for album: Album) {

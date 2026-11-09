@@ -111,11 +111,11 @@ public struct TrackInfoSheetView: View {
                 Button("OK", role: .cancel) {}
             }
             .alert(
-                "HIDE TRACK?",
+                AppCapitalization.format("HIDE TRACK?", enabled: isCaps),
                 isPresented: $showingRemoveConfirmation
             ) {
-                Button("CANCEL", role: .cancel) {}
-                Button("HIDE", role: .destructive) {
+                Button(AppCapitalization.format("CANCEL", enabled: isCaps), role: .cancel) {}
+                Button(AppCapitalization.format("HIDE", enabled: isCaps), role: .destructive) {
                     performRemoveFromLibrary()
                 }
             } message: {
@@ -129,7 +129,7 @@ public struct TrackInfoSheetView: View {
     private var tagMetadataSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Text(isEditingTags ? "EDIT TAG METADATA" : "TAG METADATA")
+                Text(AppCapitalization.format(isEditingTags ? "EDIT TAG METADATA" : "TAG METADATA", enabled: isCaps))
                     .font(.system(size: 11, weight: .bold, design: .monospaced))
                     .foregroundStyle(appTheme.accentColor)
 
@@ -137,7 +137,7 @@ public struct TrackInfoSheetView: View {
 
                 if libraryStore != nil {
                     if isEditingTags {
-                        Button("CANCEL") {
+                        Button(AppCapitalization.format("CANCEL", enabled: isCaps)) {
                             withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
                                 isEditingTags = false
                             }
@@ -146,7 +146,7 @@ public struct TrackInfoSheetView: View {
                         .foregroundStyle(.secondary)
                         .buttonStyle(.plain)
 
-                        Button(isSavingTags ? "SAVING..." : "SAVE") {
+                        Button(AppCapitalization.format(isSavingTags ? "SAVING..." : "SAVE", enabled: isCaps)) {
                             Task {
                                 await saveTags()
                             }
@@ -158,7 +158,7 @@ public struct TrackInfoSheetView: View {
                     } else {
                         HStack(spacing: 12) {
                             if let store = libraryStore, store.hasOverride(for: currentTrack.id) {
-                                Button("RESET EDITS") {
+                                Button(AppCapitalization.format("RESET EDITS", enabled: isCaps)) {
                                     store.resetEdits(for: currentTrack.id)
                                     if let updated = store.tracks.first(where: { $0.id == currentTrack.id }) {
                                         currentTrack = updated
@@ -170,7 +170,7 @@ public struct TrackInfoSheetView: View {
                                 .buttonStyle(.plain)
                             }
 
-                            Button("EDIT") {
+                            Button(AppCapitalization.format("EDIT", enabled: isCaps)) {
                                 populateEditFields()
                                 withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
                                     isEditingTags = true
@@ -248,13 +248,13 @@ public struct TrackInfoSheetView: View {
                         }
                     }
 
-                    infoRow(label: "ARTWORK", value: currentTrack.artworkKey != nil ? "EMBEDDED (CACHED)" : "NONE / DEFAULT")
+                    infoRow(label: "ARTWORK", value: AppCapitalization.format(currentTrack.artworkKey != nil ? "EMBEDDED (CACHED)" : "NONE / DEFAULT", enabled: isCaps))
                 }
 
                 if libraryStore != nil && currentTrack.supportsMetadataLookup {
                     Button(action: { showingOnlineMetadataSheet = true }) {
                         HStack {
-                            Text("FETCH ONLINE METADATA")
+                            Text(AppCapitalization.format("FETCH ONLINE METADATA", enabled: isCaps))
                                 .font(.system(size: 12, weight: .bold, design: .monospaced))
                                 .foregroundStyle(appTheme.accentColor)
                             Spacer()
@@ -274,7 +274,7 @@ public struct TrackInfoSheetView: View {
 
     private var audioSpecsSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("AUDIO SPECIFICATIONS")
+            Text(AppCapitalization.format("AUDIO SPECIFICATIONS", enabled: isCaps))
                 .font(.system(size: 11, weight: .bold, design: .monospaced))
                 .foregroundStyle(appTheme.accentColor)
 
@@ -298,7 +298,7 @@ public struct TrackInfoSheetView: View {
 
     private var storageSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("STORAGE & FILE SYSTEM")
+            Text(AppCapitalization.format("STORAGE & FILE SYSTEM", enabled: isCaps))
                 .font(.system(size: 11, weight: .bold, design: .monospaced))
                 .foregroundStyle(appTheme.accentColor)
 
@@ -311,11 +311,11 @@ public struct TrackInfoSheetView: View {
                 }
 
                 if currentTrack.isCloudItem {
-                    infoRow(label: "STORAGE TYPE", value: currentTrack.isCloudDownloaded ? "ICLOUD (DOWNLOADED)" : "ICLOUD (ON-DEMAND)")
+                    infoRow(label: "STORAGE TYPE", value: AppCapitalization.format(currentTrack.isCloudDownloaded ? "ICLOUD (DOWNLOADED)" : "ICLOUD (ON-DEMAND)", enabled: isCaps))
                 } else if isServerTrack {
                     infoRow(label: "STORAGE TYPE", value: serverStorageLabel)
                 } else {
-                    infoRow(label: "STORAGE TYPE", value: "ON THIS PHONE")
+                    infoRow(label: "STORAGE TYPE", value: AppCapitalization.format("ON THIS PHONE", enabled: isCaps))
                 }
 
                 if let relPath = currentTrack.relativePath {
@@ -333,7 +333,7 @@ public struct TrackInfoSheetView: View {
             }
 
             VStack(alignment: .leading, spacing: 6) {
-                Text("FILE PATH")
+                Text(AppCapitalization.format("FILE PATH", enabled: isCaps))
                     .font(.system(size: 11, weight: .bold, design: .monospaced))
                     .foregroundStyle(.secondary)
 
@@ -347,7 +347,7 @@ public struct TrackInfoSheetView: View {
                     HStack(spacing: 6) {
                         Image(systemName: copiedPathToast ? "checkmark" : "doc.on.doc")
                             .font(.system(size: 10, weight: .bold))
-                        Text(copiedPathToast ? "COPIED TO CLIPBOARD" : "COPY PATH")
+                        Text(AppCapitalization.format(copiedPathToast ? "COPIED TO CLIPBOARD" : "COPY PATH", enabled: isCaps))
                             .font(.system(size: 11, weight: .bold, design: .monospaced))
                     }
                     .foregroundStyle(copiedPathToast ? Color.green : appTheme.accentColor)
@@ -363,7 +363,7 @@ public struct TrackInfoSheetView: View {
 
     private func lyricsSection(lyrics: String) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("LYRICS")
+            Text(AppCapitalization.format("LYRICS", enabled: isCaps))
                 .font(.system(size: 11, weight: .bold, design: .monospaced))
                 .foregroundStyle(appTheme.accentColor)
 
@@ -378,10 +378,10 @@ public struct TrackInfoSheetView: View {
 
     private func editFieldRow(label: String, text: Binding<String>) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(label)
+            Text(AppCapitalization.format(label, enabled: isCaps))
                 .font(.system(size: 9, weight: .bold, design: .monospaced))
                 .foregroundStyle(.secondary)
-            TextField(label, text: text)
+            TextField(AppCapitalization.format(label, enabled: isCaps), text: text)
                 .font(.system(size: 13, design: .monospaced))
                 .foregroundStyle(Color.primary)
                 .padding(.horizontal, 10)
@@ -451,14 +451,14 @@ public struct TrackInfoSheetView: View {
             }
         } else {
             HapticFeedback.notificationError()
-            saveErrorMessage = "COULD NOT WRITE METADATA TO AUDIO FILE ON DISK."
+            saveErrorMessage = AppCapitalization.format("COULD NOT WRITE METADATA TO AUDIO FILE ON DISK.", enabled: isCaps)
             showingSaveErrorAlert = true
         }
     }
 
     private func infoRow(label: String, value: String) -> some View {
         HStack(alignment: .top, spacing: 12) {
-            Text(label)
+            Text(AppCapitalization.format(label, enabled: isCaps))
                 .font(.system(size: 11, weight: .bold, design: .monospaced))
                 .foregroundStyle(.secondary)
                 .frame(width: 120, alignment: .leading)
@@ -499,7 +499,7 @@ public struct TrackInfoSheetView: View {
                     removeTrackDownload(currentTrack)
                     downloadRemovalTick &+= 1
                 }) {
-                    Text("REMOVE DOWNLOAD")
+                    Text(AppCapitalization.format("REMOVE DOWNLOAD", enabled: isCaps))
                         .font(.system(size: 13, weight: .bold, design: .monospaced))
                         .foregroundStyle(Color.red)
                 }
@@ -509,7 +509,7 @@ public struct TrackInfoSheetView: View {
                 Button(action: {
                     showingRemoveConfirmation = true
                 }) {
-                    Text("HIDE TRACK")
+                    Text(AppCapitalization.format("HIDE TRACK", enabled: isCaps))
                         .font(.system(size: 13, weight: .bold, design: .monospaced))
                         .foregroundStyle(Color.red)
                 }
@@ -543,14 +543,15 @@ public struct TrackInfoSheetView: View {
 
     /// Server name and type, e.g. "HOME (NAVIDROME)".
     private var serverDescription: String {
-        guard let link = serverLink else { return "THE SERVER (NO LONGER LINKED)" }
-        let name = link.serverName.uppercased()
-        return name == link.displayLabel ? name : "\(name) (\(link.displayLabel))"
+        guard let link = serverLink else { return AppCapitalization.format("THE SERVER (NO LONGER LINKED)", enabled: isCaps) }
+        let name = AppCapitalization.format(link.serverName, enabled: isCaps)
+        let label = AppCapitalization.format(link.displayLabel, enabled: isCaps)
+        return name == label ? name : "\(name) (\(label))"
     }
 
     private var serverStorageLabel: String {
         if JellyfinDownloadManager.shared.isDownloaded(trackId: currentTrack.id) {
-            return "DOWNLOADED FROM \(serverDescription)"
+            return "\(AppCapitalization.format("DOWNLOADED FROM", enabled: isCaps)) \(serverDescription)"
         }
         return serverDescription
     }

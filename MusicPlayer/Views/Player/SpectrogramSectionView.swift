@@ -7,6 +7,7 @@ struct SpectrogramSectionView: View {
 
     @Environment(\.appTheme) private var appTheme
     @Environment(\.displayScale) private var displayScale
+    @Environment(\.isCapitalizationEnabled) private var isCaps: Bool
 
     private enum Phase {
         case idle
@@ -27,17 +28,17 @@ struct SpectrogramSectionView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Text("SPECTROGRAM")
+                Text(AppCapitalization.format("SPECTROGRAM", enabled: isCaps))
                     .font(.system(size: 11, weight: .bold, design: .monospaced))
                     .foregroundStyle(appTheme.accentColor)
                 Spacer()
                 if let r = result {
-                    Text(String(format: "EXTENDS UP TO %.1f KHZ", r.extendsToHz / 1000))
+                    Text(AppCapitalization.format(String(format: "EXTENDS UP TO %.1f KHZ", r.extendsToHz / 1000), enabled: isCaps))
                         .font(.system(size: 9, weight: .bold, design: .monospaced))
                         .foregroundStyle(.secondary)
                 }
                 if isTranscodedCopy {
-                    Text("TRANSCODED COPY")
+                    Text(AppCapitalization.format("TRANSCODED COPY", enabled: isCaps))
                         .font(.system(size: 9, weight: .bold, design: .monospaced))
                         .foregroundStyle(.secondary)
                 }
@@ -63,22 +64,22 @@ struct SpectrogramSectionView: View {
             switch phase {
             case .idle:
                 Button { start() } label: {
-                    placeholder("TAP TO RENDER SPECTROGRAM")
+                    placeholder(AppCapitalization.format("TAP TO RENDER SPECTROGRAM", enabled: isCaps))
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
             case .downloading:
-                placeholder("DOWNLOADING...")
+                placeholder(AppCapitalization.format("DOWNLOADING...", enabled: isCaps))
             case .rendering(let p):
                 VStack(spacing: 8) {
-                    placeholder("RENDERING... \(Int(p * 100))%")
+                    placeholder(AppCapitalization.format("RENDERING... \(Int(p * 100))%", enabled: isCaps))
                     ProgressView(value: p).tint(appTheme.accentColor).frame(width: 140)
                 }
             case .done(let result):
                 spectrogramImage(result)
             case .unsupported:
-                retryable("UNSUPPORTED FORMAT")
+                retryable(AppCapitalization.format("UNSUPPORTED FORMAT", enabled: isCaps))
             case .failed(let message):
                 retryable(message)
             }
@@ -95,7 +96,7 @@ struct SpectrogramSectionView: View {
         Button { start() } label: {
             VStack(spacing: 4) {
                 placeholder(text)
-                Text("TAP TO RETRY")
+                Text(AppCapitalization.format("TAP TO RETRY", enabled: isCaps))
                     .font(.system(size: 9, weight: .medium, design: .monospaced))
                     .foregroundStyle(.secondary)
             }

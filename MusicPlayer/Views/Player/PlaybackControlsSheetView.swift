@@ -78,7 +78,7 @@ public struct PlaybackControlsSheetView: View {
     private var volumeBoosterSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text("VOLUME BOOSTER")
+                Text(AppCapitalization.format("VOLUME BOOSTER", enabled: isCaps))
                     .font(.system(size: 12, weight: .bold, design: .monospaced))
                     .foregroundStyle(isVolumeBoosterExpanded ? Color.white : .secondary)
 
@@ -102,7 +102,7 @@ public struct PlaybackControlsSheetView: View {
                                 .foregroundStyle(volumeBoosterColor)
                                 .transition(.opacity)
                         } else {
-                            Text("OFF")
+                            Text(AppCapitalization.format("OFF", enabled: isCaps))
                                 .font(.system(size: 13, weight: .bold, design: .monospaced))
                                 .foregroundStyle(.secondary)
                                 .transition(.opacity)
@@ -193,7 +193,7 @@ public struct PlaybackControlsSheetView: View {
     private var playbackSpeedSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text("PLAYBACK SPEED")
+                Text(AppCapitalization.format("PLAYBACK SPEED", enabled: isCaps))
                     .font(.system(size: 12, weight: .bold, design: .monospaced))
                     .foregroundStyle(isPlaybackSpeedExpanded ? Color.white : .secondary)
 
@@ -218,7 +218,7 @@ public struct PlaybackControlsSheetView: View {
                                 .foregroundStyle(appTheme.accentColor)
                                 .transition(.opacity)
                         } else {
-                            Text("OFF")
+                            Text(AppCapitalization.format("OFF", enabled: isCaps))
                                 .font(.system(size: 13, weight: .bold, design: .monospaced))
                                 .foregroundStyle(.secondary)
                                 .transition(.opacity)
@@ -287,7 +287,7 @@ public struct PlaybackControlsSheetView: View {
     private var sleepTimerSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text("SLEEP TIMER")
+                Text(AppCapitalization.format("SLEEP TIMER", enabled: isCaps))
                     .font(.system(size: 12, weight: .bold, design: .monospaced))
                     .foregroundStyle(playerService.isSleepTimerEnabled ? Color.white : .secondary)
 
@@ -301,12 +301,12 @@ public struct PlaybackControlsSheetView: View {
                 }) {
                     ZStack(alignment: .trailing) {
                         if playerService.isSleepTimerEnabled {
-                            Text("\(Int(playerService.sleepTimerMinutes)) MIN")
+                            Text("\(Int(playerService.sleepTimerMinutes)) \(AppCapitalization.format("MIN", enabled: isCaps))")
                                 .font(.system(size: 13, weight: .bold, design: .monospaced))
                                 .foregroundStyle(appTheme.accentColor)
                                 .transition(.opacity)
                         } else {
-                            Text("OFF")
+                            Text(AppCapitalization.format("OFF", enabled: isCaps))
                                 .font(.system(size: 13, weight: .bold, design: .monospaced))
                                 .foregroundStyle(.secondary)
                                 .transition(.opacity)
@@ -343,7 +343,7 @@ public struct PlaybackControlsSheetView: View {
                         let midX = thumbRadius + (45.0 / 90.0) * trackWidth
 
                         ZStack {
-                            Text("0 MIN")
+                            Text("0 \(AppCapitalization.format("MIN", enabled: isCaps))")
                                 .font(.system(size: 9, design: .monospaced))
                                 .foregroundStyle(.secondary)
                                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -353,14 +353,14 @@ public struct PlaybackControlsSheetView: View {
                                 HapticFeedback.lightImpact()
                                 playerService.setSleepTimer(minutes: 45)
                             }) {
-                                Text("45 MIN")
+                                Text("45 \(AppCapitalization.format("MIN", enabled: isCaps))")
                                     .font(.system(size: 9, weight: playerService.sleepTimerMinutes == 45 ? .bold : .medium, design: .monospaced))
                                     .foregroundStyle(playerService.sleepTimerMinutes == 45 ? appTheme.accentColor : .secondary)
                             }
                             .buttonStyle(.plain)
                             .position(x: midX, y: 7)
 
-                            Text("90 MIN")
+                            Text("90 \(AppCapitalization.format("MIN", enabled: isCaps))")
                                 .font(.system(size: 9, design: .monospaced))
                                 .foregroundStyle(.secondary)
                                 .frame(maxWidth: .infinity, alignment: .trailing)
@@ -380,7 +380,7 @@ public struct PlaybackControlsSheetView: View {
     private var equalizerSection: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack {
-                Text("EQUALIZER")
+                Text(AppCapitalization.format("EQUALIZER", enabled: isCaps))
                     .font(.system(size: 12, weight: .bold, design: .monospaced))
                     .foregroundStyle(equalizerManager.isEqualizerEnabled ? Color.white : .secondary)
 
@@ -394,12 +394,12 @@ public struct PlaybackControlsSheetView: View {
                 }) {
                     ZStack(alignment: .trailing) {
                         if equalizerManager.isEqualizerEnabled {
-                            Text("ON")
+                            Text(AppCapitalization.format("ON", enabled: isCaps))
                                 .font(.system(size: 13, weight: .bold, design: .monospaced))
                                 .foregroundStyle(Color.green)
                                 .transition(.opacity)
                         } else {
-                            Text("OFF")
+                            Text(AppCapitalization.format("OFF", enabled: isCaps))
                                 .font(.system(size: 13, weight: .bold, design: .monospaced))
                                 .foregroundStyle(.secondary)
                                 .transition(.opacity)
@@ -430,7 +430,7 @@ public struct PlaybackControlsSheetView: View {
         let isEnabled = store.settings.isCrossfadeEnabled
         return VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text("CROSSFADE")
+                Text(AppCapitalization.format("CROSSFADE", enabled: isCaps))
                     .font(.system(size: 12, weight: .bold, design: .monospaced))
                     .foregroundStyle(isEnabled ? Color.white : .secondary)
 
@@ -451,7 +451,7 @@ public struct PlaybackControlsSheetView: View {
                                 .foregroundStyle(appTheme.accentColor)
                                 .transition(.opacity)
                         } else {
-                            Text("OFF")
+                            Text(AppCapitalization.format("OFF", enabled: isCaps))
                                 .font(.system(size: 13, weight: .bold, design: .monospaced))
                                 .foregroundStyle(.secondary)
                                 .transition(.opacity)
@@ -527,7 +527,7 @@ public struct PlaybackControlsSheetView: View {
     private func transitionTracksSection(store: LibraryStore) -> some View {
         let isEnabled = store.settings.smoothSkippingEnabled
         return HStack {
-            Text("TRANSITION TRACKS WHEN SKIPPING")
+            Text(AppCapitalization.format("TRANSITION TRACKS WHEN SKIPPING", enabled: isCaps))
                 .font(.system(size: 12, weight: .bold, design: .monospaced))
                 .foregroundStyle(isEnabled ? Color.white : .secondary)
                 .lineLimit(1)
@@ -545,12 +545,12 @@ public struct PlaybackControlsSheetView: View {
             }) {
                 ZStack(alignment: .trailing) {
                     if isEnabled {
-                        Text("ON")
+                        Text(AppCapitalization.format("ON", enabled: isCaps))
                             .font(.system(size: 13, weight: .bold, design: .monospaced))
                             .foregroundStyle(appTheme.accentColor)
                             .transition(.opacity)
                     } else {
-                        Text("OFF")
+                        Text(AppCapitalization.format("OFF", enabled: isCaps))
                             .font(.system(size: 13, weight: .bold, design: .monospaced))
                             .foregroundStyle(.secondary)
                             .transition(.opacity)
@@ -573,12 +573,12 @@ public struct PlaybackControlsSheetView: View {
                 equalizerManager.setGlobalDefault()
             }) {
                 HStack {
-                    Text("SET GLOBAL DEFAULT")
+                    Text(AppCapitalization.format("SET GLOBAL DEFAULT", enabled: isCaps))
                         .font(.system(size: 12, weight: .bold, design: .monospaced))
                         .foregroundStyle(equalizerManager.isGlobalDefaultActive ? appTheme.accentColor : Color.secondary)
                     Spacer()
                     if equalizerManager.isGlobalDefaultActive {
-                        Text("ACTIVE")
+                        Text(AppCapitalization.format("ACTIVE", enabled: isCaps))
                             .font(.system(size: 10, weight: .bold, design: .monospaced))
                             .foregroundStyle(appTheme.accentColor)
                     }
@@ -600,7 +600,7 @@ public struct PlaybackControlsSheetView: View {
                     }
                 }) {
                     HStack {
-                        Text("SET FOR \(currentTrack.title.uppercased())")
+                        Text("\(AppCapitalization.format("SET FOR", enabled: isCaps)) \(currentTrack.title)")
                             .font(.system(size: 12, weight: .bold, design: .monospaced))
                             .foregroundStyle(isTrackSaved ? appTheme.accentColor : Color.secondary)
                             .lineLimit(1)
@@ -608,7 +608,7 @@ public struct PlaybackControlsSheetView: View {
                         Spacer()
 
                         if isTrackSaved {
-                            Text("SAVED")
+                            Text(AppCapitalization.format("SAVED", enabled: isCaps))
                                 .font(.system(size: 10, weight: .bold, design: .monospaced))
                                 .foregroundStyle(appTheme.accentColor)
                         }
@@ -624,11 +624,11 @@ public struct PlaybackControlsSheetView: View {
                 showingPresetsSheet = true
             }) {
                 HStack {
-                    Text("PRESETS")
+                    Text(AppCapitalization.format("PRESETS", enabled: isCaps))
                         .font(.system(size: 12, weight: .bold, design: .monospaced))
                         .foregroundStyle(Color.secondary)
                     Spacer()
-                    Text("CHOOSE →")
+                    Text("\(AppCapitalization.format("CHOOSE", enabled: isCaps)) →")
                         .font(.system(size: 11, weight: .bold, design: .monospaced))
                         .foregroundStyle(appTheme.accentColor)
                 }

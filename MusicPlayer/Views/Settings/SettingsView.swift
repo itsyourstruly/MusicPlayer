@@ -137,6 +137,18 @@ public enum SettingOptionCatalog {
         description: "Keeps only the highest-quality version visible in search and lists without deleting files."
     )
 
+    public static let hideDuplicates = SettingOptionDetail(
+        id: "hideDuplicates",
+        title: "HIDE DUPLICATES",
+        description: "When navigating into an Album, duplicate tracks will automatically be hidden. The highest quality track will remain. These hidden tracks will show up under 'Hidden' under the Sources settings."
+    )
+
+    public static let mergeAlbums = SettingOptionDetail(
+        id: "mergeAlbums",
+        title: "MERGE ALBUMS",
+        description: "Album tracks may be split into separated albums under the same name depending on organization. While set to 'Automatically,' when an album is opened, if there is a matching album, it will merge them and combine the tracklist. While set to 'Manually,' opening a duplicated album will display 'Merge Album?' at the bottom to merge. If the 'Merge Album?' pill is dismissed, you can still merge albums by selecting the Music icon and 'Merge'"
+    )
+
     public static let writeMetadataToDisk = SettingOptionDetail(
         id: "writeMetadataToDisk",
         title: "WRITE METADATA TO FILES ON DISK",
