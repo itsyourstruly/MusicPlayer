@@ -522,6 +522,16 @@ public actor LibraryRepository {
         _ = updateFullState(tracks: Array(map.values), albums: albums, artists: artists, lookup: lookup)
     }
 
+    /// Updates the album and artist structure (e.g. after album merges or unmerges)
+    /// while preserving the current tracks.
+    public func updateStructure(
+        albums: [Album],
+        artists: [Artist],
+        lookup: [String: Artist]
+    ) {
+        _ = updateFullState(tracks: Array(tracksMap.values), albums: albums, artists: artists, lookup: lookup)
+    }
+
     /// Full rebuild (e.g. settings hash mismatch recovery).
     public func rebuildAll(
         settings: AppSettings,

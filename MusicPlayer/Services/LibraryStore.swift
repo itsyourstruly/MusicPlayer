@@ -672,7 +672,20 @@ public final class LibraryStore {
         remapAlbumReferences(previousAlbumsByID: previousAlbumsByID)
 
         // 1. Reconcile recent albums (LATEST PLAYS)
-        let freshRecents = self.recentAlbumIDs.compactMap { self.albumsByID[$0] }
+        if !settings.albumMergeGroups.isEmpty {
+            var primaryByMemberID: [String: String] = [:]
+            for group in settings.albumMergeGroups {
+                for memberID in group.memberIDs {
+                    primaryByMemberID[memberID] = group.primaryID
+                }
+            }
+            var seen = Set<String>()
+            self.recentAlbumIDs = self.recentAlbumIDs.compactMap { id in
+                let target = primaryByMemberID[id] ?? id
+                return seen.insert(target).inserted ? target : nil
+            }
+        }
+        let freshRecents = self.recentAlbumIDs.compactMap { self.album(forID: $0) }
         self.recentAlbumsCache = freshRecents
         self.recentAlbumIDs = freshRecents.map(\.id)
         saveRecentAlbums()
@@ -680,6 +693,7 @@ public final class LibraryStore {
         // 2. Reconcile pinned items
         var resolvedPins: [PinnedItem] = []
         var resolvedIDs: [PinnedItemIdentifier] = []
+        var seenPinnedAlbumIDs = Set<String>()
         for identifier in self.pinnedItemIDs {
             switch identifier.type {
             case .playlist:
@@ -689,9 +703,11 @@ public final class LibraryStore {
                     resolvedIDs.append(identifier)
                 }
             case .album:
-                if let al = self.albumsByID[identifier.targetID] {
-                    resolvedPins.append(.album(al))
-                    resolvedIDs.append(identifier)
+                if let al = self.album(forID: identifier.targetID) {
+                    if seenPinnedAlbumIDs.insert(al.id).inserted {
+                        resolvedPins.append(.album(al))
+                        resolvedIDs.append(PinnedItemIdentifier(type: .album, targetID: al.id))
+                    }
                 }
             }
         }
@@ -792,15 +808,47 @@ public final class LibraryStore {
         self.tracks = state.tracks
         refreshRescanRecommendations(tracks: state.tracks)
         self.tracksByID = state.tracksByID
-        self.albums = state.albums
-        self.albumsByID = state.albumsByID
-        self.artists = state.artists
-        self.artistLookupIndex = state.artistLookupIndex
+
+        let effectiveAlbums: [Album]
+        let effectiveAlbumsByID: [String: Album]
+        let effectiveArtists: [Artist]
+        let effectiveLookup: [String: Artist]
+
+        if !settings.albumMergeGroups.isEmpty {
+            let base = AlbumsAndArtistsResult(
+                tracks: state.tracks,
+                albums: state.albums,
+                artists: state.artists,
+                artistLookupIndex: state.artistLookupIndex
+            )
+            let merged = Self.applyAlbumMergeGroups(
+                settings.albumMergeGroups,
+                to: base,
+                joinedArtists: settings.joinedArtists
+            )
+            effectiveAlbums = merged.albums
+            var byID: [String: Album] = [:]
+            byID.reserveCapacity(merged.albums.count)
+            for a in merged.albums { byID[a.id] = a }
+            effectiveAlbumsByID = byID
+            effectiveArtists = merged.artists
+            effectiveLookup = merged.artistLookupIndex
+        } else {
+            effectiveAlbums = state.albums
+            effectiveAlbumsByID = state.albumsByID
+            effectiveArtists = state.artists
+            effectiveLookup = state.artistLookupIndex
+        }
+
+        self.albums = effectiveAlbums
+        self.albumsByID = effectiveAlbumsByID
+        self.artists = effectiveArtists
+        self.artistLookupIndex = effectiveLookup
         self.cachedActiveTracks = state.tracks
 
         var byKey: [String: [Album]] = [:]
-        byKey.reserveCapacity(state.albums.count)
-        for album in state.albums {
+        byKey.reserveCapacity(effectiveAlbums.count)
+        for album in effectiveAlbums {
             byKey[album.identityKey, default: []].append(album)
         }
         self.albumsByIdentityKey = byKey
@@ -813,9 +861,9 @@ public final class LibraryStore {
 
         let searchCtx = SearchContext(
             tracksByID: state.tracksByID,
-            albumsByID: state.albumsByID,
-            artists: state.artists,
-            artistLookupIndex: state.artistLookupIndex,
+            albumsByID: effectiveAlbumsByID,
+            artists: effectiveArtists,
+            artistLookupIndex: effectiveLookup,
             playlists: self.playlists,
             joinedArtists: self.settings.joinedArtists
         )
@@ -922,7 +970,13 @@ public final class LibraryStore {
     /// Fast O(1) indexed lookup for an album by its stable ID.
     /// Prefers the Library-view version (current source selection), falling back to the full library entity.
     public func album(forID id: String) -> Album? {
-        libraryView?.albumsByID[id] ?? albumsByID[id]
+        if let direct = libraryView?.albumsByID[id] ?? albumsByID[id] {
+            return direct
+        }
+        if let group = settings.albumMergeGroups.first(where: { $0.memberIDs.contains(id) }) {
+            return libraryView?.albumsByID[group.primaryID] ?? albumsByID[group.primaryID]
+        }
+        return nil
     }
 
     /// Albums that share punctuation-preserving artist+title identity (distinct ids are all returned).
@@ -6599,6 +6653,14 @@ public final class LibraryStore {
         let snap = LibraryViewBuilder.build(makeLibraryViewInput())
         publishLibraryView(snap)
         libraryContentGeneration &+= 1
+
+        Task.detached(priority: .utility) {
+            await LibraryRepository.shared.updateStructure(
+                albums: newAlbums,
+                artists: newArtists,
+                lookup: lookup
+            )
+        }
     }
 
     /// Re-checks a single verified good track against online database.

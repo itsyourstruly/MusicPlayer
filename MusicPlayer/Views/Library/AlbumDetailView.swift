@@ -70,6 +70,10 @@ public struct AlbumDetailView: View {
     }
 
     private var currentAlbum: Album {
+        if let group = libraryStore.settings.albumMergeGroups.first(where: { $0.primaryID == album.id || $0.memberIDs.contains(album.id) }),
+           let primary = libraryStore.album(forID: group.primaryID) {
+            return primary
+        }
         if let direct = libraryStore.album(forID: album.id) {
             return direct
         }
